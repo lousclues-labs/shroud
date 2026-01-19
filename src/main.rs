@@ -54,8 +54,21 @@ const MAX_RETRY_ATTEMPTS: u32 = 5;
 /// Delay between reconnection attempts in seconds
 const RETRY_DELAY_SECS: u64 = 5;
 
-/// Delay after killing OpenVPN process to allow for cleanup (milliseconds)
-const KILL_CLEANUP_DELAY_MS: u64 = 100;
+/// Interval for polling OpenVPN process termination (milliseconds)
+const KILL_POLL_INTERVAL_MS: u64 = 200;
+
+/// Maximum time to wait for OpenVPN process to terminate (seconds)
+const KILL_TIMEOUT_SECS: u64 = 5;
+
+/// Maximum number of poll attempts before sending SIGKILL
+/// Calculated as: (KILL_TIMEOUT_SECS * 1000) / KILL_POLL_INTERVAL_MS = 25 attempts
+const KILL_POLL_MAX_ATTEMPTS: u64 = (KILL_TIMEOUT_SECS * 1000) / KILL_POLL_INTERVAL_MS;
+
+// Compile-time assertion to ensure poll interval evenly divides timeout
+const _: () = assert!(
+    (KILL_TIMEOUT_SECS * 1000).is_multiple_of(KILL_POLL_INTERVAL_MS),
+    "KILL_TIMEOUT_SECS must be evenly divisible by KILL_POLL_INTERVAL_MS"
+);
 
 /// Pre-compiled regex for extracting server identifiers from filenames
 /// Matches patterns like "us8399", "uk1234", "de5678" (2 letters + digits)
@@ -415,6 +428,10 @@ impl VpnActor {
     async fn handle_process_exit(&mut self) {
         debug!("OpenVPN process exited");
         
+        // Ensure any orphaned openvpn process is killed before proceeding
+        // This handles the case where pkexec dies but openvpn continues running
+        self.kill_openvpn_process().await;
+        
         let (should_reconnect, server) = {
             let state = self.state.read().await;
 
@@ -503,6 +520,10 @@ impl VpnActor {
                 }
             }
 
+            // Ensure any zombie openvpn process from previous attempt is killed
+            // before trying to start a new connection
+            self.kill_openvpn_process().await;
+
             // Try to connect
             match self.start_openvpn(server).await {
                 Ok(child) => {
@@ -575,8 +596,15 @@ impl VpnActor {
     /// started by this application. This is intentional - this application is
     /// designed to be the sole manager of OpenVPN connections, and any other
     /// openvpn processes would conflict with new connections anyway.
+    ///
+    /// This method implements robust termination with:
+    /// 1. Send SIGTERM via pkill
+    /// 2. Poll for up to KILL_TIMEOUT_SECS to verify process termination
+    /// 3. If still running, send SIGKILL as a last resort
     async fn kill_openvpn_process(&self) {
         debug!("Killing any running OpenVPN processes with pkexec pkill");
+        
+        // First, send SIGTERM to gracefully terminate
         let result = Command::new("pkexec")
             .arg("pkill")
             .arg("-x")  // Exact match on process name
@@ -589,21 +617,85 @@ impl VpnActor {
         match result {
             Ok(status) => {
                 if status.success() {
-                    debug!("Successfully killed OpenVPN process(es)");
+                    debug!("Sent SIGTERM to OpenVPN process(es)");
                 } else {
                     // pkill exit codes: 0 = matched, 1 = no match, 2 = syntax error, 3 = fatal
-                    // Exit code 1 (no processes matched) is expected and acceptable
+                    // Exit code 1 (no processes matched) means no process to kill, we're done
                     debug!("pkill returned non-zero (exit code {}), likely no openvpn processes running",
                            status.code().unwrap_or(-1));
+                    return;
                 }
             }
             Err(e) => {
                 warn!("Failed to execute pkexec pkill: {}", e);
+                return;
             }
         }
 
-        // Brief delay to ensure process cleanup completes
-        sleep(Duration::from_millis(KILL_CLEANUP_DELAY_MS)).await;
+        // Poll to verify the process has terminated
+        for attempt in 1..=KILL_POLL_MAX_ATTEMPTS {
+            // Use pkill -0 to check if process exists (signal 0 checks existence without killing)
+            let check_result = Command::new("pkexec")
+                .arg("pkill")
+                .arg("-0")  // Signal 0: check existence only
+                .arg("-x")  // Exact match on process name
+                .arg("openvpn")
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await;
+
+            match check_result {
+                Ok(status) => {
+                    if !status.success() {
+                        // Exit code 1 means no matching process found - success!
+                        debug!("OpenVPN process terminated after {} poll attempts", attempt);
+                        return;
+                    }
+                    // Process still exists, continue polling
+                    debug!("OpenVPN process still running (poll attempt {}/{})", 
+                           attempt, KILL_POLL_MAX_ATTEMPTS);
+                }
+                Err(e) => {
+                    warn!("Failed to check OpenVPN process status: {}", e);
+                    // Continue polling in case of transient error
+                }
+            }
+            
+            // Wait before next poll attempt (moved to end of loop to check immediately on first attempt)
+            sleep(Duration::from_millis(KILL_POLL_INTERVAL_MS)).await;
+        }
+
+        // Process still running after timeout, send SIGKILL as last resort
+        warn!("OpenVPN process did not terminate within {} seconds, sending SIGKILL", 
+              KILL_TIMEOUT_SECS);
+        
+        let kill_result = Command::new("pkexec")
+            .arg("pkill")
+            .arg("-9")  // SIGKILL
+            .arg("-x")  // Exact match on process name
+            .arg("openvpn")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        match kill_result {
+            Ok(status) => {
+                if status.success() {
+                    debug!("Sent SIGKILL to OpenVPN process(es)");
+                } else {
+                    debug!("SIGKILL pkill returned non-zero (exit code {})",
+                           status.code().unwrap_or(-1));
+                }
+            }
+            Err(e) => {
+                warn!("Failed to execute SIGKILL pkill: {}", e);
+            }
+        }
+
+        // Brief delay after SIGKILL to ensure cleanup
+        sleep(Duration::from_millis(KILL_POLL_INTERVAL_MS)).await;
     }
 
     /// Toggle auto-reconnect feature
