@@ -55,13 +55,13 @@ const MAX_RETRY_ATTEMPTS: u32 = 5;
 const RETRY_DELAY_SECS: u64 = 5;
 
 /// Interval for polling OpenVPN process termination (milliseconds)
-const KILL_POLL_INTERVAL_MS: u64 = 200;
+const KILL_POLL_INTERVAL_MS: u64 = 100;
 
 /// Maximum time to wait for OpenVPN process to terminate (seconds)
 const KILL_TIMEOUT_SECS: u64 = 5;
 
 /// Maximum number of poll attempts before sending SIGKILL
-/// Calculated as: (KILL_TIMEOUT_SECS * 1000) / KILL_POLL_INTERVAL_MS = 25 attempts
+/// Calculated as: (KILL_TIMEOUT_SECS * 1000) / KILL_POLL_INTERVAL_MS = 50 attempts
 const KILL_POLL_MAX_ATTEMPTS: u64 = (KILL_TIMEOUT_SECS * 1000) / KILL_POLL_INTERVAL_MS;
 
 // Compile-time assertion to ensure poll interval evenly divides timeout
