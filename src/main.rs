@@ -271,10 +271,14 @@ impl VpnSupervisor {
             }
 
             // Clean up any orphan OpenVPN processes before connecting
+            // This ensures a clean state even if disconnect verification succeeded
             if !disconnected {
                 warn!("Specific VPN '{}' may not have disconnected properly, cleaning up orphan processes", current);
+                kill_orphan_openvpn_processes().await;
+            } else {
+                // Always clean up to ensure no stale processes remain
+                kill_orphan_openvpn_processes().await;
             }
-            kill_orphan_openvpn_processes().await;
 
             // Extra settle time for NetworkManager
             sleep(Duration::from_secs(1)).await;
@@ -887,8 +891,9 @@ async fn kill_orphan_openvpn_processes() {
     debug!("Checking for orphan OpenVPN processes");
     
     // Check if any openvpn processes exist
+    // Use more specific pattern to avoid matching unrelated processes
     let pgrep_output = match Command::new("pgrep")
-        .args(["-f", "openvpn"])
+        .args(["-x", "openvpn"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
@@ -915,12 +920,21 @@ async fn kill_orphan_openvpn_processes() {
     for pid in pids {
         if let Ok(pid_num) = pid.trim().parse::<i32>() {
             debug!("Killing OpenVPN process with PID {}", pid_num);
-            let _ = Command::new("kill")
+            match Command::new("kill")
                 .arg(pid_num.to_string())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .output()
-                .await;
+                .await
+            {
+                Ok(output) if !output.status.success() => {
+                    warn!("Failed to kill process {}: exit status {}", pid_num, output.status);
+                }
+                Err(e) => {
+                    warn!("Failed to execute kill for process {}: {}", pid_num, e);
+                }
+                _ => {}
+            }
         }
     }
     
@@ -929,7 +943,7 @@ async fn kill_orphan_openvpn_processes() {
     
     // Verify cleanup
     let verify_output = Command::new("pgrep")
-        .args(["-f", "openvpn"])
+        .args(["-x", "openvpn"])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
