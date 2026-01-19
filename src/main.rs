@@ -61,7 +61,14 @@ const KILL_POLL_INTERVAL_MS: u64 = 200;
 const KILL_TIMEOUT_SECS: u64 = 5;
 
 /// Maximum number of poll attempts before sending SIGKILL
+/// Calculated as: (KILL_TIMEOUT_SECS * 1000) / KILL_POLL_INTERVAL_MS = 25 attempts
 const KILL_POLL_MAX_ATTEMPTS: u64 = (KILL_TIMEOUT_SECS * 1000) / KILL_POLL_INTERVAL_MS;
+
+// Compile-time assertion to ensure poll interval evenly divides timeout
+const _: () = assert!(
+    (KILL_TIMEOUT_SECS * 1000).is_multiple_of(KILL_POLL_INTERVAL_MS),
+    "KILL_TIMEOUT_SECS must be evenly divisible by KILL_POLL_INTERVAL_MS"
+);
 
 /// Pre-compiled regex for extracting server identifiers from filenames
 /// Matches patterns like "us8399", "uk1234", "de5678" (2 letters + digits)
@@ -627,8 +634,6 @@ impl VpnActor {
 
         // Poll to verify the process has terminated
         for attempt in 1..=KILL_POLL_MAX_ATTEMPTS {
-            sleep(Duration::from_millis(KILL_POLL_INTERVAL_MS)).await;
-            
             // Use pkill -0 to check if process exists (signal 0 checks existence without killing)
             let check_result = Command::new("pkexec")
                 .arg("pkill")
@@ -656,6 +661,9 @@ impl VpnActor {
                     // Continue polling in case of transient error
                 }
             }
+            
+            // Wait before next poll attempt (moved to end of loop to check immediately on first attempt)
+            sleep(Duration::from_millis(KILL_POLL_INTERVAL_MS)).await;
         }
 
         // Process still running after timeout, send SIGKILL as last resort
