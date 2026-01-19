@@ -855,23 +855,22 @@ fn extract_short_name(full_name: &str) -> &str {
 }
 
 /// Create a solid color icon in ARGB32 format
-/// 
+///
 /// Returns icons in common sizes (16x16, 24x24, 32x32) for different DPI scales.
 /// The data is in ARGB32 format with network byte order (big endian).
 fn create_colored_icon(r: u8, g: u8, b: u8, a: u8) -> Vec<ksni::Icon> {
     let sizes = [16, 24, 32];
+    let pixel = [a, r, g, b]; // ARGB32 in network byte order
+    
     sizes
         .iter()
         .map(|&size| {
             let pixel_count = (size * size) as usize;
             let mut data = Vec::with_capacity(pixel_count * 4);
             
-            // ARGB32 in network byte order (big endian)
+            // Efficiently fill with repeated ARGB pixel data
             for _ in 0..pixel_count {
-                data.push(a); // Alpha
-                data.push(r); // Red
-                data.push(g); // Green
-                data.push(b); // Blue
+                data.extend_from_slice(&pixel);
             }
             
             ksni::Icon {
