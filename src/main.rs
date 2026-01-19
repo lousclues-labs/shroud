@@ -410,7 +410,7 @@ impl VpnActor {
             // 4. The connection was NOT external (NM-managed)
             let is_app_connection = matches!(
                 &state.state,
-                VpnState::Connected { source: VpnSource::App, .. } 
+                VpnState::Connected { source: VpnSource::App, .. }
                     | VpnState::Connecting(_)
                     | VpnState::Retrying { .. }
             );
