@@ -83,6 +83,12 @@ const TUN_POLL_INTERVAL_MS: u64 = 250;
 /// Maximum attempts to check tun interface release
 const TUN_POLL_MAX_ATTEMPTS: u64 = (TUN_RELEASE_TIMEOUT_SECS * 1000) / TUN_POLL_INTERVAL_MS;
 
+// Compile-time assertion to ensure TUN poll interval evenly divides timeout
+const _: () = assert!(
+    (TUN_RELEASE_TIMEOUT_SECS * 1000).is_multiple_of(TUN_POLL_INTERVAL_MS),
+    "TUN_RELEASE_TIMEOUT_SECS must be evenly divisible by TUN_POLL_INTERVAL_MS"
+);
+
 /// Pre-compiled regex for extracting server identifiers from filenames
 /// Matches patterns like "us8399", "uk1234", "de5678" (2 letters + digits)
 static SERVER_NAME_REGEX: LazyLock<Regex> =
@@ -600,7 +606,7 @@ impl VpnActor {
             if !stdout.trim().is_empty() {
                 warn!(
                     "tun interface still exists before starting OpenVPN: {}",
-                    stdout.trim().lines().next().unwrap_or("")
+                    stdout.trim().lines().next().unwrap_or_default()
                 );
                 // Don't fail - let OpenVPN try anyway, but log the warning
             }
@@ -662,14 +668,24 @@ impl VpnActor {
                     // But still check for lingering tun interface (could be orphaned from previous crash)
                     debug!("pkill returned non-zero (exit code {}), likely no openvpn processes running",
                            status.code().unwrap_or(-1));
-                    let _ = self.wait_for_network_resource_release().await;
+                    let resources_released = self.wait_for_network_resource_release().await;
+                    if resources_released {
+                        debug!("Network resources confirmed released");
+                    } else {
+                        debug!("Network resource cleanup uncertain, proceeding anyway");
+                    }
                     return;
                 }
             }
             Err(e) => {
                 warn!("Failed to execute pkexec pkill: {}", e);
                 // Still check for lingering tun interface
-                let _ = self.wait_for_network_resource_release().await;
+                let resources_released = self.wait_for_network_resource_release().await;
+                if resources_released {
+                    debug!("Network resources confirmed released");
+                } else {
+                    debug!("Network resource cleanup uncertain, proceeding anyway");
+                }
                 return;
             }
         }
@@ -764,12 +780,15 @@ impl VpnActor {
     /// - Release bound UDP/TCP sockets
     /// - Clean up netfilter/iptables rules (if any)
     ///
-    /// This method polls for tun interface absence to ensure resources are free
-    /// before allowing a new connection attempt.
+    /// This method polls for tun interface absence using `ip link show type tun`
+    /// to ensure resources are free before allowing a new connection attempt.
+    /// Polls up to [`TUN_POLL_MAX_ATTEMPTS`] times with [`TUN_POLL_INTERVAL_MS`]
+    /// between attempts.
     ///
     /// # Returns
-    /// - `true` if resources were confirmed released
-    /// - `false` if timeout was reached (connection may still work, but not guaranteed)
+    /// - `true` - tun interface was confirmed absent (resources released successfully)
+    /// - `false` - timeout reached after [`TUN_RELEASE_TIMEOUT_SECS`] seconds
+    ///   (tun interface still present, connection may still work but not guaranteed)
     async fn wait_for_network_resource_release(&self) -> bool {
         debug!("Waiting for network resources to be released...");
 
@@ -797,7 +816,7 @@ impl VpnActor {
                         "tun interface still present (poll attempt {}/{}): {}",
                         attempt,
                         TUN_POLL_MAX_ATTEMPTS,
-                        stdout.trim().lines().next().unwrap_or("")
+                        stdout.trim().lines().next().unwrap_or_default()
                     );
                 }
                 Err(e) => {
