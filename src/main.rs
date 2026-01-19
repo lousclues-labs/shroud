@@ -854,6 +854,34 @@ fn extract_short_name(full_name: &str) -> &str {
     full_name.split('-').next().unwrap_or(full_name)
 }
 
+/// Create a solid color icon in ARGB32 format
+///
+/// Returns icons in common sizes (16x16, 24x24, 32x32) for different DPI scales.
+/// The data is in ARGB32 format with network byte order (big endian).
+fn create_colored_icon(r: u8, g: u8, b: u8, a: u8) -> Vec<ksni::Icon> {
+    let sizes = [16, 24, 32];
+    let pixel = [a, r, g, b]; // ARGB32 in network byte order
+    
+    sizes
+        .iter()
+        .map(|&size| {
+            let pixel_count = (size * size) as usize;
+            let mut data = Vec::with_capacity(pixel_count * 4);
+            
+            // Efficiently fill with repeated ARGB pixel data
+            for _ in 0..pixel_count {
+                data.extend_from_slice(&pixel);
+            }
+            
+            ksni::Icon {
+                width: size,
+                height: size,
+                data,
+            }
+        })
+        .collect()
+}
+
 /// System tray interface
 pub struct VpnTray {
     /// Cached state for synchronous tray methods
@@ -931,8 +959,20 @@ impl Tray for VpnTray {
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-        // Return empty to prefer themed icon_name
-        Vec::new()
+        // Return colored icons for glanceable status
+        let state = self.cached_state.read().unwrap();
+        match state.state {
+            // Green for connected
+            VpnState::Connected { .. } => create_colored_icon(0, 200, 0, 255),
+            // Amber/yellow for connecting/reconnecting
+            VpnState::Connecting { .. } | VpnState::Reconnecting { .. } => {
+                create_colored_icon(255, 191, 0, 255)
+            }
+            // Red for disconnected/failed
+            VpnState::Failed { .. } | VpnState::Disconnected => {
+                create_colored_icon(220, 0, 0, 255)
+            }
+        }
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
@@ -1135,12 +1175,14 @@ async fn main() {
     // Run the tray (this blocks in a separate thread)
     info!("Starting system tray");
     let tray_handle_clone = tray_handle.clone();
+    // Capture the runtime handle before spawning the thread
+    let runtime_handle = tokio::runtime::Handle::current();
     std::thread::spawn(move || {
         use ksni::blocking::TrayMethods;
         match tray_service.spawn() {
             Ok(handle) => {
-                // Store handle in the async context
-                tokio::runtime::Handle::current().block_on(async {
+                // Store handle in the async context using the captured runtime handle
+                runtime_handle.block_on(async {
                     *tray_handle_clone.lock().await = Some(handle);
                 });
             }
