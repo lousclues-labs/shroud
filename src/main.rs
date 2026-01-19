@@ -1,21 +1,16 @@
-//! OpenVPN System Tray Application with Auto-Reconnect
+//! NetworkManager VPN Supervisor with System Tray
 //!
-//! A production-ready system tray application for managing OpenVPN connections
+//! A production-ready system tray application for managing VPN connections via NetworkManager
 //! with auto-reconnect capabilities for Arch Linux / KDE Plasma (X11).
 //!
 //! # Arch Linux Setup
 //!
 //! Install required system packages:
 //! ```bash
-//! sudo pacman -S openvpn polkit rust networkmanager
+//! sudo pacman -S networkmanager rust
 //! ```
 //!
-//! Place your .ovpn files in `/etc/openvpn/` and create an auth file:
-//! ```bash
-//! sudo nano /etc/openvpn/auth.txt
-//! # Add username on first line, password on second line
-//! sudo chmod 600 /etc/openvpn/auth.txt
-//! ```
+//! Configure VPN connections in NetworkManager (via nmcli or KDE settings).
 //!
 //! # Building
 //!
@@ -23,85 +18,39 @@
 //! cargo build --release
 //! ```
 
-use ksni::{menu::StandardItem, Icon, MenuItem, Tray, TrayMethods};
+use ksni::{menu::StandardItem, MenuItem, Tray};
 use log::{debug, error, info, warn};
-use nix::sys::signal::{self, Signal};
-use nix::unistd::Pid;
 use notify_rust::Notification;
-use regex::Regex;
-use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::{Arc, LazyLock};
-use tokio::process::{Child, Command};
-use tokio::sync::{mpsc, Mutex, RwLock};
+use std::sync::Arc;
+use std::time::Instant;
+use tokio::process::Command;
+use tokio::sync::{mpsc, RwLock};
 use tokio::time::{sleep, timeout, Duration};
 
-/// Interval for polling NetworkManager state in seconds
-const NM_POLL_INTERVAL_SECS: u64 = 5;
+/// Poll NetworkManager state every 2 seconds
+const NM_POLL_INTERVAL_SECS: u64 = 2;
 
 /// Timeout for nmcli commands in seconds
-const NMCLI_TIMEOUT_SECS: u64 = 10;
+const NMCLI_TIMEOUT_SECS: u64 = 30;
 
-/// Path to the OpenVPN configuration directory
-const OVPN_CONFIG_DIR: &str = "/etc/openvpn";
-
-/// Path to the authentication file for OpenVPN
-const AUTH_FILE: &str = "/etc/openvpn/auth.txt";
+/// Wait after nmcli con up before verifying connection
+const CONNECTION_VERIFY_DELAY_SECS: u64 = 5;
 
 /// Maximum number of reconnection attempts before giving up
-const MAX_RETRY_ATTEMPTS: u32 = 5;
+const MAX_RECONNECT_ATTEMPTS: u32 = 10;
 
-/// Delay between reconnection attempts in seconds
-const RETRY_DELAY_SECS: u64 = 5;
+/// Base delay for exponential backoff in seconds
+const RECONNECT_BASE_DELAY_SECS: u64 = 2;
 
-/// Interval for polling OpenVPN process termination (milliseconds)
-const KILL_POLL_INTERVAL_MS: u64 = 100;
+/// Cap on reconnect delay in seconds
+const RECONNECT_MAX_DELAY_SECS: u64 = 30;
 
-/// Maximum time to wait for OpenVPN process to terminate (seconds)
-const KILL_TIMEOUT_SECS: u64 = 5;
+/// Grace period after intentional disconnect to prevent false drop detection
+const POST_DISCONNECT_GRACE_SECS: u64 = 5;
 
-/// Maximum number of poll attempts before sending SIGKILL
-/// Calculated as: (KILL_TIMEOUT_SECS * 1000) / KILL_POLL_INTERVAL_MS = 50 attempts
-const KILL_POLL_MAX_ATTEMPTS: u64 = (KILL_TIMEOUT_SECS * 1000) / KILL_POLL_INTERVAL_MS;
-
-// Compile-time assertion to ensure poll interval evenly divides timeout
-const _: () = assert!(
-    (KILL_TIMEOUT_SECS * 1000).is_multiple_of(KILL_POLL_INTERVAL_MS),
-    "KILL_TIMEOUT_SECS must be evenly divisible by KILL_POLL_INTERVAL_MS"
-);
-
-/// Additional wait time after process termination for kernel resource cleanup (milliseconds)
-/// Covers: tun interface release, socket unbinding, route table cleanup
-const POST_KILL_RESOURCE_CLEANUP_MS: u64 = 500;
-
-/// Maximum time to wait for tun interface to be released (seconds)
-const TUN_RELEASE_TIMEOUT_SECS: u64 = 10;
-
-/// Poll interval when checking for tun interface release (milliseconds)
-const TUN_POLL_INTERVAL_MS: u64 = 250;
-
-/// Maximum attempts to check tun interface release
-const TUN_POLL_MAX_ATTEMPTS: u64 = (TUN_RELEASE_TIMEOUT_SECS * 1000) / TUN_POLL_INTERVAL_MS;
-
-// Compile-time assertion to ensure TUN poll interval evenly divides timeout
-const _: () = assert!(
-    (TUN_RELEASE_TIMEOUT_SECS * 1000).is_multiple_of(TUN_POLL_INTERVAL_MS),
-    "TUN_RELEASE_TIMEOUT_SECS must be evenly divisible by TUN_POLL_INTERVAL_MS"
-);
-
-/// Pre-compiled regex for extracting server identifiers from filenames
-/// Matches patterns like "us8399", "uk1234", "de5678" (2 letters + digits)
-static SERVER_NAME_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^([a-zA-Z]{2}\d+)").expect("Invalid regex pattern"));
-
-/// Source of the VPN connection
-#[derive(Debug, Clone, PartialEq)]
-pub enum VpnSource {
-    /// Connection was initiated by this application
-    App,
-    /// Connection was initiated externally (e.g., NetworkManager)
-    External,
-}
+/// Wait after disconnect before initiating new connection
+const POST_DISCONNECT_SETTLE_SECS: u64 = 2;
 
 /// VPN connection state
 #[derive(Debug, Clone, PartialEq)]
@@ -109,36 +58,32 @@ pub enum VpnState {
     /// No active connection
     Disconnected,
     /// Currently establishing connection to a server
-    Connecting(String),
+    Connecting { server: String },
     /// Successfully connected to a server
-    Connected { server: String, source: VpnSource },
+    Connected { server: String },
     /// Connection dropped, attempting to reconnect
-    Retrying { server: String, attempt: u32 },
+    Reconnecting {
+        server: String,
+        attempt: u32,
+        max_attempts: u32,
+    },
+    /// Connection failed
+    Failed { server: String, reason: String },
 }
 
 impl VpnState {
     /// Get the server name if in a connected or connecting state
     fn server_name(&self) -> Option<&str> {
         match self {
-            VpnState::Connected { server, .. } | VpnState::Connecting(server) => Some(server),
-            VpnState::Retrying { server, .. } => Some(server),
+            VpnState::Connected { server } | VpnState::Connecting { server } => Some(server),
+            VpnState::Reconnecting { server, .. } => Some(server),
+            VpnState::Failed { server, .. } => Some(server),
             VpnState::Disconnected => None,
         }
     }
-
-    /// Check if connection is from an external source
-    fn is_external(&self) -> bool {
-        matches!(
-            self,
-            VpnState::Connected {
-                source: VpnSource::External,
-                ..
-            }
-        )
-    }
 }
 
-/// Commands that can be sent to the VPN actor
+/// Commands that can be sent to the VPN supervisor
 #[derive(Debug)]
 pub enum VpnCommand {
     /// Connect to a specific server
@@ -147,24 +92,19 @@ pub enum VpnCommand {
     Disconnect,
     /// Toggle auto-reconnect feature
     ToggleAutoReconnect,
-    /// Refresh the list of available servers
-    RefreshServers,
-    /// Sync with NetworkManager state (internal command)
-    SyncNmState,
+    /// Refresh the list of available VPN connections
+    RefreshConnections,
 }
 
-/// Shared state between the tray and the VPN actor
+/// Shared state between the tray and the VPN supervisor
+#[derive(Clone)]
 pub struct SharedState {
     /// Current VPN state
     pub state: VpnState,
     /// Whether auto-reconnect is enabled
     pub auto_reconnect: bool,
-    /// List of available .ovpn configuration files
-    pub servers: Vec<String>,
-    /// Whether the user intentionally disconnected
-    pub intentional_disconnect: bool,
-    /// Name of the active NM VPN connection (for disconnect via nmcli)
-    pub nm_connection_name: Option<String>,
+    /// List of available VPN connections from NetworkManager
+    pub connections: Vec<String>,
 }
 
 impl Default for SharedState {
@@ -172,56 +112,45 @@ impl Default for SharedState {
         Self {
             state: VpnState::Disconnected,
             auto_reconnect: true,
-            servers: Vec::new(),
-            intentional_disconnect: false,
-            nm_connection_name: None,
+            connections: Vec::new(),
         }
     }
 }
 
-/// VPN Actor that handles process supervision separately from the GUI thread
-pub struct VpnActor {
+/// VPN Supervisor that manages VPN connections via NetworkManager
+pub struct VpnSupervisor {
     /// Shared state accessible by the tray
     state: Arc<RwLock<SharedState>>,
     /// Channel receiver for commands from the tray
     rx: mpsc::Receiver<VpnCommand>,
-    /// Currently running OpenVPN child process
-    child: Option<Child>,
     /// Tray handle for updating the icon
-    tray_handle: Arc<Mutex<Option<ksni::Handle<VpnTray>>>>,
+    tray_handle: Arc<tokio::sync::Mutex<Option<ksni::blocking::Handle<VpnTray>>>>,
+    /// Timestamp of last intentional disconnect
+    last_disconnect_time: Option<Instant>,
 }
 
-impl VpnActor {
-    /// Create a new VPN actor
+impl VpnSupervisor {
+    /// Create a new VPN supervisor
     pub fn new(
         state: Arc<RwLock<SharedState>>,
         rx: mpsc::Receiver<VpnCommand>,
-        tray_handle: Arc<Mutex<Option<ksni::Handle<VpnTray>>>>,
+        tray_handle: Arc<tokio::sync::Mutex<Option<ksni::blocking::Handle<VpnTray>>>>,
     ) -> Self {
         Self {
             state,
             rx,
-            child: None,
             tray_handle,
+            last_disconnect_time: None,
         }
     }
 
-    /// Check if the child process is still running
-    /// Returns true if the process exists and has not exited
-    fn is_child_running(&mut self) -> bool {
-        self.child
-            .as_mut()
-            .map(|c| c.try_wait().ok().flatten().is_none())
-            .unwrap_or(false)
-    }
-
-    /// Run the actor's main loop
+    /// Run the supervisor's main loop
     pub async fn run(mut self) {
-        info!("VPN actor starting");
-        
-        // Initial server refresh and NM state sync
-        self.refresh_servers().await;
-        self.sync_nm_state().await;
+        info!("VPN supervisor starting");
+
+        // Initial connection refresh and state sync
+        self.refresh_connections().await;
+        self.sync_with_nm().await;
 
         // Create an interval for NM polling
         let mut nm_poll_interval = tokio::time::interval(Duration::from_secs(NM_POLL_INTERVAL_SECS));
@@ -236,16 +165,13 @@ impl VpnActor {
                             self.handle_connect(&server).await;
                         }
                         VpnCommand::Disconnect => {
-                            self.handle_disconnect(true).await;
+                            self.handle_disconnect().await;
                         }
                         VpnCommand::ToggleAutoReconnect => {
                             self.toggle_auto_reconnect().await;
                         }
-                        VpnCommand::RefreshServers => {
-                            self.refresh_servers().await;
-                        }
-                        VpnCommand::SyncNmState => {
-                            self.sync_nm_state().await;
+                        VpnCommand::RefreshConnections => {
+                            self.refresh_connections().await;
                         }
                     }
                 }
@@ -253,604 +179,287 @@ impl VpnActor {
                 // Poll NetworkManager state periodically
                 _ = nm_poll_interval.tick() => {
                     debug!("Polling NetworkManager state");
-                    self.sync_nm_state().await;
-                }
-
-                // Monitor child process if one is running
-                _ = async {
-                    if let Some(ref mut child) = self.child {
-                        child.wait().await
-                    } else {
-                        // Sleep for a long time if no child to monitor
-                        // Using a bounded sleep instead of pending() to avoid potential resource issues
-                        sleep(Duration::from_secs(86400)).await; // 24 hours
-                        Ok(std::process::ExitStatus::default())
-                    }
-                } => {
-                    self.handle_process_exit().await;
+                    self.sync_with_nm().await;
                 }
             }
         }
     }
 
     /// Handle connection to a server
-    async fn handle_connect(&mut self, server: &str) {
-        info!("Connecting to server: {}", server);
-        
-        // Check current state and disconnect if needed (switching servers or NM-managed)
-        let (needs_disconnect, is_external, nm_conn_name) = {
+    async fn handle_connect(&mut self, connection_name: &str) {
+        info!("Connecting to: {}", connection_name);
+
+        // Check current state
+        let current_state = {
             let state = self.state.read().await;
-            let current_server = state.state.server_name();
-            let switching = current_server.is_some() && current_server != Some(server);
-            let is_external = state.state.is_external();
-            let nm_conn = state.nm_connection_name.clone();
-            (switching || is_external, is_external, nm_conn)
+            state.state.clone()
         };
 
-        if needs_disconnect {
-            // Set intentional_disconnect flag BEFORE disconnecting to prevent
-            // auto-reconnect logic from firing for the old server during switch
-            {
-                let mut state = self.state.write().await;
-                state.intentional_disconnect = true;
+        // If we're already connected to a different server, disconnect first
+        if let Some(current_server) = current_state.server_name() {
+            if current_server != connection_name {
+                info!(
+                    "Switching from {} to {}",
+                    current_server, connection_name
+                );
+                // Disconnect the old connection
+                let _ = nm_disconnect(current_server).await;
+                // Wait for resources to settle
+                sleep(Duration::from_secs(POST_DISCONNECT_SETTLE_SECS)).await;
             }
-
-            // Handle NM-managed (external) connections
-            if is_external {
-                if let Some(conn_name) = nm_conn_name {
-                    debug!("Disconnecting NM connection {} before switching", conn_name);
-                    let _ = Command::new("nmcli")
-                        .arg("con")
-                        .arg("down")
-                        .arg(&conn_name)
-                        .stdout(Stdio::null())
-                        .stderr(Stdio::null())
-                        .status()
-                        .await;
-                    // Wait briefly to ensure NM cleanup completes
-                    sleep(Duration::from_millis(500)).await;
-                    // Clear NM connection name only after the NM connection is successfully down
-                    {
-                        let mut state = self.state.write().await;
-                        state.nm_connection_name = None;
-                    }
-                }
-            }
-
-            // Handle app-managed connections: first try to terminate the pkexec wrapper
-            if let Some(mut child) = self.child.take() {
-                if let Some(pid) = child.id() {
-                    debug!("Sending SIGTERM to pkexec process (PID: {}) for server switch", pid);
-                    let _ = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
-                }
-                debug!("Waiting for old pkexec process to exit");
-                let _ = child.wait().await;
-            }
-
-            // CRITICAL: pkexec does not forward signals to its children.
-            // The openvpn process running as root will continue even after pkexec dies.
-            // We must explicitly kill the openvpn process using pkexec pkill.
-            if !is_external {
-                self.kill_openvpn_process().await;
-            }
-
-            debug!("Old VPN connection terminated, proceeding with new connection");
         }
 
-        // Update state to connecting - intentional_disconnect is reset to false only
-        // AFTER the old connection is confirmed dead and we are ready to start the new one.
-        // nm_connection_name was already cleared after successful NM disconnect above.
+        // Update state to Connecting
         {
             let mut state = self.state.write().await;
-            state.state = VpnState::Connecting(server.to_string());
-            state.intentional_disconnect = false;
+            state.state = VpnState::Connecting {
+                server: connection_name.to_string(),
+            };
         }
         self.update_tray().await;
-        self.send_notification("OpenVPN", &format!("Connecting to {}...", server));
 
-        // Start the OpenVPN process
-        match self.start_openvpn(server).await {
-            Ok(child) => {
-                self.child = Some(child);
-                debug!("OpenVPN process started, waiting for connection");
-                // Give OpenVPN some time to establish connection
-                sleep(Duration::from_secs(3)).await;
+        // Attempt connection via NetworkManager
+        match nm_connect(connection_name).await {
+            Ok(_) => {
+                info!("Connection command sent successfully");
+                // Wait for connection to establish
+                sleep(Duration::from_secs(CONNECTION_VERIFY_DELAY_SECS)).await;
 
-                // Check if process is still running (connection likely successful)
-                if self.is_child_running() {
-                    info!("Connected to {}", server);
-                    let mut state = self.state.write().await;
-                    state.state = VpnState::Connected {
-                        server: server.to_string(),
-                        source: VpnSource::App,
-                    };
-                    drop(state);
-                    self.update_tray().await;
-                    self.send_notification("OpenVPN", &format!("Connected to {}", server));
+                // Verify connection
+                if let Some(active_vpn) = nm_get_active_vpn().await {
+                    if active_vpn == connection_name {
+                        info!("Successfully connected to {}", connection_name);
+                        {
+                            let mut state = self.state.write().await;
+                            state.state = VpnState::Connected {
+                                server: connection_name.to_string(),
+                            };
+                        }
+                        self.update_tray().await;
+                        self.show_notification("VPN Connected", &format!("Connected to {}", connection_name));
+                        return;
+                    }
                 }
+
+                // Connection verification failed
+                warn!("Connection verification failed for {}", connection_name);
+                {
+                    let mut state = self.state.write().await;
+                    state.state = VpnState::Failed {
+                        server: connection_name.to_string(),
+                        reason: "Connection verification failed".to_string(),
+                    };
+                }
+                self.update_tray().await;
             }
             Err(e) => {
-                error!("Failed to start OpenVPN: {}", e);
-                let mut state = self.state.write().await;
-                state.state = VpnState::Disconnected;
-                drop(state);
+                error!("Failed to connect to {}: {}", connection_name, e);
+                {
+                    let mut state = self.state.write().await;
+                    state.state = VpnState::Failed {
+                        server: connection_name.to_string(),
+                        reason: e,
+                    };
+                }
                 self.update_tray().await;
-                self.send_notification("OpenVPN Error", &format!("Failed to connect: {}", e));
+                self.show_notification("VPN Connection Failed", &format!("Failed to connect to {}", connection_name));
             }
         }
     }
 
-    /// Handle disconnection
-    async fn handle_disconnect(&mut self, intentional: bool) {
-        info!("Disconnecting (intentional: {})", intentional);
-        
-        // Get current state to determine if this is an external connection
-        let (is_external, nm_conn_name) = {
+    /// Handle disconnect command
+    async fn handle_disconnect(&mut self) {
+        info!("Disconnecting VPN");
+
+        // Get current connection name
+        let connection_name = {
             let state = self.state.read().await;
-            (
-                state.state.is_external(),
-                state.nm_connection_name.clone(),
-            )
+            state.state.server_name().map(|s| s.to_string())
         };
 
-        // Set intentional flag before killing
-        {
-            let mut state = self.state.write().await;
-            state.intentional_disconnect = intentional;
-        }
+        if let Some(name) = connection_name {
+            // Record intentional disconnect time
+            self.last_disconnect_time = Some(Instant::now());
 
-        // If external connection, disconnect via nmcli
-        if is_external {
-            if let Some(conn_name) = nm_conn_name {
-                debug!("Disconnecting external NM connection: {}", conn_name);
-                let _ = Command::new("nmcli")
-                    .arg("con")
-                    .arg("down")
-                    .arg(&conn_name)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                    .await;
-            }
-        } else {
-            // First, try to terminate the child process (the pkexec wrapper)
-            if let Some(ref child) = self.child {
-                if let Some(pid) = child.id() {
-                    debug!("Sending SIGTERM to pkexec process (PID: {})", pid);
-                    let _ = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
+            // Disconnect via NetworkManager
+            match nm_disconnect(&name).await {
+                Ok(_) => {
+                    info!("Disconnected successfully");
+                    {
+                        let mut state = self.state.write().await;
+                        state.state = VpnState::Disconnected;
+                    }
+                    self.update_tray().await;
+                    self.show_notification("VPN Disconnected", "VPN connection closed");
+                }
+                Err(e) => {
+                    error!("Failed to disconnect: {}", e);
                 }
             }
-
-            // CRITICAL: pkexec does not forward signals to its children.
-            // The openvpn process running as root will continue even after pkexec dies.
-            // We must explicitly kill the openvpn process using pkexec pkill.
-            self.kill_openvpn_process().await;
-        }
-
-        if intentional {
-            // Wait for process to exit (if app-managed)
-            if let Some(ref mut child) = self.child {
-                let _ = child.wait().await;
-            }
-            self.child = None;
-
-            let mut state = self.state.write().await;
-            state.state = VpnState::Disconnected;
-            state.nm_connection_name = None;
-            drop(state);
-            self.update_tray().await;
-            self.send_notification("OpenVPN", "Disconnected");
         }
     }
 
-    /// Handle unexpected process exit (for auto-reconnect)
-    async fn handle_process_exit(&mut self) {
-        debug!("OpenVPN process exited");
-        
-        // Ensure any orphaned openvpn process is killed before proceeding
-        // This handles the case where pkexec dies but openvpn continues running
-        self.kill_openvpn_process().await;
-        
-        let (should_reconnect, server) = {
+    /// Sync internal state with NetworkManager
+    async fn sync_with_nm(&mut self) {
+        // Check if we're in grace period after intentional disconnect
+        if let Some(disconnect_time) = self.last_disconnect_time {
+            if disconnect_time.elapsed().as_secs() < POST_DISCONNECT_GRACE_SECS {
+                debug!("In grace period after intentional disconnect");
+                return;
+            } else {
+                // Grace period expired
+                self.last_disconnect_time = None;
+            }
+        }
+
+        // Get active VPN from NetworkManager
+        let active_vpn = nm_get_active_vpn().await;
+
+        let (current_state, auto_reconnect) = {
             let state = self.state.read().await;
-
-            // Only auto-reconnect if:
-            // 1. It wasn't an intentional disconnect
-            // 2. Auto-reconnect is enabled
-            // 3. We were in a connected (app-initiated), connecting, or retrying state
-            // 4. The connection was NOT external (NM-managed)
-            let is_app_connection = matches!(
-                &state.state,
-                VpnState::Connected { source: VpnSource::App, .. }
-                    | VpnState::Connecting(_)
-                    | VpnState::Retrying { .. }
-            );
-            let should_reconnect = !state.intentional_disconnect
-                && state.auto_reconnect
-                && is_app_connection;
-
-            debug!(
-                "Process exit analysis: intentional={}, auto_reconnect={}, is_app={}, should_reconnect={}",
-                state.intentional_disconnect, state.auto_reconnect, is_app_connection, should_reconnect
-            );
-
-            let server = state.state.server_name().map(|s| s.to_string());
-            (should_reconnect, server)
+            (state.state.clone(), state.auto_reconnect)
         };
 
-        self.child = None;
-
-        if should_reconnect {
-            if let Some(server) = server {
-                info!("Initiating auto-reconnect to {}", server);
-                self.attempt_reconnect(&server).await;
+        match (&current_state, active_vpn) {
+            // We think we're connected, but NM shows nothing - connection dropped!
+            (VpnState::Connected { server }, None) => {
+                warn!("Connection to {} dropped unexpectedly", server);
+                
+                if auto_reconnect {
+                    info!("Auto-reconnect enabled, attempting to reconnect");
+                    let server_clone = server.clone();
+                    self.attempt_reconnect(&server_clone, 1).await;
+                } else {
+                    info!("Auto-reconnect disabled, staying disconnected");
+                    {
+                        let mut state = self.state.write().await;
+                        state.state = VpnState::Disconnected;
+                    }
+                    self.update_tray().await;
+                    self.show_notification("VPN Disconnected", "Connection dropped");
+                }
             }
-        } else {
-            let mut state = self.state.write().await;
-            if !state.intentional_disconnect {
-                debug!("Setting state to Disconnected (no auto-reconnect)");
-                state.state = VpnState::Disconnected;
-                drop(state);
+            // We're disconnected but NM shows a VPN - external connection
+            (VpnState::Disconnected, Some(vpn_name)) => {
+                info!("Detected external VPN connection: {}", vpn_name);
+                {
+                    let mut state = self.state.write().await;
+                    state.state = VpnState::Connected { server: vpn_name };
+                }
                 self.update_tray().await;
+            }
+            // We're in a stable state and NM agrees
+            _ => {
+                debug!("State synchronized with NetworkManager");
             }
         }
     }
 
-    /// Attempt to reconnect with retry logic
-    async fn attempt_reconnect(&mut self, server: &str) {
-        let mut attempt = 1;
+    /// Attempt to reconnect with exponential backoff
+    async fn attempt_reconnect(&mut self, connection_name: &str, initial_attempt: u32) {
+        let mut attempt = initial_attempt;
 
-        while attempt <= MAX_RETRY_ATTEMPTS {
-            // Check if user intentionally disconnected during retry
-            {
-                let state = self.state.read().await;
-                if state.intentional_disconnect || !state.auto_reconnect {
-                    info!("Reconnect cancelled (intentional disconnect or auto-reconnect disabled)");
-                    return;
+        loop {
+            if attempt > MAX_RECONNECT_ATTEMPTS {
+                error!(
+                    "Max reconnection attempts ({}) reached for {}",
+                    MAX_RECONNECT_ATTEMPTS, connection_name
+                );
+                {
+                    let mut state = self.state.write().await;
+                    state.state = VpnState::Failed {
+                        server: connection_name.to_string(),
+                        reason: format!(
+                            "Max reconnection attempts ({}) exceeded",
+                            MAX_RECONNECT_ATTEMPTS
+                        ),
+                    };
                 }
+                self.update_tray().await;
+                self.show_notification(
+                    "VPN Reconnection Failed",
+                    &format!(
+                        "Failed to reconnect to {} after {} attempts",
+                        connection_name, MAX_RECONNECT_ATTEMPTS
+                    ),
+                );
+                return;
             }
 
-            info!("Reconnection attempt {}/{} to {}", attempt, MAX_RETRY_ATTEMPTS, server);
-            
-            // Update state to retrying
+            info!(
+                "Reconnection attempt {}/{} for {}",
+                attempt, MAX_RECONNECT_ATTEMPTS, connection_name
+            );
+
+            // Update state to Reconnecting
             {
                 let mut state = self.state.write().await;
-                state.state = VpnState::Retrying {
-                    server: server.to_string(),
+                state.state = VpnState::Reconnecting {
+                    server: connection_name.to_string(),
                     attempt,
+                    max_attempts: MAX_RECONNECT_ATTEMPTS,
                 };
             }
             self.update_tray().await;
-            self.send_notification(
-                "OpenVPN",
-                &format!("Connection lost. Reconnecting (attempt {}/{})", attempt, MAX_RETRY_ATTEMPTS),
+
+            // Calculate backoff delay
+            let delay = std::cmp::min(
+                RECONNECT_BASE_DELAY_SECS * (attempt as u64),
+                RECONNECT_MAX_DELAY_SECS,
             );
+            info!("Waiting {} seconds before reconnection attempt", delay);
+            sleep(Duration::from_secs(delay)).await;
 
-            // Wait before retrying
-            debug!("Waiting {} seconds before retry", RETRY_DELAY_SECS);
-            sleep(Duration::from_secs(RETRY_DELAY_SECS)).await;
+            // Attempt connection
+            match nm_connect(connection_name).await {
+                Ok(_) => {
+                    info!("Reconnection command sent successfully");
+                    // Wait for connection to establish
+                    sleep(Duration::from_secs(CONNECTION_VERIFY_DELAY_SECS)).await;
 
-            // Check again if user disconnected during wait
-            {
-                let state = self.state.read().await;
-                if state.intentional_disconnect || !state.auto_reconnect {
-                    info!("Reconnect cancelled during wait");
-                    return;
-                }
-            }
-
-            // Ensure any zombie openvpn process from previous attempt is killed
-            // before trying to start a new connection
-            self.kill_openvpn_process().await;
-
-            // Try to connect
-            match self.start_openvpn(server).await {
-                Ok(child) => {
-                    self.child = Some(child);
-                    debug!("OpenVPN process started, waiting for connection");
-                    // Give OpenVPN some time to establish connection
-                    sleep(Duration::from_secs(3)).await;
-
-                    // Check if process is still running
-                    if self.is_child_running() {
-                        info!("Reconnected successfully to {}", server);
-                        let mut state = self.state.write().await;
-                        state.state = VpnState::Connected {
-                            server: server.to_string(),
-                            source: VpnSource::App,
-                        };
-                        drop(state);
-                        self.update_tray().await;
-                        self.send_notification("OpenVPN", &format!("Reconnected to {}", server));
-                        return;
-                    } else {
-                        // Process exited immediately, will retry
-                        warn!("OpenVPN process exited immediately, will retry");
-                        self.child = None;
+                    // Verify connection
+                    if let Some(active_vpn) = nm_get_active_vpn().await {
+                        if active_vpn == connection_name {
+                            info!("Successfully reconnected to {}", connection_name);
+                            {
+                                let mut state = self.state.write().await;
+                                state.state = VpnState::Connected {
+                                    server: connection_name.to_string(),
+                                };
+                            }
+                            self.update_tray().await;
+                            self.show_notification(
+                                "VPN Reconnected",
+                                &format!("Reconnected to {}", connection_name),
+                            );
+                            return;
+                        }
                     }
+
+                    // Verification failed, try again
+                    warn!("Reconnection verification failed, retrying");
+                    attempt += 1;
                 }
                 Err(e) => {
                     error!("Reconnection attempt {} failed: {}", attempt, e);
+                    attempt += 1;
                 }
             }
-
-            attempt += 1;
-        }
-
-        // Max retries exceeded
-        {
-            let mut state = self.state.write().await;
-            state.state = VpnState::Disconnected;
-        }
-        self.update_tray().await;
-        self.send_notification(
-            "OpenVPN Error",
-            "Max reconnection attempts reached. Please connect manually.",
-        );
-    }
-
-    /// Start the OpenVPN process using pkexec.
-    ///
-    /// Performs a pre-flight check to ensure no tun interface exists before starting.
-    async fn start_openvpn(&self, server: &str) -> Result<Child, std::io::Error> {
-        // Pre-flight check: verify no tun interface exists
-        let preflight = Command::new("ip")
-            .args(["link", "show", "type", "tun"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output()
-            .await;
-
-        if let Ok(output) = preflight {
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            if !stdout.trim().is_empty() {
-                warn!(
-                    "tun interface still exists before starting OpenVPN: {}",
-                    stdout.trim().lines().next().unwrap_or_default()
-                );
-                // Don't fail - let OpenVPN try anyway, but log the warning
-            }
-        }
-
-        let config_path = format!("{}/{}", OVPN_CONFIG_DIR, server);
-
-        Command::new("pkexec")
-            .arg("openvpn")
-            .arg("--config")
-            .arg(&config_path)
-            .arg("--auth-user-pass")
-            .arg(AUTH_FILE)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-    }
-
-    /// Kill any running OpenVPN process and wait for full network resource cleanup.
-    ///
-    /// This is necessary because pkexec does not forward signals to its children.
-    /// When we kill the pkexec process, the openvpn process running as root becomes
-    /// orphaned and continues running. This method uses pkexec pkill to directly
-    /// terminate the openvpn process with root privileges.
-    ///
-    /// Note: This will kill ALL openvpn processes on the system, not just ones
-    /// started by this application. This is intentional - this application is
-    /// designed to be the sole manager of OpenVPN connections, and any other
-    /// openvpn processes would conflict with new connections anyway.
-    ///
-    /// This method implements a three-phase termination:
-    /// 1. Send SIGTERM via pkill and poll for process exit
-    /// 2. Send SIGKILL if SIGTERM didn't work within timeout
-    /// 3. Wait for kernel to release network resources (tun interface, sockets)
-    ///
-    /// The third phase is CRITICAL - even after the process PID is gone,
-    /// the kernel needs 500ms-2000ms to clean up the tun0 interface and routes.
-    /// Starting a new OpenVPN before cleanup completes causes "Address in use" errors.
-    async fn kill_openvpn_process(&self) {
-        debug!("Killing any running OpenVPN processes with pkexec pkill");
-        
-        // First, send SIGTERM to gracefully terminate
-        let result = Command::new("pkexec")
-            .arg("pkill")
-            .arg("-x")  // Exact match on process name
-            .arg("openvpn")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await;
-
-        match result {
-            Ok(status) => {
-                if status.success() {
-                    debug!("Sent SIGTERM to OpenVPN process(es)");
-                } else {
-                    // pkill exit codes: 0 = matched, 1 = no match, 2 = syntax error, 3 = fatal
-                    // Exit code 1 (no processes matched) means no process to kill
-                    // But still check for lingering tun interface (could be orphaned from previous crash)
-                    debug!("pkill returned non-zero (exit code {}), likely no openvpn processes running",
-                           status.code().unwrap_or(-1));
-                    let resources_released = self.wait_for_network_resource_release().await;
-                    if resources_released {
-                        debug!("Network resources confirmed released");
-                    } else {
-                        debug!("Network resource cleanup uncertain, proceeding anyway");
-                    }
-                    return;
-                }
-            }
-            Err(e) => {
-                warn!("Failed to execute pkexec pkill: {}", e);
-                // Still check for lingering tun interface
-                let resources_released = self.wait_for_network_resource_release().await;
-                if resources_released {
-                    debug!("Network resources confirmed released");
-                } else {
-                    debug!("Network resource cleanup uncertain, proceeding anyway");
-                }
-                return;
-            }
-        }
-
-        // Poll to verify the process has terminated
-        for attempt in 1..=KILL_POLL_MAX_ATTEMPTS {
-            // Use pkill -0 to check if process exists (signal 0 checks existence without killing)
-            let check_result = Command::new("pkexec")
-                .arg("pkill")
-                .arg("-0")  // Signal 0: check existence only
-                .arg("-x")  // Exact match on process name
-                .arg("openvpn")
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .await;
-
-            match check_result {
-                Ok(status) => {
-                    if !status.success() {
-                        // Exit code 1 means no matching process found - process is dead
-                        debug!("OpenVPN process terminated after {} poll attempts", attempt);
-                        // Wait for kernel to release network resources
-                        let resources_released = self.wait_for_network_resource_release().await;
-                        if !resources_released {
-                            warn!("Proceeding despite uncertain resource cleanup state");
-                        } else {
-                            debug!("Network resources confirmed released, safe to start new connection");
-                        }
-                        return;
-                    }
-                    // Process still exists, continue polling
-                    debug!("OpenVPN process still running (poll attempt {}/{})", 
-                           attempt, KILL_POLL_MAX_ATTEMPTS);
-                }
-                Err(e) => {
-                    warn!("Failed to check OpenVPN process status: {}", e);
-                    // Continue polling in case of transient error
-                }
-            }
-            
-            // Wait before next poll attempt (moved to end of loop to check immediately on first attempt)
-            sleep(Duration::from_millis(KILL_POLL_INTERVAL_MS)).await;
-        }
-
-        // Process still running after timeout, send SIGKILL as last resort
-        warn!("OpenVPN process did not terminate within {} seconds, sending SIGKILL", 
-              KILL_TIMEOUT_SECS);
-        
-        let kill_result = Command::new("pkexec")
-            .arg("pkill")
-            .arg("-9")  // SIGKILL
-            .arg("-x")  // Exact match on process name
-            .arg("openvpn")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await;
-
-        match kill_result {
-            Ok(status) => {
-                if status.success() {
-                    debug!("Sent SIGKILL to OpenVPN process(es)");
-                } else {
-                    debug!("SIGKILL pkill returned non-zero (exit code {})",
-                           status.code().unwrap_or(-1));
-                }
-            }
-            Err(e) => {
-                warn!("Failed to execute SIGKILL pkill: {}", e);
-            }
-        }
-
-        // Brief delay after SIGKILL to ensure cleanup
-        sleep(Duration::from_millis(KILL_POLL_INTERVAL_MS * 2)).await;
-
-        // Wait for kernel to release network resources
-        let resources_released = self.wait_for_network_resource_release().await;
-
-        if !resources_released {
-            warn!("Proceeding despite uncertain resource cleanup state");
-        } else {
-            debug!("Network resources confirmed released, safe to start new connection");
         }
     }
 
-    /// Wait for network resources (tun interface) to be fully released by the kernel.
-    ///
-    /// After OpenVPN terminates, the kernel needs time to:
-    /// - Destroy the tun0 virtual network interface
-    /// - Remove routing table entries pointing to tun0
-    /// - Release bound UDP/TCP sockets
-    /// - Clean up netfilter/iptables rules (if any)
-    ///
-    /// This method polls for tun interface absence using `ip link show type tun`
-    /// to ensure resources are free before allowing a new connection attempt.
-    /// Polls up to [`TUN_POLL_MAX_ATTEMPTS`] times with [`TUN_POLL_INTERVAL_MS`]
-    /// between attempts.
-    ///
-    /// # Returns
-    /// - `true` - tun interface was confirmed absent (resources released successfully)
-    /// - `false` - timeout reached after [`TUN_RELEASE_TIMEOUT_SECS`] seconds
-    ///   (tun interface still present, connection may still work but not guaranteed)
-    async fn wait_for_network_resource_release(&self) -> bool {
-        debug!("Waiting for network resources to be released...");
-
-        for attempt in 1..=TUN_POLL_MAX_ATTEMPTS {
-            // Check if any tun/tap interface exists using `ip link show type tun`
-            // This doesn't require root privileges to read
-            let check_result = Command::new("ip")
-                .args(["link", "show", "type", "tun"])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .output()
-                .await;
-
-            match check_result {
-                Ok(output) => {
-                    let stdout = String::from_utf8_lossy(&output.stdout);
-                    // If output is empty (no lines or just whitespace), no tun interface exists
-                    if stdout.trim().is_empty() {
-                        debug!("tun interface released after {} poll attempts", attempt);
-                        // Add buffer delay for any final kernel cleanup
-                        sleep(Duration::from_millis(POST_KILL_RESOURCE_CLEANUP_MS)).await;
-                        return true;
-                    }
-                    debug!(
-                        "tun interface still present (poll attempt {}/{}): {}",
-                        attempt,
-                        TUN_POLL_MAX_ATTEMPTS,
-                        stdout.trim().lines().next().unwrap_or_default()
-                    );
-                }
-                Err(e) => {
-                    // If `ip` command fails, log warning but continue polling
-                    // Could be transient issue
-                    warn!("Failed to check tun interface status: {}", e);
-                }
-            }
-
-            sleep(Duration::from_millis(TUN_POLL_INTERVAL_MS)).await;
-        }
-
-        // Timeout reached - log warning but don't fail
-        // The new connection might still work if timing is lucky
-        warn!(
-            "tun interface not released within {} seconds, proceeding with caution",
-            TUN_RELEASE_TIMEOUT_SECS
-        );
-
-        // Still add cleanup delay as fallback
-        sleep(Duration::from_millis(POST_KILL_RESOURCE_CLEANUP_MS)).await;
-        false
-    }
-
-    /// Toggle auto-reconnect feature
+    /// Toggle auto-reconnect setting
     async fn toggle_auto_reconnect(&mut self) {
-        let mut state = self.state.write().await;
-        state.auto_reconnect = !state.auto_reconnect;
-        let enabled = state.auto_reconnect;
-        drop(state);
+        let new_value = {
+            let mut state = self.state.write().await;
+            state.auto_reconnect = !state.auto_reconnect;
+            state.auto_reconnect
+        };
+        info!("Auto-reconnect toggled to: {}", new_value);
         self.update_tray().await;
-        self.send_notification(
-            "OpenVPN",
-            if enabled {
+        self.show_notification(
+            "Auto-Reconnect",
+            if new_value {
                 "Auto-reconnect enabled"
             } else {
                 "Auto-reconnect disabled"
@@ -858,165 +467,55 @@ impl VpnActor {
         );
     }
 
-    /// Refresh the list of available servers
-    async fn refresh_servers(&mut self) {
-        debug!("Refreshing server list");
-        let servers = scan_ovpn_files().await;
-        info!("Found {} VPN configuration files", servers.len());
-        let mut state = self.state.write().await;
-        state.servers = servers;
-        drop(state);
-        self.update_tray().await;
-    }
-
-    /// Sync state with NetworkManager
-    ///
-    /// This method queries NetworkManager for active VPN connections and
-    /// reconciles the internal state. NM state takes precedence when:
-    /// - NM shows a VPN connected but internal state is disconnected
-    /// - NM shows no VPN but internal state (external) shows connected
-    async fn sync_nm_state(&mut self) {
-        // Query NM for active VPN connections with timeout
-        let nm_vpn = query_nm_active_vpn().await;
-
-        let (needs_tray_update, state_change) = {
+    /// Refresh the list of available VPN connections
+    async fn refresh_connections(&mut self) {
+        info!("Refreshing VPN connections");
+        let connections = nm_list_vpn_connections().await;
+        {
             let mut state = self.state.write().await;
-
-            match (&state.state.clone(), &nm_vpn) {
-                // Case 1: NM shows VPN connected, but we show disconnected
-                // -> Update to Connected (External)
-                (VpnState::Disconnected, Some((conn_name, server_name))) => {
-                    // Only update if we didn't intentionally disconnect
-                    if !state.intentional_disconnect {
-                        state.state = VpnState::Connected {
-                            server: server_name.clone(),
-                            source: VpnSource::External,
-                        };
-                        state.nm_connection_name = Some(conn_name.clone());
-                        (true, Some(format!("Detected external VPN: {}", server_name)))
-                    } else {
-                        (false, None)
-                    }
-                }
-
-                // Case 2: NM shows no VPN, but we show connected (external)
-                // -> Update to Disconnected
-                (VpnState::Connected { source: VpnSource::External, .. }, None) => {
-                    state.state = VpnState::Disconnected;
-                    state.nm_connection_name = None;
-                    (true, Some("External VPN disconnected".to_string()))
-                }
-
-                // Case 3: NM shows VPN connected, we show connected (app-initiated)
-                // -> App process may have been picked up by NM, keep as App
-                (VpnState::Connected { source: VpnSource::App, .. }, Some(_)) => {
-                    // No action needed, app-initiated connection still valid
-                    (false, None)
-                }
-
-                // Case 4: NM shows different VPN than external state
-                (VpnState::Connected { source: VpnSource::External, server: current }, Some((conn_name, new_server))) => {
-                    if current != new_server {
-                        state.state = VpnState::Connected {
-                            server: new_server.clone(),
-                            source: VpnSource::External,
-                        };
-                        state.nm_connection_name = Some(conn_name.clone());
-                        (true, Some(format!("External VPN changed to: {}", new_server)))
-                    } else {
-                        (false, None)
-                    }
-                }
-
-                // Case 5: NM shows VPN during connecting/retrying state
-                // -> Trust the internal state as we're actively managing it
-                (VpnState::Connecting(_) | VpnState::Retrying { .. }, _) => {
-                    // No action during transitional states
-                    (false, None)
-                }
-
-                // Case 6: NM shows no VPN, app shows connected (app-initiated)
-                // -> The process exit handler will deal with this
-                (VpnState::Connected { source: VpnSource::App, .. }, None) => {
-                    // Let the process monitor handle this
-                    (false, None)
-                }
-
-                // Default: No state change needed
-                _ => (false, None),
-            }
-        }; // state lock is released here
-
-        if let Some(change) = state_change {
-            info!("NM sync: {}", change);
+            state.connections = connections;
         }
-
-        if needs_tray_update {
-            self.update_tray().await;
-        }
+        self.update_tray().await;
     }
 
     /// Update the tray icon
     async fn update_tray(&self) {
-        let handle = self.tray_handle.lock().await;
-        if let Some(ref h) = *handle {
-            if h.update(|_| {}).await.is_none() {
-                debug!("Tray update returned None (service may have shut down)");
-            }
+        if let Some(handle) = self.tray_handle.lock().await.as_ref() {
+            handle.update(|_tray: &mut VpnTray| {});
         }
     }
 
-    /// Send a desktop notification
-    fn send_notification(&self, summary: &str, body: &str) {
+    /// Show a desktop notification
+    fn show_notification(&self, title: &str, body: &str) {
         let _ = Notification::new()
-            .summary(summary)
+            .summary(title)
             .body(body)
-            .icon("network-vpn")
-            .timeout(3000)
+            .timeout(5000)
             .show();
     }
 }
 
-/// Scan for .ovpn files in the config directory
-async fn scan_ovpn_files() -> Vec<String> {
-    let mut servers = Vec::new();
-    let path = PathBuf::from(OVPN_CONFIG_DIR);
+//
+// NetworkManager Interface Functions
+//
 
-    if let Ok(mut entries) = tokio::fs::read_dir(&path).await {
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let file_name = entry.file_name().to_string_lossy().to_string();
-            if file_name.ends_with(".ovpn") {
-                servers.push(file_name);
-            }
-        }
-    }
+/// Get the active VPN connection name from NetworkManager
+async fn nm_get_active_vpn() -> Option<String> {
+    debug!("Querying active VPN from NetworkManager");
 
-    servers.sort();
-    servers
-}
-
-/// Query NetworkManager for active VPN connections
-///
-/// Returns Some((connection_name, server_display_name)) if a VPN is active,
-/// None otherwise.
-///
-/// Uses `nmcli -t -f NAME,TYPE,STATE con show --active` to find active VPNs.
-/// Note: nmcli output format is "NAME:TYPE:STATE" but connection names can
-/// contain colons, so we parse from the end to get TYPE and STATE reliably.
-///
-/// This function has a timeout to prevent blocking on slow nmcli responses.
-async fn query_nm_active_vpn() -> Option<(String, String)> {
-    // Execute nmcli with timeout to prevent blocking
-    let nmcli_future = Command::new("nmcli")
-        .args(["-t", "-f", "NAME,TYPE,STATE", "con", "show", "--active"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output();
-
-    let output = match timeout(Duration::from_secs(NMCLI_TIMEOUT_SECS), nmcli_future).await {
+    let output = match timeout(
+        Duration::from_secs(NMCLI_TIMEOUT_SECS),
+        Command::new("nmcli")
+            .args(["-t", "-f", "NAME,TYPE,STATE", "con", "show", "--active"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await
+    {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => {
-            warn!("nmcli execution failed: {}", e);
+            warn!("Failed to execute nmcli: {}", e);
             return None;
         }
         Err(_) => {
@@ -1031,208 +530,283 @@ async fn query_nm_active_vpn() -> Option<(String, String)> {
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-
-    // Parse output: each line is "NAME:TYPE:STATE"
-    // Connection names can contain colons, so we parse from the right
-    // to reliably get TYPE and STATE, then the rest is the NAME
     for line in stdout.lines() {
-        // Split into at most 3 parts from the right
-        // Format: NAME:TYPE:STATE where NAME may contain colons
-        if let Some(last_colon) = line.rfind(':') {
-            let state = &line[last_colon + 1..];
-            let rest = &line[..last_colon];
+        // Split on colon, but only take the last 2 fields (TYPE and STATE)
+        // This handles connection names that contain colons
+        let parts: Vec<&str> = line.rsplitn(3, ':').collect();
+        if parts.len() >= 3 {
+            let state = parts[0];
+            let conn_type = parts[1];
+            let name = parts[2];
             
-            if let Some(second_last_colon) = rest.rfind(':') {
-                let conn_type = &rest[second_last_colon + 1..];
-                let name = &rest[..second_last_colon];
-
-                if conn_type == "vpn" && state == "activated" {
-                    debug!("NM reports active VPN: {}", name);
-                    // Use connection name as both the connection identifier and display name
-                    return Some((name.to_string(), name.to_string()));
-                }
+            if conn_type == "vpn" && state == "activated" {
+                debug!("Found active VPN: {}", name);
+                return Some(name.to_string());
             }
         }
     }
 
+    debug!("No active VPN found");
     None
 }
 
-/// Clean filename for display (e.g., us8399.nordvpn.com.udp.ovpn -> us8399)
-fn clean_server_name(filename: &str) -> String {
-    // Remove .ovpn extension first
-    let name = filename.trim_end_matches(".ovpn");
+/// List all VPN connections configured in NetworkManager
+async fn nm_list_vpn_connections() -> Vec<String> {
+    debug!("Listing VPN connections from NetworkManager");
 
-    // Try to extract just the server identifier (before first dot)
-    if let Some(caps) = SERVER_NAME_REGEX.captures(name) {
-        return caps.get(1).map(|m| m.as_str().to_string()).unwrap_or_else(|| name.to_string());
+    let output = match timeout(
+        Duration::from_secs(NMCLI_TIMEOUT_SECS),
+        Command::new("nmcli")
+            .args(["-t", "-f", "NAME,TYPE", "con", "show"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await
+    {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            warn!("Failed to execute nmcli: {}", e);
+            return Vec::new();
+        }
+        Err(_) => {
+            warn!("nmcli timed out after {} seconds", NMCLI_TIMEOUT_SECS);
+            return Vec::new();
+        }
+    };
+
+    if !output.status.success() {
+        warn!("nmcli returned non-zero exit status");
+        return Vec::new();
     }
 
-    // Fallback: return name without extension
-    name.to_string()
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut connections = Vec::new();
+    for line in stdout.lines() {
+        // Split on colon from the right, only split on last colon (TYPE field)
+        // This handles connection names that contain colons
+        let parts: Vec<&str> = line.rsplitn(2, ':').collect();
+        if parts.len() >= 2 {
+            let conn_type = parts[0];
+            let name = parts[1];
+            
+            if conn_type == "vpn" {
+                connections.push(name.to_string());
+            }
+        }
+    }
+
+    info!("Found {} VPN connection(s)", connections.len());
+    connections
 }
 
-/// System tray implementation
+/// Connect to a VPN via NetworkManager
+async fn nm_connect(connection_name: &str) -> Result<(), String> {
+    info!("Activating VPN connection: {}", connection_name);
+
+    let output = match timeout(
+        Duration::from_secs(NMCLI_TIMEOUT_SECS),
+        Command::new("nmcli")
+            .args(["con", "up", connection_name])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await
+    {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            let msg = format!("Failed to execute nmcli: {}", e);
+            error!("{}", msg);
+            return Err(msg);
+        }
+        Err(_) => {
+            let msg = format!("nmcli timed out after {} seconds", NMCLI_TIMEOUT_SECS);
+            error!("{}", msg);
+            return Err(msg);
+        }
+    };
+
+    if output.status.success() {
+        info!("VPN activation successful");
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let msg = format!("nmcli failed: {}", stderr.trim());
+        error!("{}", msg);
+        Err(msg)
+    }
+}
+
+/// Disconnect a VPN via NetworkManager
+async fn nm_disconnect(connection_name: &str) -> Result<(), String> {
+    info!("Deactivating VPN connection: {}", connection_name);
+
+    let output = match timeout(
+        Duration::from_secs(NMCLI_TIMEOUT_SECS),
+        Command::new("nmcli")
+            .args(["con", "down", connection_name])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await
+    {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            let msg = format!("Failed to execute nmcli: {}", e);
+            error!("{}", msg);
+            return Err(msg);
+        }
+        Err(_) => {
+            let msg = format!("nmcli timed out after {} seconds", NMCLI_TIMEOUT_SECS);
+            error!("{}", msg);
+            return Err(msg);
+        }
+    };
+
+    if output.status.success() {
+        info!("VPN deactivation successful");
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let msg = format!("nmcli failed: {}", stderr.trim());
+        error!("{}", msg);
+        Err(msg)
+    }
+}
+
+//
+// System Tray UI
+//
+
+/// System tray interface
 pub struct VpnTray {
-    /// Shared state with the VPN actor
-    state: Arc<RwLock<SharedState>>,
-    /// Channel to send commands to the VPN actor
+    /// Cached state for synchronous tray methods
+    cached_state: Arc<std::sync::RwLock<SharedState>>,
+    /// Command sender to the supervisor
     tx: mpsc::Sender<VpnCommand>,
 }
 
 impl VpnTray {
     /// Create a new tray instance
     pub fn new(state: Arc<RwLock<SharedState>>, tx: mpsc::Sender<VpnCommand>) -> Self {
-        Self { state, tx }
+        // Create initial cached state
+        let cached_state = Arc::new(std::sync::RwLock::new(SharedState::default()));
+        
+        // Spawn a task to keep cached state synchronized
+        let state_clone = state.clone();
+        let cached_clone = cached_state.clone();
+        tokio::spawn(async move {
+            loop {
+                {
+                    let current = state_clone.read().await;
+                    let mut cached = cached_clone.write().unwrap();
+                    *cached = current.clone();
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        });
+        
+        Self {
+            cached_state,
+            tx,
+        }
     }
 
-    /// Get the current state synchronously (for ksni callbacks)
-    fn get_state_blocking(&self) -> SharedState {
-        // Use try_read to avoid blocking; return default if lock unavailable
-        self.state
-            .try_read()
-            .map(|s| SharedState {
-                state: s.state.clone(),
-                auto_reconnect: s.auto_reconnect,
-                servers: s.servers.clone(),
-                intentional_disconnect: s.intentional_disconnect,
-                nm_connection_name: s.nm_connection_name.clone(),
-            })
-            .unwrap_or_default()
+    /// Get the status text for the current state
+    fn get_status_text(state: &VpnState) -> String {
+        match state {
+            VpnState::Disconnected => "Disconnected".to_string(),
+            VpnState::Connecting { server } => format!("Connecting to {}...", server),
+            VpnState::Connected { server } => format!("Connected: {}", server),
+            VpnState::Reconnecting {
+                server,
+                attempt,
+                max_attempts,
+            } => format!("Reconnecting {}/{}: {}", attempt, max_attempts, server),
+            VpnState::Failed { server, reason } => format!("Failed ({}): {}", server, reason),
+        }
+    }
+
+    /// Get the icon name for the current state
+    fn get_icon_name(state: &VpnState) -> &'static str {
+        match state {
+            VpnState::Disconnected | VpnState::Failed { .. } => "network-vpn-disconnected",
+            VpnState::Connecting { .. } | VpnState::Reconnecting { .. } => {
+                "network-vpn-acquiring"
+            }
+            VpnState::Connected { .. } => "network-vpn",
+        }
     }
 }
 
 impl Tray for VpnTray {
-    /// Enable menu popup on left-click (in addition to right-click)
-    const MENU_ON_ACTIVATE: bool = true;
-
     fn id(&self) -> String {
         "openvpn-tray".to_string()
     }
 
-    fn title(&self) -> String {
-        "OpenVPN Manager".to_string()
-    }
-
     fn icon_name(&self) -> String {
-        let state = self.get_state_blocking();
-        match state.state {
-            VpnState::Connected { .. } => "network-vpn".to_string(),
-            VpnState::Connecting(_) | VpnState::Retrying { .. } => "network-vpn-acquiring".to_string(),
-            VpnState::Disconnected => "network-vpn-disconnected".to_string(),
-        }
+        let state = self.cached_state.read().unwrap();
+        Self::get_icon_name(&state.state).to_string()
     }
 
-    fn icon_pixmap(&self) -> Vec<Icon> {
-        let state = self.get_state_blocking();
-        let color = match state.state {
-            VpnState::Connected { .. } => (0, 255, 0, 255),      // Green
-            VpnState::Connecting(_) | VpnState::Retrying { .. } => (255, 200, 0, 255), // Yellow/Orange
-            VpnState::Disconnected => (255, 0, 0, 255),      // Red
-        };
-
-        // Create a simple 22x22 colored icon
-        let size = 22;
-        let mut argb = Vec::with_capacity((size * size * 4) as usize);
-        for _ in 0..(size * size) {
-            argb.push(color.3); // Alpha
-            argb.push(color.0); // Red
-            argb.push(color.1); // Green
-            argb.push(color.2); // Blue
-        }
-
-        vec![Icon {
-            width: size,
-            height: size,
-            data: argb,
-        }]
-    }
-
-    fn tool_tip(&self) -> ksni::ToolTip {
-        let state = self.get_state_blocking();
-        let description = match &state.state {
-            VpnState::Connected { server, source } => {
-                let source_indicator = if *source == VpnSource::External { " (NM)" } else { "" };
-                format!("Connected to {}{}", clean_server_name(server), source_indicator)
-            }
-            VpnState::Connecting(server) => format!("Connecting to {}...", clean_server_name(server)),
-            VpnState::Retrying { server, attempt } => {
-                format!("Reconnecting to {} (attempt {})", clean_server_name(server), attempt)
-            }
-            VpnState::Disconnected => "Disconnected".to_string(),
-        };
-
-        ksni::ToolTip {
-            icon_name: self.icon_name(),
-            icon_pixmap: Vec::new(),
-            title: "OpenVPN Manager".to_string(),
-            description,
-        }
+    fn title(&self) -> String {
+        let state = self.cached_state.read().unwrap();
+        Self::get_status_text(&state.state)
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        let state = self.get_state_blocking();
-        let mut items: Vec<MenuItem<Self>> = Vec::new();
+        let state = self.cached_state.read().unwrap().clone();
+        let mut items = Vec::new();
 
-        // Status header
-        let status_text = match &state.state {
-            VpnState::Connected { server, source } => {
-                let source_indicator = if *source == VpnSource::External { " (NM)" } else { "" };
-                format!("● Connected: {}{}", clean_server_name(server), source_indicator)
-            }
-            VpnState::Connecting(server) => format!("◐ Connecting: {}", clean_server_name(server)),
-            VpnState::Retrying { server, attempt } => {
-                format!("◐ Retrying: {} ({}/{})", clean_server_name(server), attempt, MAX_RETRY_ATTEMPTS)
-            }
-            VpnState::Disconnected => "○ Disconnected".to_string(),
-        };
-
+        // Status label
         items.push(MenuItem::Standard(StandardItem {
-            label: status_text,
+            label: Self::get_status_text(&state.state),
             enabled: false,
             ..Default::default()
         }));
 
         items.push(MenuItem::Separator);
 
-        // Server list
-        let current_server = state.state.server_name().map(|s| s.to_string());
-        let servers = state.servers.clone();
-
-        for server in servers {
-            let display_name = clean_server_name(&server);
-            let is_current = current_server.as_deref() == Some(&server);
-            let server_clone = server.clone();
-            let tx = self.tx.clone();
-
+        // VPN connections
+        if state.connections.is_empty() {
             items.push(MenuItem::Standard(StandardItem {
-                label: if is_current {
-                    format!("✓ {}", display_name)
-                } else {
-                    format!("  {}", display_name)
-                },
-                enabled: !is_current || matches!(state.state, VpnState::Disconnected),
-                activate: Box::new(move |_| {
-                    let tx = tx.clone();
-                    let server = server_clone.clone();
-                    tokio::spawn(async move {
-                        let _ = tx.send(VpnCommand::Connect(server)).await;
-                    });
-                }),
+                label: "No VPN connections found".to_string(),
+                enabled: false,
                 ..Default::default()
             }));
+        } else {
+            for connection in &state.connections {
+                let conn_clone: String = connection.clone();
+                let is_current = state.state.server_name() == Some(connection);
+                items.push(MenuItem::Standard(StandardItem {
+                    label: if is_current {
+                        format!("● {}", connection)
+                    } else {
+                        connection.clone()
+                    },
+                    activate: Box::new(move |tray: &mut Self| {
+                        let tx = tray.tx.clone();
+                        let conn = conn_clone.clone();
+                        tokio::spawn(async move {
+                            let _ = tx.send(VpnCommand::Connect(conn)).await;
+                        });
+                    }),
+                    ..Default::default()
+                }));
+            }
         }
 
         items.push(MenuItem::Separator);
 
         // Disconnect button
-        let tx_disconnect = self.tx.clone();
-        let is_connected = !matches!(state.state, VpnState::Disconnected);
+        let can_disconnect = state.state.server_name().is_some();
         items.push(MenuItem::Standard(StandardItem {
             label: "Disconnect".to_string(),
-            enabled: is_connected,
-            activate: Box::new(move |_| {
-                let tx = tx_disconnect.clone();
+            enabled: can_disconnect,
+            activate: Box::new(|tray: &mut Self| {
+                let tx = tray.tx.clone();
                 tokio::spawn(async move {
                     let _ = tx.send(VpnCommand::Disconnect).await;
                 });
@@ -1243,13 +817,14 @@ impl Tray for VpnTray {
         items.push(MenuItem::Separator);
 
         // Auto-reconnect toggle
-        let tx_auto = self.tx.clone();
-        items.push(MenuItem::Checkmark(ksni::menu::CheckmarkItem {
-            label: "Auto-Reconnect".to_string(),
-            enabled: true,
-            checked: state.auto_reconnect,
-            activate: Box::new(move |_| {
-                let tx = tx_auto.clone();
+        items.push(MenuItem::Standard(StandardItem {
+            label: if state.auto_reconnect {
+                "✓ Auto-Reconnect".to_string()
+            } else {
+                "Auto-Reconnect".to_string()
+            },
+            activate: Box::new(|tray: &mut Self| {
+                let tx = tray.tx.clone();
                 tokio::spawn(async move {
                     let _ = tx.send(VpnCommand::ToggleAutoReconnect).await;
                 });
@@ -1257,15 +832,13 @@ impl Tray for VpnTray {
             ..Default::default()
         }));
 
-        // Refresh servers
-        let tx_refresh = self.tx.clone();
+        // Refresh connections
         items.push(MenuItem::Standard(StandardItem {
-            label: "Refresh Servers".to_string(),
-            enabled: true,
-            activate: Box::new(move |_| {
-                let tx = tx_refresh.clone();
+            label: "Refresh Connections".to_string(),
+            activate: Box::new(|tray: &mut Self| {
+                let tx = tray.tx.clone();
                 tokio::spawn(async move {
-                    let _ = tx.send(VpnCommand::RefreshServers).await;
+                    let _ = tx.send(VpnCommand::RefreshConnections).await;
                 });
             }),
             ..Default::default()
@@ -1273,10 +846,10 @@ impl Tray for VpnTray {
 
         items.push(MenuItem::Separator);
 
-        // Quit button
+        // Quit
         items.push(MenuItem::Standard(StandardItem {
             label: "Quit".to_string(),
-            enabled: true,
+            icon_name: "application-exit".to_string(),
             activate: Box::new(|_| {
                 std::process::exit(0);
             }),
@@ -1287,54 +860,55 @@ impl Tray for VpnTray {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize logging from RUST_LOG environment variable
-    // Default to "info" level if not set
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+//
+// Main
+//
 
-    info!("OpenVPN Tray starting");
-    
-    // Shared state between tray and actor
+#[tokio::main]
+async fn main() {
+    // Initialize logging
+    env_logger::init();
+    info!("Starting NetworkManager VPN Supervisor");
+
+    // Create shared state
     let state = Arc::new(RwLock::new(SharedState::default()));
 
-    // Command channel from tray to actor
-    let (tx, rx) = mpsc::channel::<VpnCommand>(32);
+    // Create command channel
+    let (tx, rx) = mpsc::channel(32);
 
-    // Tray handle holder
-    let tray_handle: Arc<Mutex<Option<ksni::Handle<VpnTray>>>> = Arc::new(Mutex::new(None));
+    // Create tray handle container
+    let tray_handle = Arc::new(tokio::sync::Mutex::new(None));
+
+    // Create and spawn the supervisor
+    let supervisor = VpnSupervisor::new(state.clone(), rx, tray_handle.clone());
+    tokio::spawn(supervisor.run());
 
     // Create the tray
-    let tray = VpnTray::new(Arc::clone(&state), tx);
+    let tray_service = VpnTray::new(state.clone(), tx);
 
-    // Spawn the tray service (ksni 0.3 API)
-    let handle = tray.spawn().await?;
-    
-    // Store the handle
-    {
-        let mut h = tray_handle.lock().await;
-        *h = Some(handle);
-    }
-
-    // Create and run the VPN actor
-    let actor = VpnActor::new(Arc::clone(&state), rx, Arc::clone(&tray_handle));
-
-    // Handle SIGTERM/SIGINT for graceful shutdown
-    let ctrl_c = tokio::signal::ctrl_c();
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-
-    tokio::select! {
-        _ = actor.run() => {}
-        _ = ctrl_c => {
-            info!("Received SIGINT, shutting down...");
+    // Run the tray (this blocks in a separate thread)
+    info!("Starting system tray");
+    let tray_handle_clone = tray_handle.clone();
+    std::thread::spawn(move || {
+        use ksni::blocking::TrayMethods;
+        match tray_service.spawn() {
+            Ok(handle) => {
+                // Store handle in the async context
+                tokio::runtime::Handle::current().block_on(async {
+                    *tray_handle_clone.lock().await = Some(handle);
+                });
+            }
+            Err(e) => {
+                error!("Failed to spawn tray: {}", e);
+                std::process::exit(1);
+            }
         }
-        _ = sigterm.recv() => {
-            info!("Received SIGTERM, shutting down...");
-        }
-    }
+    });
 
-    info!("OpenVPN Tray shutting down");
-    Ok(())
+    // Keep the main task alive
+    loop {
+        sleep(Duration::from_secs(60)).await;
+    }
 }
 
 #[cfg(test)]
@@ -1342,72 +916,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_clean_server_name() {
-        assert_eq!(clean_server_name("us8399.nordvpn.com.udp.ovpn"), "us8399");
-        assert_eq!(clean_server_name("uk1234.nordvpn.com.tcp.ovpn"), "uk1234");
-        assert_eq!(clean_server_name("de5678.ovpn"), "de5678");
-        assert_eq!(clean_server_name("custom-server.ovpn"), "custom-server");
-        assert_eq!(clean_server_name("simple.ovpn"), "simple");
-    }
-
-    #[test]
     fn test_vpn_state_server_name() {
-        assert_eq!(VpnState::Disconnected.server_name(), None);
-        assert_eq!(
-            VpnState::Connecting("test.ovpn".to_string()).server_name(),
-            Some("test.ovpn")
-        );
-        assert_eq!(
-            VpnState::Connected {
-                server: "test.ovpn".to_string(),
-                source: VpnSource::App
-            }
-            .server_name(),
-            Some("test.ovpn")
-        );
-        assert_eq!(
-            VpnState::Connected {
-                server: "external.ovpn".to_string(),
-                source: VpnSource::External
-            }
-            .server_name(),
-            Some("external.ovpn")
-        );
-        assert_eq!(
-            VpnState::Retrying {
-                server: "test.ovpn".to_string(),
-                attempt: 1
-            }
-            .server_name(),
-            Some("test.ovpn")
-        );
-    }
+        let state = VpnState::Connected {
+            server: "test-server".to_string(),
+        };
+        assert_eq!(state.server_name(), Some("test-server"));
 
-    #[test]
-    fn test_vpn_state_is_external() {
-        assert!(!VpnState::Disconnected.is_external());
-        assert!(!VpnState::Connecting("test.ovpn".to_string()).is_external());
-        assert!(
-            !VpnState::Connected {
-                server: "test.ovpn".to_string(),
-                source: VpnSource::App
-            }
-            .is_external()
-        );
-        assert!(
-            VpnState::Connected {
-                server: "external.ovpn".to_string(),
-                source: VpnSource::External
-            }
-            .is_external()
-        );
-        assert!(
-            !VpnState::Retrying {
-                server: "test.ovpn".to_string(),
-                attempt: 1
-            }
-            .is_external()
-        );
+        let state = VpnState::Disconnected;
+        assert_eq!(state.server_name(), None);
     }
 
     #[test]
@@ -1415,15 +931,6 @@ mod tests {
         let state = SharedState::default();
         assert_eq!(state.state, VpnState::Disconnected);
         assert!(state.auto_reconnect);
-        assert!(state.servers.is_empty());
-        assert!(!state.intentional_disconnect);
-        assert!(state.nm_connection_name.is_none());
-    }
-
-    #[test]
-    fn test_vpn_source_equality() {
-        assert_eq!(VpnSource::App, VpnSource::App);
-        assert_eq!(VpnSource::External, VpnSource::External);
-        assert_ne!(VpnSource::App, VpnSource::External);
+        assert!(state.connections.is_empty());
     }
 }
