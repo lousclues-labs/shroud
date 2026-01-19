@@ -5,6 +5,7 @@ A production-ready system tray application for managing OpenVPN connections with
 ## Features
 
 - **StatusNotifierItem (SNI) Tray Support**: Native integration with KDE Plasma using `ksni`
+- **Left-click Menu**: Opens menu on left-click (native KDE behavior)
 - **NetworkManager Integration**: Detects and manages VPNs started externally via NetworkManager
 - **Dynamic Icon Colors**:
   - 🟢 Green: Connected
@@ -14,6 +15,7 @@ A production-ready system tray application for managing OpenVPN connections with
 - **Intent Tracking**: Distinguishes between user-initiated disconnects and unexpected connection drops
 - **Server Switching**: Seamlessly switch between VPN servers
 - **Desktop Notifications**: Receive notifications for connection state changes
+- **Structured Logging**: Full logging support with `RUST_LOG` environment variable
 
 ## Requirements
 
@@ -29,7 +31,46 @@ sudo pacman -S openvpn polkit rust networkmanager
 sudo apt install openvpn policykit-1 libdbus-1-dev pkg-config network-manager
 ```
 
-## Setup
+## Quick Start with setup.sh (Recommended)
+
+The easiest way to install and manage the application on Arch Linux is using the provided setup script:
+
+```bash
+# Clone the repository
+git clone https://github.com/loujr/archtools.git
+cd archtools
+
+# Run the setup script
+./setup.sh
+```
+
+The setup script is **idempotent** and will:
+
+1. Verify all dependencies (rust/cargo, openvpn, nmcli, polkit)
+2. Pull latest changes from git (use `--skip-pull` to skip)
+3. Build the release binary
+4. Install binary to `~/.local/bin/openvpn-tray`
+5. Install systemd user service to `~/.config/systemd/user/openvpn-tray.service`
+6. Reload systemd and enable/restart the service
+
+### Updating After Git Pull
+
+Simply run the setup script again to rebuild and restart the service:
+
+```bash
+git pull
+./setup.sh
+```
+
+Or to skip the git pull (if you've already pulled):
+
+```bash
+./setup.sh --skip-pull
+```
+
+## Manual Setup
+
+If you prefer manual installation:
 
 1. Place your `.ovpn` configuration files in `/etc/openvpn/`
 
@@ -46,7 +87,7 @@ sudo apt install openvpn policykit-1 libdbus-1-dev pkg-config network-manager
    cargo build --release
    ```
 
-4. Install the binary (optional):
+4. Install the binary:
    ```bash
    mkdir -p ~/.local/bin
    cp target/release/openvpn-tray ~/.local/bin/
@@ -90,9 +131,29 @@ To have the tray app start automatically with your graphical session:
    journalctl --user -u openvpn-tray.service -f
    ```
 
+### Service File Location
+
+- Binary: `~/.local/bin/openvpn-tray`
+- Service file: `~/.config/systemd/user/openvpn-tray.service`
+
+### Logging
+
+The service defaults to `RUST_LOG=info`. For debug logging:
+
+```bash
+# Stop the service first
+systemctl --user stop openvpn-tray.service
+
+# Run with debug logging
+RUST_LOG=debug ~/.local/bin/openvpn-tray
+```
+
+Or edit the service file to change the `Environment=RUST_LOG=info` line.
+
 ## Usage
 
 - **Left-click** on the tray icon to open the menu
+- **Right-click** also opens the menu (standard behavior)
 - Select a server from the list to connect
 - Click **Disconnect** to manually disconnect
 - Toggle **Auto-Reconnect** to enable/disable automatic reconnection
@@ -100,12 +161,12 @@ To have the tray app start automatically with your graphical session:
 
 ## NetworkManager Integration
 
-The tray app now integrates with NetworkManager to provide a unified VPN status view:
+The tray app integrates with NetworkManager to provide a unified VPN status view:
 
 - **Detects external VPNs**: If a VPN is connected via NetworkManager (e.g., using `nmcli` or KDE's network applet), the tray will show "Connected (NM)"
 - **Disconnect NM VPNs**: The "Disconnect" button works for both app-initiated and NM-initiated connections
 - **No auto-reconnect for external VPNs**: Auto-reconnect only triggers for connections started by this app
-- **State polling**: NetworkManager state is polled every 5 seconds to detect changes
+- **State polling**: NetworkManager state is polled every 5 seconds to detect changes (with timeout to prevent freezes)
 
 ### How it works
 
@@ -131,7 +192,7 @@ The application uses an actor-based architecture to ensure the UI never freezes 
 - **VpnActor**: Handles process supervision and connection management in an async context
 - **VpnTray**: Manages the system tray UI using the `ksni` crate
 - **Shared State**: Thread-safe state management using `tokio::sync::RwLock`
-- **NM Sync**: Periodic polling of NetworkManager state for external VPN detection
+- **NM Sync**: Periodic polling of NetworkManager state for external VPN detection (with 10s timeout)
 
 ### State Reconciliation
 
@@ -168,15 +229,24 @@ The app maintains internal state that is reconciled with NetworkManager:
    - Click "Disconnect" in the menu
    - Expected: Tray shows "Disconnected", no reconnection attempts
 
+5. **Left-click opens menu**
+   - Left-click on the tray icon
+   - Expected: Menu opens (same as right-click)
+
+6. **NM state change detection**
+   - Connect via NM: `nmcli con up <vpn>`
+   - Expected: Tray updates to "Connected (NM)" within 5 seconds
+
 ## Technical Stack
 
 - **Rust 2021 Edition** (Rust 1.92.0 or newer recommended)
-- **ksni**: Native KDE StatusNotifierItem support
+- **ksni 0.3**: Native KDE StatusNotifierItem support with left-click menu
 - **tokio**: Async runtime with process, fs, time, and signal features
 - **notify-rust**: Desktop notifications via D-Bus
 - **nix**: Unix signal handling (SIGTERM for graceful process termination)
 - **regex**: Filename parsing for clean server name display
 - **nmcli**: NetworkManager CLI for VPN state detection
+- **env_logger**: Structured logging with RUST_LOG support
 
 ## License
 

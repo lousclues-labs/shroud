@@ -8,7 +8,10 @@ Requires=graphical-session.target
 Type=simple
 ExecStart=%h/.local/bin/openvpn-tray
 Restart=on-failure
-RestartSec=5
+RestartSec=2
+
+# Default log level (override with RUST_LOG env var before starting service)
+Environment=RUST_LOG=info
 
 # Pass through session environment for display and D-Bus access
 # This allows the service to inherit DISPLAY, WAYLAND_DISPLAY, etc.
