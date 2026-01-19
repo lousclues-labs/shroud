@@ -18,7 +18,7 @@
 //! cargo build --release
 //! ```
 
-use ksni::{menu::StandardItem, menu::CheckmarkItem, MenuItem, Tray};
+use ksni::{menu::CheckmarkItem, menu::StandardItem, MenuItem, Tray};
 use log::{debug, error, info, warn};
 use notify_rust::Notification;
 use std::process::Stdio;
@@ -40,6 +40,9 @@ const CONNECTION_VERIFY_DELAY_SECS: u64 = 5;
 /// Maximum number of reconnection attempts before giving up
 const MAX_RECONNECT_ATTEMPTS: u32 = 10;
 
+/// Maximum number of connection attempts during handle_connect
+const MAX_CONNECT_ATTEMPTS: u32 = 3;
+
 /// Base delay for exponential backoff in seconds
 const RECONNECT_BASE_DELAY_SECS: u64 = 2;
 
@@ -48,6 +51,15 @@ const RECONNECT_MAX_DELAY_SECS: u64 = 30;
 
 /// Grace period after intentional disconnect to prevent false drop detection
 const POST_DISCONNECT_GRACE_SECS: u64 = 5;
+
+/// Maximum attempts to verify disconnect completion
+const DISCONNECT_VERIFY_MAX_ATTEMPTS: u32 = 10;
+
+/// Interval between disconnect verification attempts in milliseconds
+const DISCONNECT_VERIFY_INTERVAL_MS: u64 = 500;
+
+/// Interval for syncing cached state to tray in milliseconds
+const CACHE_SYNC_INTERVAL_MS: u64 = 50;
 
 /// VPN connection state
 #[derive(Debug, Clone, PartialEq)]
@@ -236,8 +248,8 @@ impl VpnSupervisor {
             }
 
             // Wait and verify disconnect completed
-            for _ in 0..10 {
-                sleep(Duration::from_millis(500)).await;
+            for _ in 0..DISCONNECT_VERIFY_MAX_ATTEMPTS {
+                sleep(Duration::from_millis(DISCONNECT_VERIFY_INTERVAL_MS)).await;
                 if nm_get_active_vpn().await.is_none() {
                     debug!("Previous VPN disconnected successfully");
                     break;
@@ -260,7 +272,6 @@ impl VpnSupervisor {
 
         // Step 5: Attempt connection with retries
         let mut attempts = 0;
-        const MAX_CONNECT_ATTEMPTS: u32 = 3;
 
         while attempts < MAX_CONNECT_ATTEMPTS {
             attempts += 1;
@@ -867,7 +878,7 @@ impl VpnTray {
                     let mut cached = cached_clone.write().unwrap();
                     *cached = current.clone();
                 }
-                sleep(Duration::from_millis(50)).await;
+                sleep(Duration::from_millis(CACHE_SYNC_INTERVAL_MS)).await;
             }
         });
         
