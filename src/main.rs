@@ -247,13 +247,37 @@ impl VpnSupervisor {
                 warn!("Disconnect failed (continuing anyway): {}", e);
             }
 
-            // Wait and verify disconnect completed
-            for _ in 0..DISCONNECT_VERIFY_MAX_ATTEMPTS {
+            // Wait and verify the SPECIFIC connection is disconnected
+            let mut disconnected = false;
+            for attempt in 0..DISCONNECT_VERIFY_MAX_ATTEMPTS {
                 sleep(Duration::from_millis(DISCONNECT_VERIFY_INTERVAL_MS)).await;
-                if nm_get_active_vpn().await.is_none() {
-                    debug!("Previous VPN disconnected successfully");
+                
+                // Check if the specific connection we're trying to disconnect is gone
+                if let Some(active) = nm_get_active_vpn().await {
+                    if active != *current {
+                        debug!("Previous VPN '{}' disconnected, found different active VPN: {}", current, active);
+                        disconnected = true;
+                        break;
+                    }
+                } else {
+                    debug!("Previous VPN '{}' disconnected successfully (no active VPN)", current);
+                    disconnected = true;
                     break;
                 }
+                
+                if attempt == DISCONNECT_VERIFY_MAX_ATTEMPTS - 1 {
+                    warn!("Disconnect verification timed out for '{}'", current);
+                }
+            }
+
+            // Clean up any orphan OpenVPN processes before connecting
+            // This ensures a clean state even if disconnect verification succeeded
+            if !disconnected {
+                warn!("Specific VPN '{}' may not have disconnected properly, cleaning up orphan processes", current);
+                kill_orphan_openvpn_processes().await;
+            } else {
+                // Always clean up to ensure no stale processes remain
+                kill_orphan_openvpn_processes().await;
             }
 
             // Extra settle time for NetworkManager
@@ -696,7 +720,10 @@ async fn nm_get_active_vpn() -> Option<String> {
         return None;
     }
 
+    // Collect all active VPNs to detect issues with multiple connections
+    let mut active_vpns = Vec::new();
     let stdout = String::from_utf8_lossy(&output.stdout);
+    
     for line in stdout.lines() {
         // Split on colon, but only take the last 2 fields (TYPE and STATE)
         // This handles connection names that contain colons
@@ -707,14 +734,29 @@ async fn nm_get_active_vpn() -> Option<String> {
             let name = parts[2];
             
             if conn_type == "vpn" && state == "activated" {
-                debug!("Found active VPN: {}", name);
-                return Some(name.to_string());
+                active_vpns.push(name.to_string());
             }
         }
     }
 
-    debug!("No active VPN found");
-    None
+    match active_vpns.len() {
+        0 => {
+            debug!("No active VPN found");
+            None
+        }
+        1 => {
+            debug!("Found active VPN: {}", active_vpns[0]);
+            Some(active_vpns[0].clone())
+        }
+        _ => {
+            warn!(
+                "Multiple active VPNs detected ({}): {:?} - This may indicate a configuration issue. Returning first one.",
+                active_vpns.len(),
+                active_vpns
+            );
+            Some(active_vpns[0].clone())
+        }
+    }
 }
 
 /// List all VPN connections configured in NetworkManager
@@ -843,6 +885,79 @@ async fn nm_disconnect(connection_name: &str) -> Result<(), String> {
     }
 }
 
+/// Kill orphan OpenVPN processes that may be blocking new connections
+/// This is a cleanup function for cases where nmcli disconnect doesn't fully clean up
+async fn kill_orphan_openvpn_processes() {
+    debug!("Checking for orphan OpenVPN processes");
+    
+    // Check if any openvpn processes exist
+    // Use more specific pattern to avoid matching unrelated processes
+    let pgrep_output = match Command::new("pgrep")
+        .args(["-x", "openvpn"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await
+    {
+        Ok(output) => output,
+        Err(e) => {
+            debug!("Failed to run pgrep: {}", e);
+            return;
+        }
+    };
+    
+    let stdout = String::from_utf8_lossy(&pgrep_output.stdout);
+    let pids: Vec<&str> = stdout.lines().collect();
+    
+    if pids.is_empty() {
+        debug!("No OpenVPN processes found");
+        return;
+    }
+    
+    warn!("Found {} orphan OpenVPN process(es), attempting cleanup", pids.len());
+    
+    // Try to kill each process individually using its PID
+    for pid in pids {
+        if let Ok(pid_num) = pid.trim().parse::<i32>() {
+            debug!("Killing OpenVPN process with PID {}", pid_num);
+            match Command::new("kill")
+                .arg(pid_num.to_string())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .output()
+                .await
+            {
+                Ok(output) if !output.status.success() => {
+                    warn!("Failed to kill process {}: exit status {}", pid_num, output.status);
+                }
+                Err(e) => {
+                    warn!("Failed to execute kill for process {}: {}", pid_num, e);
+                }
+                _ => {}
+            }
+        }
+    }
+    
+    // Give processes time to terminate
+    sleep(Duration::from_millis(500)).await;
+    
+    // Verify cleanup
+    let verify_output = Command::new("pgrep")
+        .args(["-x", "openvpn"])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await;
+    
+    if let Ok(output) = verify_output {
+        if output.status.success() && !output.stdout.is_empty() {
+            warn!("Some OpenVPN processes still running after cleanup attempt");
+        } else {
+            info!("Orphan OpenVPN processes cleaned up successfully");
+        }
+    }
+}
+
 //
 // System Tray UI
 //
@@ -926,16 +1041,10 @@ impl Tray for VpnTray {
     }
 
     fn icon_name(&self) -> String {
-        // Use themed icons based on state for a native look
-        let state = self.cached_state.read().unwrap();
-        match state.state {
-            VpnState::Connected { .. } => "network-vpn".to_string(),
-            VpnState::Connecting { .. } | VpnState::Reconnecting { .. } => {
-                "network-vpn-acquiring".to_string()
-            }
-            VpnState::Failed { .. } => "network-vpn-disconnected".to_string(),
-            VpnState::Disconnected => "network-vpn-disconnected".to_string(),
-        }
+        // Return empty string to force use of icon_pixmap() colored icons
+        // This ensures the colored indicators (green/yellow/red) are visible
+        // in Icons-Only Task Manager which may prioritize icon_name over icon_pixmap
+        String::new()
     }
 
     fn title(&self) -> String {
