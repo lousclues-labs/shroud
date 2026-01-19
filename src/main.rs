@@ -19,7 +19,6 @@
 //! ```
 
 use ksni::{menu::StandardItem, MenuItem, Tray};
-use ksni::blocking::TrayMethods;
 use log::{debug, error, info, warn};
 use notify_rust::Notification;
 use std::process::Stdio;
@@ -81,14 +80,6 @@ impl VpnState {
             VpnState::Failed { server, .. } => Some(server),
             VpnState::Disconnected => None,
         }
-    }
-
-    /// Check if we're in a transitional state
-    fn is_transitional(&self) -> bool {
-        matches!(
-            self,
-            VpnState::Connecting { .. } | VpnState::Reconnecting { .. }
-        )
     }
 }
 
@@ -540,11 +531,18 @@ async fn nm_get_active_vpn() -> Option<String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     for line in stdout.lines() {
-        let parts: Vec<&str> = line.split(':').collect();
-        if parts.len() >= 3 && parts[1] == "vpn" && parts[2] == "activated" {
-            let name = parts[0].to_string();
-            debug!("Found active VPN: {}", name);
-            return Some(name);
+        // Split on colon, but only take the last 2 fields (TYPE and STATE)
+        // This handles connection names that contain colons
+        let parts: Vec<&str> = line.rsplitn(3, ':').collect();
+        if parts.len() >= 3 {
+            let state = parts[0];
+            let conn_type = parts[1];
+            let name = parts[2];
+            
+            if conn_type == "vpn" && state == "activated" {
+                debug!("Found active VPN: {}", name);
+                return Some(name.to_string());
+            }
         }
     }
 
@@ -585,9 +583,16 @@ async fn nm_list_vpn_connections() -> Vec<String> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let mut connections = Vec::new();
     for line in stdout.lines() {
-        let parts: Vec<&str> = line.split(':').collect();
-        if parts.len() >= 2 && parts[1] == "vpn" {
-            connections.push(parts[0].to_string());
+        // Split on colon from the right, only split on last colon (TYPE field)
+        // This handles connection names that contain colons
+        let parts: Vec<&str> = line.rsplitn(2, ':').collect();
+        if parts.len() >= 2 {
+            let conn_type = parts[0];
+            let name = parts[1];
+            
+            if conn_type == "vpn" {
+                connections.push(name.to_string());
+            }
         }
     }
 
@@ -677,8 +682,8 @@ async fn nm_disconnect(connection_name: &str) -> Result<(), String> {
 
 /// System tray interface
 pub struct VpnTray {
-    /// Shared state with the supervisor
-    state: Arc<RwLock<SharedState>>,
+    /// Cached state for synchronous tray methods
+    cached_state: Arc<std::sync::RwLock<SharedState>>,
     /// Command sender to the supervisor
     tx: mpsc::Sender<VpnCommand>,
 }
@@ -686,7 +691,27 @@ pub struct VpnTray {
 impl VpnTray {
     /// Create a new tray instance
     pub fn new(state: Arc<RwLock<SharedState>>, tx: mpsc::Sender<VpnCommand>) -> Self {
-        Self { state, tx }
+        // Create initial cached state
+        let cached_state = Arc::new(std::sync::RwLock::new(SharedState::default()));
+        
+        // Spawn a task to keep cached state synchronized
+        let state_clone = state.clone();
+        let cached_clone = cached_state.clone();
+        tokio::spawn(async move {
+            loop {
+                {
+                    let current = state_clone.read().await;
+                    let mut cached = cached_clone.write().unwrap();
+                    *cached = current.clone();
+                }
+                sleep(Duration::from_millis(100)).await;
+            }
+        });
+        
+        Self {
+            cached_state,
+            tx,
+        }
     }
 
     /// Get the status text for the current state
@@ -722,20 +747,17 @@ impl Tray for VpnTray {
     }
 
     fn icon_name(&self) -> String {
-        let state = tokio::runtime::Handle::current()
-            .block_on(async { self.state.read().await.state.clone() });
-        Self::get_icon_name(&state).to_string()
+        let state = self.cached_state.read().unwrap();
+        Self::get_icon_name(&state.state).to_string()
     }
 
     fn title(&self) -> String {
-        let state = tokio::runtime::Handle::current()
-            .block_on(async { self.state.read().await.state.clone() });
-        Self::get_status_text(&state)
+        let state = self.cached_state.read().unwrap();
+        Self::get_status_text(&state.state)
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        let state = tokio::runtime::Handle::current()
-            .block_on(async { self.state.read().await.clone() });
+        let state = self.cached_state.read().unwrap().clone();
         let mut items = Vec::new();
 
         // Status label
@@ -864,20 +886,28 @@ async fn main() {
     // Create the tray
     let tray_service = VpnTray::new(state.clone(), tx);
 
-    // Run the tray (this blocks)
+    // Run the tray (this blocks in a separate thread)
     info!("Starting system tray");
-    match tray_service.spawn() {
-        Ok(handle) => {
-            *tray_handle.lock().await = Some(handle);
-            // Keep the main task alive
-            loop {
-                sleep(Duration::from_secs(60)).await;
+    let tray_handle_clone = tray_handle.clone();
+    std::thread::spawn(move || {
+        use ksni::blocking::TrayMethods;
+        match tray_service.spawn() {
+            Ok(handle) => {
+                // Store handle in the async context
+                tokio::runtime::Handle::current().block_on(async {
+                    *tray_handle_clone.lock().await = Some(handle);
+                });
+            }
+            Err(e) => {
+                error!("Failed to spawn tray: {}", e);
+                std::process::exit(1);
             }
         }
-        Err(e) => {
-            error!("Failed to spawn tray: {}", e);
-            std::process::exit(1);
-        }
+    });
+
+    // Keep the main task alive
+    loop {
+        sleep(Duration::from_secs(60)).await;
     }
 }
 
@@ -894,19 +924,6 @@ mod tests {
 
         let state = VpnState::Disconnected;
         assert_eq!(state.server_name(), None);
-    }
-
-    #[test]
-    fn test_vpn_state_is_transitional() {
-        let state = VpnState::Connecting {
-            server: "test".to_string(),
-        };
-        assert!(state.is_transitional());
-
-        let state = VpnState::Connected {
-            server: "test".to_string(),
-        };
-        assert!(!state.is_transitional());
     }
 
     #[test]
