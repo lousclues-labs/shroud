@@ -127,6 +127,8 @@ pub struct VpnSupervisor {
     tray_handle: Arc<tokio::sync::Mutex<Option<ksni::blocking::Handle<VpnTray>>>>,
     /// Timestamp of last intentional disconnect
     last_disconnect_time: Option<Instant>,
+    /// Timestamp of last polling tick (for detecting time jumps/sleep/wake)
+    last_poll_time: Instant,
 }
 
 impl VpnSupervisor {
@@ -141,6 +143,7 @@ impl VpnSupervisor {
             rx,
             tray_handle,
             last_disconnect_time: None,
+            last_poll_time: Instant::now(),
         }
     }
 
@@ -151,6 +154,7 @@ impl VpnSupervisor {
         // Initial connection refresh and state sync
         self.refresh_connections().await;
         self.sync_with_nm().await;
+        self.last_poll_time = Instant::now();
 
         // Create an interval for NM polling
         let mut nm_poll_interval = tokio::time::interval(Duration::from_secs(NM_POLL_INTERVAL_SECS));
@@ -178,8 +182,19 @@ impl VpnSupervisor {
 
                 // Poll NetworkManager state periodically
                 _ = nm_poll_interval.tick() => {
-                    debug!("Polling NetworkManager state");
-                    self.sync_with_nm().await;
+                    // Detect time jumps (sleep/wake events)
+                    let elapsed = self.last_poll_time.elapsed();
+                    if elapsed > Duration::from_secs(NM_POLL_INTERVAL_SECS * 3) {
+                        warn!(
+                            "Time jump detected ({:.1}s since last poll), forcing state resync",
+                            elapsed.as_secs_f32()
+                        );
+                        self.force_state_resync().await;
+                    } else {
+                        debug!("Polling NetworkManager state");
+                        self.sync_with_nm().await;
+                    }
+                    self.last_poll_time = Instant::now();
                 }
             }
         }
@@ -353,6 +368,45 @@ impl VpnSupervisor {
                 debug!("State synchronized with NetworkManager");
             }
         }
+    }
+
+    /// Force a complete state resync with NetworkManager
+    /// Called after detecting sleep/wake or other anomalies
+    async fn force_state_resync(&mut self) {
+        info!("Forcing complete state resync with NetworkManager");
+
+        // Clear any stale state
+        self.last_disconnect_time = None;
+
+        // Refresh connection list (may have changed during sleep)
+        self.refresh_connections().await;
+
+        // Get actual current state from NM
+        let active_vpn = nm_get_active_vpn().await;
+
+        {
+            let mut state = self.state.write().await;
+            match active_vpn {
+                Some(conn_name) => {
+                    info!("Resync: VPN {} is active", conn_name);
+                    state.state = VpnState::Connected {
+                        server: conn_name.clone(),
+                    };
+                }
+                None => {
+                    info!("Resync: No VPN active");
+                    // Only set to disconnected if we weren't in the middle of something
+                    if !matches!(
+                        state.state,
+                        VpnState::Connecting { .. } | VpnState::Reconnecting { .. }
+                    ) {
+                        state.state = VpnState::Disconnected;
+                    }
+                }
+            }
+        }
+
+        self.update_tray().await;
     }
 
     /// Attempt to reconnect with exponential backoff
@@ -729,31 +783,54 @@ impl VpnTray {
         }
     }
 
-    /// Get the icon name for the current state
-    fn get_icon_name(state: &VpnState) -> &'static str {
-        match state {
-            VpnState::Disconnected | VpnState::Failed { .. } => "network-vpn-disconnected",
-            VpnState::Connecting { .. } | VpnState::Reconnecting { .. } => {
-                "network-vpn-acquiring"
-            }
-            VpnState::Connected { .. } => "network-vpn",
-        }
-    }
 }
 
 impl Tray for VpnTray {
+    // Enable left-click to open menu (in addition to right-click)
+    const MENU_ON_ACTIVATE: bool = true;
+
     fn id(&self) -> String {
         "openvpn-tray".to_string()
     }
 
     fn icon_name(&self) -> String {
-        let state = self.cached_state.read().unwrap();
-        Self::get_icon_name(&state.state).to_string()
+        // Return empty to prefer icon_pixmap with colored status icons
+        String::new()
     }
 
     fn title(&self) -> String {
         let state = self.cached_state.read().unwrap();
         Self::get_status_text(&state.state)
+    }
+
+    fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+        let state = self.cached_state.read().unwrap();
+        // Define colors as (Red, Green, Blue, Alpha)
+        let (r, g, b, a) = match state.state {
+            VpnState::Connected { .. } => (0, 200, 0, 255),        // Bright Green
+            VpnState::Connecting { .. } => (255, 200, 0, 255),     // Yellow
+            VpnState::Reconnecting { .. } => (255, 165, 0, 255),   // Orange
+            VpnState::Failed { .. } => (200, 0, 0, 255),           // Red
+            VpnState::Disconnected => (128, 128, 128, 255),        // Gray
+        };
+
+        // Use 24x24 for better visibility on HiDPI
+        let size = 24i32;
+        let mut data = Vec::with_capacity((size * size * 4) as usize);
+
+        // StatusNotifierItem expects ARGB format (Alpha, Red, Green, Blue)
+        for _ in 0..(size * size) {
+            data.push(a);  // Alpha
+            data.push(r);  // Red
+            data.push(g);  // Green
+            data.push(b);  // Blue
+        }
+
+        vec![ksni::Icon {
+            width: size,
+            height: size,
+            data,
+        }]
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
