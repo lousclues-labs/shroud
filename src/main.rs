@@ -1031,7 +1031,7 @@ async fn nm_disconnect(connection_name: &str) -> Result<(), String> {
                 return Err(msg);
             }
             Err(_) => {
-                let msg = format!("Device list timed out");
+                let msg = "Device list timed out".to_string();
                 error!("{}", msg);
                 return Err(msg);
             }
@@ -1202,13 +1202,13 @@ fn create_status_icon(icon_type: IconType) -> Vec<ksni::Icon> {
             let fg_pixel = [255u8, fg_r, fg_g, fg_b]; // ARGB32
             let transparent = [0u8, 0, 0, 0];
             
-            let center = size as i32 / 2;
+            let center = size / 2;
             let radius = (size as f32 * 0.4) as i32;
             
             for y in 0..size {
                 for x in 0..size {
-                    let dx = x as i32 - center;
-                    let dy = y as i32 - center;
+                    let dx = x - center;
+                    let dy = y - center;
                     let dist_sq = dx * dx + dy * dy;
                     let radius_sq = radius * radius;
                     
@@ -1247,7 +1247,7 @@ fn draw_checkmark(x: i32, y: i32, size: i32, center: i32, fg: &[u8; 4], bg: &[u8
     // Checkmark path: down-right then up-right
     // Bottom of checkmark at (0, 4*scale), left at (-4*scale, 0), top-right at (6*scale, -6*scale)
     let on_left_stroke = rel_x >= (-5.0 * scale) as i32 && rel_x <= (-3.0 * scale) as i32
-        && rel_y >= (-1.0 * scale) as i32 && rel_y <= (5.0 * scale) as i32
+        && rel_y >= -scale as i32 && rel_y <= (5.0 * scale) as i32
         && (rel_y as f32 + rel_x as f32 * 1.2).abs() < 2.0 * scale;
     
     let on_right_stroke = rel_x >= (-3.0 * scale) as i32 && rel_x <= (7.0 * scale) as i32
