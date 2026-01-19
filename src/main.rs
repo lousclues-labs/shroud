@@ -54,6 +54,9 @@ const MAX_RETRY_ATTEMPTS: u32 = 5;
 /// Delay between reconnection attempts in seconds
 const RETRY_DELAY_SECS: u64 = 5;
 
+/// Delay after killing OpenVPN process to allow for cleanup (milliseconds)
+const KILL_CLEANUP_DELAY_MS: u64 = 100;
+
 /// Pre-compiled regex for extracting server identifiers from filenames
 /// Matches patterns like "us8399", "uk1234", "de5678" (2 letters + digits)
 static SERVER_NAME_REGEX: LazyLock<Regex> =
@@ -567,6 +570,11 @@ impl VpnActor {
     /// When we kill the pkexec process, the openvpn process running as root becomes
     /// orphaned and continues running. This method uses pkexec pkill to directly
     /// terminate the openvpn process with root privileges.
+    ///
+    /// Note: This will kill ALL openvpn processes on the system, not just ones
+    /// started by this application. This is intentional - this application is
+    /// designed to be the sole manager of OpenVPN connections, and any other
+    /// openvpn processes would conflict with new connections anyway.
     async fn kill_openvpn_process(&self) {
         debug!("Killing any running OpenVPN processes with pkexec pkill");
         let result = Command::new("pkexec")
@@ -583,8 +591,10 @@ impl VpnActor {
                 if status.success() {
                     debug!("Successfully killed OpenVPN process(es)");
                 } else {
-                    // Exit code 1 means no processes matched, which is fine
-                    debug!("pkill returned non-zero (likely no openvpn processes running)");
+                    // pkill exit codes: 0 = matched, 1 = no match, 2 = syntax error, 3 = fatal
+                    // Exit code 1 (no processes matched) is expected and acceptable
+                    debug!("pkill returned non-zero (exit code {}), likely no openvpn processes running",
+                           status.code().unwrap_or(-1));
                 }
             }
             Err(e) => {
@@ -593,7 +603,7 @@ impl VpnActor {
         }
 
         // Brief delay to ensure process cleanup completes
-        sleep(Duration::from_millis(100)).await;
+        sleep(Duration::from_millis(KILL_CLEANUP_DELAY_MS)).await;
     }
 
     /// Toggle auto-reconnect feature
