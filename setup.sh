@@ -162,11 +162,16 @@ systemctl --user daemon-reload
 success "Systemd daemon reloaded"
 
 info "Enabling and restarting service..."
-systemctl --user enable "$SERVICE_NAME" 2>/dev/null || true
-if systemctl --user restart "$SERVICE_NAME" 2>/dev/null; then
-    success "Service restarted successfully"
+# Enable may show "Created symlink" or warn if already enabled - both are OK
+if ! systemctl --user enable "$SERVICE_NAME" 2>&1 | grep -qE "^Failed"; then
+    : # Enable succeeded or already enabled
 else
+    warn "Could not enable service"
+fi
+if systemctl --user restart "$SERVICE_NAME" 2>&1 | grep -qE "^Failed"; then
     warn "Could not restart service (this is normal if no graphical session is active)"
+else
+    success "Service restarted successfully"
 fi
 echo ""
 

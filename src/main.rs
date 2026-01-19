@@ -629,7 +629,9 @@ impl VpnActor {
     async fn update_tray(&self) {
         let handle = self.tray_handle.lock().await;
         if let Some(ref h) = *handle {
-            let _ = h.update(|_| {}).await;
+            if h.update(|_| {}).await.is_none() {
+                debug!("Tray update returned None (service may have shut down)");
+            }
         }
     }
 
