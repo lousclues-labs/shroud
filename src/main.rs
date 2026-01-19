@@ -53,10 +53,13 @@ const RECONNECT_MAX_DELAY_SECS: u64 = 30;
 const POST_DISCONNECT_GRACE_SECS: u64 = 5;
 
 /// Maximum attempts to verify disconnect completion
-const DISCONNECT_VERIFY_MAX_ATTEMPTS: u32 = 10;
+const DISCONNECT_VERIFY_MAX_ATTEMPTS: u32 = 20;
 
 /// Interval between disconnect verification attempts in milliseconds
 const DISCONNECT_VERIFY_INTERVAL_MS: u64 = 500;
+
+/// Settle time after disconnect is verified before connecting to new VPN
+const POST_DISCONNECT_SETTLE_SECS: u64 = 2;
 
 /// Interval for syncing cached state to tray in milliseconds
 const CACHE_SYNC_INTERVAL_MS: u64 = 50;
@@ -242,32 +245,41 @@ impl VpnSupervisor {
             self.update_tray().await;
 
             // Disconnect and wait for it to complete
+            debug!("Calling nm_disconnect for: {}", current);
             let disconnect_result = nm_disconnect(current).await;
             if let Err(e) = disconnect_result {
-                warn!("Disconnect failed (continuing anyway): {}", e);
+                warn!("Disconnect command failed (continuing anyway): {}", e);
+            } else {
+                debug!("Disconnect command completed successfully");
             }
 
             // Wait and verify the SPECIFIC connection is disconnected
             let mut disconnected = false;
-            for attempt in 0..DISCONNECT_VERIFY_MAX_ATTEMPTS {
+            for attempt in 1..=DISCONNECT_VERIFY_MAX_ATTEMPTS {
                 sleep(Duration::from_millis(DISCONNECT_VERIFY_INTERVAL_MS)).await;
+                
+                debug!("Disconnect verification attempt {} of {}", attempt, DISCONNECT_VERIFY_MAX_ATTEMPTS);
                 
                 // Check if the specific connection we're trying to disconnect is gone
                 if let Some(active) = nm_get_active_vpn().await {
+                    debug!("Active VPN detected: {}", active);
                     if active != *current {
-                        debug!("Previous VPN '{}' disconnected, found different active VPN: {}", current, active);
+                        info!("Previous VPN '{}' disconnected, found different active VPN: {}", current, active);
                         disconnected = true;
                         break;
+                    } else {
+                        debug!("VPN '{}' still active, waiting...", current);
                     }
                 } else {
-                    debug!("Previous VPN '{}' disconnected successfully (no active VPN)", current);
+                    info!("Previous VPN '{}' disconnected successfully (no active VPN)", current);
                     disconnected = true;
                     break;
                 }
-                
-                if attempt == DISCONNECT_VERIFY_MAX_ATTEMPTS - 1 {
-                    warn!("Disconnect verification timed out for '{}'", current);
-                }
+            }
+            
+            // Log timeout if disconnect wasn't verified
+            if !disconnected {
+                warn!("Disconnect verification timed out for '{}' after {} attempts", current, DISCONNECT_VERIFY_MAX_ATTEMPTS);
             }
 
             // Clean up any orphan OpenVPN processes before connecting
@@ -277,11 +289,13 @@ impl VpnSupervisor {
                 kill_orphan_openvpn_processes().await;
             } else {
                 // Always clean up to ensure no stale processes remain
+                debug!("Cleaning up any orphan processes after successful disconnect");
                 kill_orphan_openvpn_processes().await;
             }
 
-            // Extra settle time for NetworkManager
-            sleep(Duration::from_secs(1)).await;
+            // Extra settle time for NetworkManager to fully release resources
+            debug!("Waiting {} seconds for NetworkManager to settle after disconnect", POST_DISCONNECT_SETTLE_SECS);
+            sleep(Duration::from_secs(POST_DISCONNECT_SETTLE_SECS)).await;
         }
 
         // Step 4: Update state to Connecting
@@ -299,10 +313,13 @@ impl VpnSupervisor {
 
         while attempts < MAX_CONNECT_ATTEMPTS {
             attempts += 1;
+            
+            debug!("Connection attempt {} of {} for {}", attempts, MAX_CONNECT_ATTEMPTS, connection_name);
 
             match nm_connect(connection_name).await {
                 Ok(_) => {
                     // Wait for connection to establish
+                    debug!("Connection command succeeded, waiting {} seconds for verification", CONNECTION_VERIFY_DELAY_SECS);
                     sleep(Duration::from_secs(CONNECTION_VERIFY_DELAY_SECS)).await;
 
                     // Verify connection
@@ -321,7 +338,11 @@ impl VpnSupervisor {
                                 &format!("Connected to {}", connection_name),
                             );
                             return;
+                        } else {
+                            warn!("Connection verification failed: expected '{}' but found '{}'", connection_name, active);
                         }
+                    } else {
+                        warn!("Connection verification failed: no active VPN found");
                     }
 
                     warn!(
@@ -335,6 +356,7 @@ impl VpnSupervisor {
             }
 
             if attempts < MAX_CONNECT_ATTEMPTS {
+                debug!("Waiting 2 seconds before retry");
                 sleep(Duration::from_secs(2)).await;
             }
         }
@@ -480,6 +502,16 @@ impl VpnSupervisor {
                     state.state = VpnState::Connected {
                         server: vpn_name.clone(),
                     };
+                }
+                needs_tray_update = true;
+            }
+
+            // Case 5b: We're in Failed state and NM shows nothing - transition to Disconnected
+            (VpnState::Failed { server, .. }, None) => {
+                info!("Failed connection to {} confirmed, transitioning to Disconnected", server);
+                {
+                    let mut state = self.state.write().await;
+                    state.state = VpnState::Disconnected;
                 }
                 needs_tray_update = true;
             }
@@ -1063,7 +1095,7 @@ impl Tray for VpnTray {
                 max_attempts
             ),
             VpnState::Failed { server, .. } => format!("❌ {}", extract_short_name(server)),
-            VpnState::Disconnected => "VPN".to_string(),
+            VpnState::Disconnected => "⭕ VPN".to_string(),
         }
     }
 
