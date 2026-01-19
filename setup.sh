@@ -141,7 +141,39 @@ else
 fi
 echo ""
 
-# Step 4: Install binary
+# Step 4: Stop running app before installing binary
+WAS_SERVICE_RUNNING=false
+WAS_PROCESS_RUNNING=false
+
+if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+    info "Stopping running $SERVICE_NAME service..."
+    if systemctl --user stop "$SERVICE_NAME"; then
+        WAS_SERVICE_RUNNING=true
+        success "Service stopped"
+    else
+        warn "Could not stop service"
+    fi
+elif pgrep -x "$BINARY_NAME" > /dev/null 2>&1; then
+    info "Stopping running $BINARY_NAME process..."
+    if pkill -TERM -x "$BINARY_NAME"; then
+        WAS_PROCESS_RUNNING=true
+        # Wait briefly for process to exit
+        sleep 1
+        if pgrep -x "$BINARY_NAME" > /dev/null 2>&1; then
+            warn "Process did not exit cleanly, forcing kill"
+            pkill -KILL -x "$BINARY_NAME"
+            sleep 1
+        fi
+        success "Process stopped"
+    else
+        warn "Could not stop process"
+    fi
+else
+    info "No running instance detected"
+fi
+echo ""
+
+# Step 5: Install binary
 info "Installing binary to $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 cp "target/release/$BINARY_NAME" "$INSTALL_DIR/"
@@ -149,33 +181,40 @@ chmod +x "$INSTALL_DIR/$BINARY_NAME"
 success "Binary installed to $INSTALL_DIR/$BINARY_NAME"
 echo ""
 
-# Step 5: Install systemd user service
+# Step 6: Install systemd user service
 info "Installing systemd user service..."
 mkdir -p "$SERVICE_DIR"
 cp "systemd/$SERVICE_NAME" "$SERVICE_DIR/"
 success "Service file installed to $SERVICE_DIR/$SERVICE_NAME"
 echo ""
 
-# Step 6: Reload systemd and enable service
+# Step 7: Reload systemd and enable service
 info "Reloading systemd user daemon..."
 systemctl --user daemon-reload
 success "Systemd daemon reloaded"
 
-info "Enabling and restarting service..."
+info "Enabling service..."
 # Enable may show "Created symlink" or warn if already enabled - both are OK
 if ! systemctl --user enable "$SERVICE_NAME" 2>&1 | grep -qE "^Failed"; then
     : # Enable succeeded or already enabled
 else
     warn "Could not enable service"
 fi
-if systemctl --user restart "$SERVICE_NAME" 2>&1 | grep -qE "^Failed"; then
-    warn "Could not restart service (this is normal if no graphical session is active)"
+
+# Restart service if it was running, or if we stopped a standalone process
+if [ "$WAS_SERVICE_RUNNING" = true ] || [ "$WAS_PROCESS_RUNNING" = true ]; then
+    info "Restarting service..."
+    if systemctl --user restart "$SERVICE_NAME" 2>&1 | grep -qE "^Failed"; then
+        warn "Could not restart service (this is normal if no graphical session is active)"
+    else
+        success "Service restarted successfully"
+    fi
 else
-    success "Service restarted successfully"
+    info "Service not started (was not previously running)"
 fi
 echo ""
 
-# Step 7: Check PATH
+# Step 8: Check PATH
 if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     warn "$INSTALL_DIR is not in your PATH"
     echo "  Add this to your ~/.bashrc or ~/.zshrc:"
@@ -183,7 +222,7 @@ if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
     echo ""
 fi
 
-# Step 8: Print next steps
+# Step 9: Print next steps
 echo -e "${GREEN}╔══════════════════════════════════════════════════════════╗${NC}"
 echo -e "${GREEN}║                    Setup Complete!                       ║${NC}"
 echo -e "${GREEN}╚══════════════════════════════════════════════════════════╝${NC}"
