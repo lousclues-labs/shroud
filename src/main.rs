@@ -21,6 +21,9 @@
 use ksni::{menu::CheckmarkItem, menu::StandardItem, MenuItem, Tray};
 use log::{debug, error, info, warn};
 use notify_rust::Notification;
+use std::fs::{self, File};
+use std::io::{Read, Write};
+use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Instant;
@@ -1421,62 +1424,48 @@ enum IconType {
 ///
 /// Returns icons in common sizes (16x16, 24x24, 32x32, 48x48) for different DPI scales.
 /// The data is in ARGB32 format with network byte order (big endian).
-/// Each icon type has a distinctive symbol inside a shield:
-/// - Connected: Green shield with white checkmark (locked/secure)
-/// - Connecting: Amber shield with animated dots
-/// - Disconnected: Gray shield outline (unlocked/insecure)
-/// - Failed: Red shield with white X
+/// Each icon type has a distinctive color and symbol:
+/// - Connected: Green with checkmark
+/// - Connecting: Amber with dots  
+/// - Disconnected: Gray with dash
+/// - Failed: Red with X
 fn create_status_icon(icon_type: IconType) -> Vec<ksni::Icon> {
-    let sizes = [16, 24, 32, 48];
+    let sizes: [i32; 4] = [16, 24, 32, 48];
     
     sizes
         .iter()
         .map(|&size| {
             let mut data = Vec::with_capacity((size * size * 4) as usize);
             
-            // Modern color palette with softer tones
-            let (primary_r, primary_g, primary_b, accent_r, accent_g, accent_b) = match icon_type {
-                IconType::Connected => (46, 160, 67, 255, 255, 255),     // GitHub green, white accent
-                IconType::Connecting => (245, 158, 11, 255, 255, 255),   // Amber, white accent
-                IconType::Disconnected => (100, 116, 139, 255, 255, 255), // Slate gray, white accent
-                IconType::Failed => (239, 68, 68, 255, 255, 255),        // Tailwind red, white accent
+            // Color palette
+            let (bg_r, bg_g, bg_b, fg_r, fg_g, fg_b) = match icon_type {
+                IconType::Connected => (46u8, 160, 67, 255, 255, 255),     // Green, white
+                IconType::Connecting => (245, 158, 11, 255, 255, 255),     // Amber, white
+                IconType::Disconnected => (100, 116, 139, 255, 255, 255),  // Slate, white
+                IconType::Failed => (239, 68, 68, 255, 255, 255),          // Red, white
             };
             
-            let primary = [255u8, primary_r, primary_g, primary_b];
-            let accent = [255u8, accent_r, accent_g, accent_b];
+            let bg_pixel = [255u8, bg_r, bg_g, bg_b]; // ARGB: full alpha, then RGB
+            let fg_pixel = [255u8, fg_r, fg_g, fg_b];
             let transparent = [0u8, 0, 0, 0];
             
-            // Darker shade for outline/depth effect
-            let dark_shade = [255u8, 
-                (primary_r as f32 * 0.7) as u8, 
-                (primary_g as f32 * 0.7) as u8, 
-                (primary_b as f32 * 0.7) as u8
-            ];
-            
-            let scale = size as f32;
+            let center = size / 2;
+            let radius = (size as f32 * 0.42) as i32;
+            let radius_sq = radius * radius;
             
             for y in 0..size {
                 for x in 0..size {
-                    // Normalize coordinates to 0.0-1.0 range
-                    let nx = x as f32 / scale;
-                    let ny = y as f32 / scale;
+                    let dx = x - center;
+                    let dy = y - center;
+                    let dist_sq = dx * dx + dy * dy;
                     
-                    // Shield shape: rounded top, pointed bottom
-                    let in_shield = is_in_shield(nx, ny);
-                    let on_edge = is_on_shield_edge(nx, ny, scale);
-                    
-                    if in_shield {
-                        let pixel = if on_edge {
-                            // Draw edge with darker shade for depth
-                            dark_shade
-                        } else {
-                            // Draw the inner symbol
-                            match icon_type {
-                                IconType::Connected => draw_shield_check(nx, ny, &accent, &primary),
-                                IconType::Connecting => draw_shield_pulse(nx, ny, &accent, &primary),
-                                IconType::Disconnected => draw_shield_open(nx, ny, &accent, &primary, &transparent),
-                                IconType::Failed => draw_shield_x(nx, ny, &accent, &primary),
-                            }
+                    if dist_sq <= radius_sq {
+                        // Inside circle - draw the symbol
+                        let pixel = match icon_type {
+                            IconType::Connected => draw_check(x, y, center, size, &fg_pixel, &bg_pixel),
+                            IconType::Connecting => draw_dots(x, y, center, size, &fg_pixel, &bg_pixel),
+                            IconType::Disconnected => draw_dash(x, y, center, size, &fg_pixel, &bg_pixel),
+                            IconType::Failed => draw_x_mark(x, y, center, size, &fg_pixel, &bg_pixel),
                         };
                         data.extend_from_slice(&pixel);
                     } else {
@@ -1494,160 +1483,66 @@ fn create_status_icon(icon_type: IconType) -> Vec<ksni::Icon> {
         .collect()
 }
 
-/// Check if normalized coordinates are inside the shield shape
-fn is_in_shield(nx: f32, ny: f32) -> bool {
-    // Shield parameters (centered at 0.5, 0.5)
-    let cx = 0.5;
-    let top = 0.08;
-    let bottom = 0.92;
-    let max_width = 0.42;
+/// Draw a checkmark symbol
+fn draw_check(x: i32, y: i32, center: i32, size: i32, fg: &[u8; 4], bg: &[u8; 4]) -> [u8; 4] {
+    let rx = x - center;
+    let ry = y - center;
+    let s = size as f32 / 32.0;
     
-    // Top section: rounded rectangle (upper 40% of shield)
-    if ny >= top && ny < 0.45 {
-        let width_at_y = max_width;
-        let dx = (nx - cx).abs();
-        // Add slight rounding at top corners
-        let corner_radius = 0.08;
-        if ny < top + corner_radius && dx > width_at_y - corner_radius {
-            let corner_x = cx + (width_at_y - corner_radius) * (nx - cx).signum();
-            let corner_y = top + corner_radius;
-            let dist = ((nx - corner_x).powi(2) + (ny - corner_y).powi(2)).sqrt();
-            return dist <= corner_radius;
-        }
-        return dx <= width_at_y;
-    }
+    // Two strokes forming a checkmark
+    let on_short = rx >= (-5.0 * s) as i32 && rx <= (-1.0 * s) as i32
+        && ry >= (-1.0 * s) as i32 && ry <= (5.0 * s) as i32
+        && ((ry as f32) - (rx as f32 + 3.0 * s) * 1.0).abs() < 2.5 * s;
     
-    // Bottom section: tapers to point (lower 60% of shield)
-    if ny >= 0.45 && ny <= bottom {
-        let progress = (ny - 0.45) / (bottom - 0.45);
-        let width_at_y = max_width * (1.0 - progress.powf(1.5));
-        let dx = (nx - cx).abs();
-        return dx <= width_at_y;
-    }
+    let on_long = rx >= (-2.0 * s) as i32 && rx <= (7.0 * s) as i32
+        && ry >= (-6.0 * s) as i32 && ry <= (4.0 * s) as i32
+        && ((ry as f32) + (rx as f32) * 0.7 - 1.0 * s).abs() < 2.5 * s;
     
-    false
+    if on_short || on_long { *fg } else { *bg }
 }
 
-/// Check if on shield edge (for outline effect)
-fn is_on_shield_edge(nx: f32, ny: f32, scale: f32) -> bool {
-    let edge_thickness = 2.5 / scale; // Thinner edge at higher resolutions
+/// Draw three horizontal dots
+fn draw_dots(x: i32, y: i32, center: i32, size: i32, fg: &[u8; 4], bg: &[u8; 4]) -> [u8; 4] {
+    let rx = x - center;
+    let ry = y - center;
+    let s = size as f32 / 32.0;
+    let dot_r = (2.5 * s) as i32;
+    let dot_r_sq = dot_r * dot_r;
     
-    // Check if just inside the edge
-    let inside = is_in_shield(nx, ny);
-    if !inside {
-        return false;
-    }
-    
-    // Check if any neighbor is outside
-    let offsets = [
-        (-edge_thickness, 0.0),
-        (edge_thickness, 0.0),
-        (0.0, -edge_thickness),
-        (0.0, edge_thickness),
-    ];
-    
-    for (dx, dy) in offsets {
-        if !is_in_shield(nx + dx, ny + dy) {
-            return true;
-        }
-    }
-    
-    false
-}
-
-/// Draw checkmark inside shield (Connected state)
-fn draw_shield_check(nx: f32, ny: f32, fg: &[u8; 4], bg: &[u8; 4]) -> [u8; 4] {
-    // Checkmark centered in shield, slightly above center
-    let cx = 0.5;
-    let cy = 0.42;
-    let rx = nx - cx;
-    let ry = ny - cy;
-    
-    // Two-stroke checkmark
-    // Short stroke going down-right
-    let on_short = rx >= -0.18 && rx <= -0.02
-        && ry >= -0.02 && ry <= 0.14
-        && (ry - (rx + 0.10) * 1.2).abs() < 0.055;
-    
-    // Long stroke going up-right  
-    let on_long = rx >= -0.06 && rx <= 0.22
-        && ry >= -0.16 && ry <= 0.14
-        && (ry - (rx - 0.02) * -0.9 + 0.02).abs() < 0.055;
-    
-    if on_short || on_long {
-        *fg
-    } else {
-        *bg
-    }
-}
-
-/// Draw pulsing dots inside shield (Connecting state)
-fn draw_shield_pulse(nx: f32, ny: f32, fg: &[u8; 4], bg: &[u8; 4]) -> [u8; 4] {
-    let cx = 0.5;
-    let cy = 0.42;
-    let rx = nx - cx;
-    let ry = ny - cy;
-    
-    // Three horizontal dots
-    let dot_radius = 0.055;
-    let dot_positions = [-0.14, 0.0, 0.14];
-    
-    for &dot_x in &dot_positions {
+    for dot_offset in [-6, 0, 6] {
+        let dot_x = (dot_offset as f32 * s) as i32;
         let dx = rx - dot_x;
-        let dy = ry;
-        if dx * dx + dy * dy <= dot_radius * dot_radius {
+        if dx * dx + ry * ry <= dot_r_sq {
             return *fg;
         }
     }
-    
     *bg
 }
 
-/// Draw open/unlocked shield (Disconnected state) - outline only
-fn draw_shield_open(nx: f32, ny: f32, fg: &[u8; 4], bg: &[u8; 4], _trans: &[u8; 4]) -> [u8; 4] {
-    // For disconnected, make the inside mostly transparent with just a dash
-    let cx = 0.5;
-    let cy = 0.42;
-    let rx = nx - cx;
-    let ry = ny - cy;
+/// Draw a horizontal dash
+fn draw_dash(x: i32, y: i32, center: i32, size: i32, fg: &[u8; 4], bg: &[u8; 4]) -> [u8; 4] {
+    let rx = x - center;
+    let ry = y - center;
+    let s = size as f32 / 32.0;
     
-    // Draw a horizontal line/dash to indicate "off" state
-    let dash_half_width = 0.12;
-    let dash_half_height = 0.035;
+    let half_w = (8.0 * s) as i32;
+    let half_h = (2.5 * s) as i32;
     
-    if rx.abs() <= dash_half_width && ry.abs() <= dash_half_height {
-        return *fg;
-    }
-    
-    // Make interior semi-transparent for "empty/off" look
-    // Return a dimmed version of bg
-    [180u8, bg[1], bg[2], bg[3]]
+    if rx.abs() <= half_w && ry.abs() <= half_h { *fg } else { *bg }
 }
 
-/// Draw X inside shield (Failed state)
-fn draw_shield_x(nx: f32, ny: f32, fg: &[u8; 4], bg: &[u8; 4]) -> [u8; 4] {
-    let cx = 0.5;
-    let cy = 0.42;
-    let rx = nx - cx;
-    let ry = ny - cy;
+/// Draw an X mark
+fn draw_x_mark(x: i32, y: i32, center: i32, size: i32, fg: &[u8; 4], bg: &[u8; 4]) -> [u8; 4] {
+    let rx = x - center;
+    let ry = y - center;
+    let s = size as f32 / 32.0;
+    let thick = (2.5 * s) as i32;
+    let arm = (6.0 * s) as i32;
     
-    let thickness = 0.05;
-    let arm_length = 0.13;
+    let on_d1 = (rx - ry).abs() <= thick && rx.abs() <= arm && ry.abs() <= arm;
+    let on_d2 = (rx + ry).abs() <= thick && rx.abs() <= arm && ry.abs() <= arm;
     
-    // Two diagonal strokes forming X
-    let on_diag1 = (rx - ry).abs() <= thickness
-        && rx.abs() <= arm_length
-        && ry.abs() <= arm_length;
-    
-    let on_diag2 = (rx + ry).abs() <= thickness
-        && rx.abs() <= arm_length
-        && ry.abs() <= arm_length;
-    
-    if on_diag1 || on_diag2 {
-        *fg
-    } else {
-        *bg
-    }
+    if on_d1 || on_d2 { *fg } else { *bg }
 }
 
 /// System tray interface
@@ -1902,10 +1797,82 @@ impl Tray for VpnTray {
 // Main
 //
 
+/// Path to the lock file for single-instance enforcement
+fn get_lock_file_path() -> PathBuf {
+    let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
+        .unwrap_or_else(|_| "/tmp".to_string());
+    PathBuf::from(runtime_dir).join("openvpn-tray.lock")
+}
+
+/// Check if another instance is already running
+/// Returns Ok(File) with the lock file if we can proceed, Err if another instance exists
+fn acquire_instance_lock() -> Result<File, String> {
+    let lock_path = get_lock_file_path();
+    
+    // Check if lock file exists and contains a valid PID
+    if lock_path.exists() {
+        if let Ok(mut file) = File::open(&lock_path) {
+            let mut contents = String::new();
+            if file.read_to_string(&mut contents).is_ok() {
+                if let Ok(pid) = contents.trim().parse::<u32>() {
+                    // Check if process with this PID is still running
+                    let proc_path = format!("/proc/{}", pid);
+                    if std::path::Path::new(&proc_path).exists() {
+                        // Check if it's actually our process
+                        let cmdline_path = format!("/proc/{}/cmdline", pid);
+                        if let Ok(cmdline) = fs::read_to_string(&cmdline_path) {
+                            if cmdline.contains("openvpn-tray") {
+                                return Err(format!(
+                                    "Another instance is already running (PID {})",
+                                    pid
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Stale lock file, remove it
+        let _ = fs::remove_file(&lock_path);
+    }
+    
+    // Create new lock file with our PID
+    let mut file = File::create(&lock_path)
+        .map_err(|e| format!("Failed to create lock file: {}", e))?;
+    
+    let pid = std::process::id();
+    file.write_all(pid.to_string().as_bytes())
+        .map_err(|e| format!("Failed to write PID to lock file: {}", e))?;
+    
+    Ok(file)
+}
+
+/// Clean up lock file on exit
+fn release_instance_lock() {
+    let lock_path = get_lock_file_path();
+    let _ = fs::remove_file(&lock_path);
+}
+
 #[tokio::main]
 async fn main() {
     // Initialize logging
     env_logger::init();
+    
+    // Ensure single instance
+    let _lock_file = match acquire_instance_lock() {
+        Ok(file) => file,
+        Err(msg) => {
+            eprintln!("{}", msg);
+            std::process::exit(1);
+        }
+    };
+    
+    // Register cleanup on exit
+    ctrlc::set_handler(move || {
+        release_instance_lock();
+        std::process::exit(0);
+    }).expect("Error setting Ctrl-C handler");
+    
     info!("Starting NetworkManager VPN Supervisor");
 
     // Create shared state
