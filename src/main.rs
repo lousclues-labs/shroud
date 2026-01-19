@@ -274,6 +274,11 @@ impl VpnActor {
                         .await;
                     // Wait briefly to ensure NM cleanup completes
                     sleep(Duration::from_millis(500)).await;
+                    // Clear NM connection name only after the NM connection is successfully down
+                    {
+                        let mut state = self.state.write().await;
+                        state.nm_connection_name = None;
+                    }
                 }
             }
 
@@ -290,12 +295,13 @@ impl VpnActor {
             debug!("Old VPN connection terminated, proceeding with new connection");
         }
 
-        // Update state to connecting
+        // Update state to connecting - intentional_disconnect is reset to false only
+        // AFTER the old connection is confirmed dead and we are ready to start the new one.
+        // nm_connection_name was already cleared after successful NM disconnect above.
         {
             let mut state = self.state.write().await;
             state.state = VpnState::Connecting(server.to_string());
             state.intentional_disconnect = false;
-            state.nm_connection_name = None; // Clear NM connection name for app-initiated connections
         }
         self.update_tray().await;
         self.send_notification("OpenVPN", &format!("Connecting to {}...", server));
@@ -400,11 +406,13 @@ impl VpnActor {
             // Only auto-reconnect if:
             // 1. It wasn't an intentional disconnect
             // 2. Auto-reconnect is enabled
-            // 3. We were in a connected (app-initiated) or retrying state
+            // 3. We were in a connected (app-initiated), connecting, or retrying state
             // 4. The connection was NOT external (NM-managed)
             let is_app_connection = matches!(
                 &state.state,
-                VpnState::Connected { source: VpnSource::App, .. } | VpnState::Retrying { .. }
+                VpnState::Connected { source: VpnSource::App, .. }
+                    | VpnState::Connecting(_)
+                    | VpnState::Retrying { .. }
             );
             let should_reconnect = !state.intentional_disconnect
                 && state.auto_reconnect
