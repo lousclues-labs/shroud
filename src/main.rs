@@ -59,7 +59,7 @@ const DISCONNECT_VERIFY_MAX_ATTEMPTS: u32 = 20;
 const DISCONNECT_VERIFY_INTERVAL_MS: u64 = 500;
 
 /// Settle time after disconnect is verified before connecting to new VPN
-const POST_DISCONNECT_SETTLE_SECS: u64 = 2;
+const POST_DISCONNECT_SETTLE_SECS: u64 = 3;
 
 /// Interval for syncing cached state to tray in milliseconds
 const CACHE_SYNC_INTERVAL_MS: u64 = 50;
@@ -332,6 +332,8 @@ impl VpnSupervisor {
                                     server: connection_name.to_string(),
                                 };
                             }
+                            // Force immediate sync with NetworkManager after successful connection
+                            self.sync_with_nm().await;
                             self.update_tray().await;
                             self.show_notification(
                                 "VPN Connected",
@@ -402,6 +404,8 @@ impl VpnSupervisor {
                         let mut state = self.state.write().await;
                         state.state = VpnState::Disconnected;
                     }
+                    // Force immediate sync after disconnect to ensure state is accurate
+                    self.sync_with_nm().await;
                     self.update_tray().await;
                     self.show_notification("VPN Disconnected", "VPN connection closed");
                 }
@@ -704,7 +708,13 @@ impl VpnSupervisor {
     /// Update the tray icon
     async fn update_tray(&self) {
         if let Some(handle) = self.tray_handle.lock().await.as_ref() {
-            handle.update(|_tray: &mut VpnTray| {});
+            // Force a tray refresh by calling update
+            // The tray will re-read cached_state when its methods are called
+            handle.update(|tray: &mut VpnTray| {
+                // Trigger icon and menu refresh by accessing the tray
+                // This forces ksni to re-query icon_pixmap, title, and menu
+                let _ = &tray.cached_state;
+            });
         }
     }
 
@@ -841,6 +851,58 @@ async fn nm_list_vpn_connections() -> Vec<String> {
     connections
 }
 
+/// Get the UUID of a VPN connection by name
+async fn nm_get_vpn_uuid(connection_name: &str) -> Option<String> {
+    debug!("Getting UUID for VPN connection: {}", connection_name);
+
+    let output = match timeout(
+        Duration::from_secs(NMCLI_TIMEOUT_SECS),
+        Command::new("nmcli")
+            .args(["-t", "-f", "UUID,NAME,TYPE", "con", "show"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await
+    {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            warn!("Failed to execute nmcli: {}", e);
+            return None;
+        }
+        Err(_) => {
+            warn!("nmcli timed out after {} seconds", NMCLI_TIMEOUT_SECS);
+            return None;
+        }
+    };
+
+    if !output.status.success() {
+        debug!("nmcli returned non-zero exit status");
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        // Format: UUID:NAME:TYPE
+        // Handle connection names that contain colons by splitting from the right
+        // rsplitn returns parts in reverse order: [TYPE, NAME, UUID]
+        let parts: Vec<&str> = line.rsplitn(3, ':').collect();
+        if parts.len() >= 3 {
+            let conn_type = parts[0];  // Last field (TYPE)
+            let name = parts[1];       // Middle field (NAME)
+            let uuid = parts[2];       // First field (UUID)
+
+            if conn_type == "vpn" && name == connection_name {
+                debug!("Found UUID for {}: {}", connection_name, uuid);
+                return Some(uuid.to_string());
+            }
+        }
+    }
+
+    debug!("No UUID found for connection: {}", connection_name);
+    None
+}
+
 /// Connect to a VPN via NetworkManager
 async fn nm_connect(connection_name: &str) -> Result<(), String> {
     info!("Activating VPN connection: {}", connection_name);
@@ -883,6 +945,43 @@ async fn nm_connect(connection_name: &str) -> Result<(), String> {
 async fn nm_disconnect(connection_name: &str) -> Result<(), String> {
     info!("Deactivating VPN connection: {}", connection_name);
 
+    // First, try to get UUID for more reliable disconnection
+    let uuid_opt = nm_get_vpn_uuid(connection_name).await;
+    
+    // Try disconnecting by UUID first (more reliable)
+    if let Some(uuid) = uuid_opt {
+        debug!("Attempting disconnect by UUID: {}", uuid);
+        let output_result = timeout(
+            Duration::from_secs(NMCLI_TIMEOUT_SECS),
+            Command::new("nmcli")
+                .args(["con", "down", "uuid", &uuid])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output(),
+        )
+        .await;
+        
+        match output_result {
+            Ok(Ok(output)) => {
+                if output.status.success() {
+                    info!("VPN deactivation by UUID successful");
+                    return Ok(());
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    warn!("Disconnect by UUID failed: {}, trying by name", stderr.trim());
+                }
+            }
+            Ok(Err(e)) => {
+                warn!("Failed to execute nmcli with UUID: {}, trying by name", e);
+            }
+            Err(_) => {
+                warn!("nmcli timed out after {} seconds with UUID, trying by name", NMCLI_TIMEOUT_SECS);
+            }
+        }
+    }
+
+    // Fallback: Try disconnecting by name
+    debug!("Attempting disconnect by name: {}", connection_name);
     let output = match timeout(
         Duration::from_secs(NMCLI_TIMEOUT_SECS),
         Command::new("nmcli")
@@ -907,11 +1006,76 @@ async fn nm_disconnect(connection_name: &str) -> Result<(), String> {
     };
 
     if output.status.success() {
-        info!("VPN deactivation successful");
+        info!("VPN deactivation by name successful");
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let msg = format!("nmcli failed: {}", stderr.trim());
+        warn!("Disconnect by name also failed: {}", stderr.trim());
+        
+        // Last resort: Try device-level disconnect
+        // First, find the VPN device
+        debug!("Attempting device-level disconnect as last resort");
+        let dev_output = match timeout(
+            Duration::from_secs(NMCLI_TIMEOUT_SECS),
+            Command::new("nmcli")
+                .args(["-t", "-f", "DEVICE,TYPE", "dev"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output(),
+        )
+        .await
+        {
+            Ok(Ok(output)) => output,
+            Ok(Err(e)) => {
+                let msg = format!("Failed to list devices: {}", e);
+                error!("{}", msg);
+                return Err(msg);
+            }
+            Err(_) => {
+                let msg = "Device list timed out".to_string();
+                error!("{}", msg);
+                return Err(msg);
+            }
+        };
+
+        if dev_output.status.success() {
+            let dev_stdout = String::from_utf8_lossy(&dev_output.stdout);
+            for line in dev_stdout.lines() {
+                let parts: Vec<&str> = line.split(':').collect();
+                if parts.len() >= 2 && parts[1] == "tun" {
+                    let device = parts[0];
+                    debug!("Found VPN device: {}, attempting disconnect", device);
+                    
+                    let disconnect_output = match timeout(
+                        Duration::from_secs(NMCLI_TIMEOUT_SECS),
+                        Command::new("nmcli")
+                            .args(["dev", "disconnect", device])
+                            .stdout(Stdio::piped())
+                            .stderr(Stdio::piped())
+                            .output(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(output)) => output,
+                        Ok(Err(e)) => {
+                            warn!("Failed to disconnect device: {}", e);
+                            continue;
+                        }
+                        Err(_) => {
+                            warn!("Device disconnect timed out");
+                            continue;
+                        }
+                    };
+                    
+                    if disconnect_output.status.success() {
+                        info!("VPN device disconnect successful");
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        
+        let msg = format!("All disconnect methods failed for: {}", connection_name);
         error!("{}", msg);
         Err(msg)
     }
@@ -1001,23 +1165,69 @@ fn extract_short_name(full_name: &str) -> &str {
     full_name.split('-').next().unwrap_or(full_name)
 }
 
-/// Create a solid color icon in ARGB32 format
+/// Icon type for status indication
+#[derive(Debug, Clone, Copy)]
+enum IconType {
+    Connected,
+    Connecting,
+    Disconnected,
+    Failed,
+}
+
+/// Create a status icon with recognizable symbol in ARGB32 format
 ///
 /// Returns icons in common sizes (16x16, 24x24, 32x32) for different DPI scales.
 /// The data is in ARGB32 format with network byte order (big endian).
-fn create_colored_icon(r: u8, g: u8, b: u8, a: u8) -> Vec<ksni::Icon> {
+/// Each icon type has a distinctive symbol:
+/// - Connected: Green circle with white checkmark
+/// - Connecting: Yellow circle with dots
+/// - Disconnected: Gray circle with white dash
+/// - Failed: Red circle with white X
+fn create_status_icon(icon_type: IconType) -> Vec<ksni::Icon> {
     let sizes = [16, 24, 32];
-    let pixel = [a, r, g, b]; // ARGB32 in network byte order
     
     sizes
         .iter()
         .map(|&size| {
-            let pixel_count = (size * size) as usize;
-            let mut data = Vec::with_capacity(pixel_count * 4);
+            let mut data = Vec::with_capacity((size * size * 4) as usize);
             
-            // Efficiently fill with repeated ARGB pixel data
-            for _ in 0..pixel_count {
-                data.extend_from_slice(&pixel);
+            // Choose colors based on icon type
+            let (bg_r, bg_g, bg_b, fg_r, fg_g, fg_b) = match icon_type {
+                IconType::Connected => (0, 200, 0, 255, 255, 255),      // Green bg, white fg
+                IconType::Connecting => (255, 191, 0, 80, 80, 80),      // Yellow bg, dark fg
+                IconType::Disconnected => (128, 128, 128, 255, 255, 255), // Gray bg, white fg
+                IconType::Failed => (220, 0, 0, 255, 255, 255),         // Red bg, white fg
+            };
+            
+            let bg_pixel = [255u8, bg_r, bg_g, bg_b]; // ARGB32
+            let fg_pixel = [255u8, fg_r, fg_g, fg_b]; // ARGB32
+            let transparent = [0u8, 0, 0, 0];
+            
+            let center = size / 2;
+            let radius = (size as f32 * 0.4) as i32;
+            
+            for y in 0..size {
+                for x in 0..size {
+                    let dx = x - center;
+                    let dy = y - center;
+                    let dist_sq = dx * dx + dy * dy;
+                    let radius_sq = radius * radius;
+                    
+                    // Draw circle background
+                    if dist_sq <= radius_sq {
+                        // Inside circle - draw the symbol
+                        let pixel = match icon_type {
+                            IconType::Connected => draw_checkmark(x, y, size, center, &fg_pixel, &bg_pixel),
+                            IconType::Connecting => draw_dots(x, y, size, center, &fg_pixel, &bg_pixel),
+                            IconType::Disconnected => draw_dash(x, y, size, center, &fg_pixel, &bg_pixel),
+                            IconType::Failed => draw_x(x, y, size, center, &fg_pixel, &bg_pixel),
+                        };
+                        data.extend_from_slice(&pixel);
+                    } else {
+                        // Outside circle - transparent
+                        data.extend_from_slice(&transparent);
+                    }
+                }
             }
             
             ksni::Icon {
@@ -1027,6 +1237,99 @@ fn create_colored_icon(r: u8, g: u8, b: u8, a: u8) -> Vec<ksni::Icon> {
             }
         })
         .collect()
+}
+
+/// Draw a checkmark symbol
+fn draw_checkmark(x: i32, y: i32, size: i32, center: i32, fg: &[u8; 4], bg: &[u8; 4]) -> [u8; 4] {
+    let rel_x = x - center;
+    let rel_y = y - center;
+    let scale = size as f32 / 32.0;
+    
+    // Checkmark is composed of two diagonal strokes that meet at the bottom
+    // Left stroke: descends from upper-left to bottom-center with slope ~1.2
+    // Right stroke: ascends from bottom-center to upper-right with slope ~-0.8
+    // The magic numbers (1.2, 0.8) define the slopes, and 2.0 defines stroke thickness
+    let on_left_stroke = rel_x >= (-5.0 * scale) as i32 && rel_x <= (-3.0 * scale) as i32
+        && rel_y >= -scale as i32 && rel_y <= (5.0 * scale) as i32
+        && (rel_y as f32 + rel_x as f32 * 1.2).abs() < 2.0 * scale;
+    
+    let on_right_stroke = rel_x >= (-3.0 * scale) as i32 && rel_x <= (7.0 * scale) as i32
+        && rel_y >= (-7.0 * scale) as i32 && rel_y <= (5.0 * scale) as i32
+        && (rel_y as f32 - rel_x as f32 * 0.8 + 3.0 * scale).abs() < 2.0 * scale;
+    
+    if on_left_stroke || on_right_stroke {
+        *fg
+    } else {
+        *bg
+    }
+}
+
+/// Draw three dots in a row
+fn draw_dots(x: i32, y: i32, size: i32, center: i32, fg: &[u8; 4], bg: &[u8; 4]) -> [u8; 4] {
+    let rel_x = x - center;
+    let rel_y = y - center;
+    let scale = size as f32 / 32.0;
+    // Dot radius of 2.0 creates visible but not overwhelming dots
+    let dot_radius = (2.0 * scale) as i32;
+    
+    // Three dots spaced evenly: left (-6), center (0), right (+6)
+    let dots = [
+        (-6.0 * scale) as i32,
+        0,
+        (6.0 * scale) as i32,
+    ];
+    
+    for dot_x in &dots {
+        let dx = rel_x - dot_x;
+        let dy = rel_y;
+        if dx * dx + dy * dy <= dot_radius * dot_radius {
+            return *fg;
+        }
+    }
+    
+    *bg
+}
+
+/// Draw a horizontal dash
+fn draw_dash(x: i32, y: i32, size: i32, center: i32, fg: &[u8; 4], bg: &[u8; 4]) -> [u8; 4] {
+    let rel_x = x - center;
+    let rel_y = y - center;
+    let scale = size as f32 / 32.0;
+    
+    // Dash is a horizontal bar: width 8.0 for visibility, height 2.0 for clean line
+    let dash_width = (8.0 * scale) as i32;
+    let dash_height = (2.0 * scale) as i32;
+    
+    if rel_x.abs() <= dash_width && rel_y.abs() <= dash_height {
+        *fg
+    } else {
+        *bg
+    }
+}
+
+/// Draw an X symbol
+fn draw_x(x: i32, y: i32, size: i32, center: i32, fg: &[u8; 4], bg: &[u8; 4]) -> [u8; 4] {
+    let rel_x = x - center;
+    let rel_y = y - center;
+    let scale = size as f32 / 32.0;
+    // Thickness 2.0 provides clear X strokes without being too bold
+    let thickness = (2.0 * scale) as i32;
+    
+    // Diagonal from top-left to bottom-right
+    let on_diag1 = (rel_x - rel_y).abs() <= thickness
+        && rel_x.abs() <= (6.0 * scale) as i32
+        && rel_y.abs() <= (6.0 * scale) as i32;
+    
+    // Diagonal from top-right to bottom-left
+    let on_diag2 = (rel_x + rel_y).abs() <= thickness
+        && rel_x.abs() <= (6.0 * scale) as i32
+        && rel_y.abs() <= (6.0 * scale) as i32;
+    
+    if on_diag1 || on_diag2 {
+        *fg
+    } else {
+        *bg
+    }
 }
 
 /// System tray interface
@@ -1100,19 +1403,19 @@ impl Tray for VpnTray {
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-        // Return colored icons for glanceable status
+        // Return status icons with recognizable symbols
         let state = self.cached_state.read().unwrap();
         match state.state {
-            // Green for connected
-            VpnState::Connected { .. } => create_colored_icon(0, 200, 0, 255),
-            // Amber/yellow for connecting/reconnecting
+            // Green circle with checkmark for connected
+            VpnState::Connected { .. } => create_status_icon(IconType::Connected),
+            // Yellow circle with dots for connecting/reconnecting
             VpnState::Connecting { .. } | VpnState::Reconnecting { .. } => {
-                create_colored_icon(255, 191, 0, 255)
+                create_status_icon(IconType::Connecting)
             }
-            // Red for disconnected/failed
-            VpnState::Failed { .. } | VpnState::Disconnected => {
-                create_colored_icon(220, 0, 0, 255)
-            }
+            // Red circle with X for failed
+            VpnState::Failed { .. } => create_status_icon(IconType::Failed),
+            // Gray circle with dash for disconnected
+            VpnState::Disconnected => create_status_icon(IconType::Disconnected),
         }
     }
 
