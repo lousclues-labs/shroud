@@ -332,6 +332,8 @@ impl VpnSupervisor {
                                     server: connection_name.to_string(),
                                 };
                             }
+                            // Force immediate sync with NetworkManager after successful connection
+                            self.sync_with_nm().await;
                             self.update_tray().await;
                             self.show_notification(
                                 "VPN Connected",
@@ -402,6 +404,8 @@ impl VpnSupervisor {
                         let mut state = self.state.write().await;
                         state.state = VpnState::Disconnected;
                     }
+                    // Force immediate sync after disconnect to ensure state is accurate
+                    self.sync_with_nm().await;
                     self.update_tray().await;
                     self.show_notification("VPN Disconnected", "VPN connection closed");
                 }
@@ -704,7 +708,13 @@ impl VpnSupervisor {
     /// Update the tray icon
     async fn update_tray(&self) {
         if let Some(handle) = self.tray_handle.lock().await.as_ref() {
-            handle.update(|_tray: &mut VpnTray| {});
+            // Force a tray refresh by calling update
+            // The tray will re-read cached_state when its methods are called
+            handle.update(|tray: &mut VpnTray| {
+                // Trigger icon and menu refresh by accessing the tray
+                // This forces ksni to re-query icon_pixmap, title, and menu
+                let _ = &tray.cached_state;
+            });
         }
     }
 
