@@ -54,6 +54,9 @@ const MAX_RETRY_ATTEMPTS: u32 = 5;
 /// Delay between reconnection attempts in seconds
 const RETRY_DELAY_SECS: u64 = 5;
 
+/// Delay after killing OpenVPN process to allow for cleanup (milliseconds)
+const KILL_CLEANUP_DELAY_MS: u64 = 100;
+
 /// Pre-compiled regex for extracting server identifiers from filenames
 /// Matches patterns like "us8399", "uk1234", "de5678" (2 letters + digits)
 static SERVER_NAME_REGEX: LazyLock<Regex> =
@@ -282,14 +285,21 @@ impl VpnActor {
                 }
             }
 
-            // Handle app-managed connections: send SIGTERM and wait for exit
+            // Handle app-managed connections: first try to terminate the pkexec wrapper
             if let Some(mut child) = self.child.take() {
                 if let Some(pid) = child.id() {
-                    debug!("Sending SIGTERM to OpenVPN process (PID: {}) for server switch", pid);
+                    debug!("Sending SIGTERM to pkexec process (PID: {}) for server switch", pid);
                     let _ = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
                 }
-                debug!("Waiting for old VPN process to exit");
+                debug!("Waiting for old pkexec process to exit");
                 let _ = child.wait().await;
+            }
+
+            // CRITICAL: pkexec does not forward signals to its children.
+            // The openvpn process running as root will continue even after pkexec dies.
+            // We must explicitly kill the openvpn process using pkexec pkill.
+            if !is_external {
+                self.kill_openvpn_process().await;
             }
 
             debug!("Old VPN connection terminated, proceeding with new connection");
@@ -371,13 +381,18 @@ impl VpnActor {
                     .await;
             }
         } else {
-            // Send SIGTERM to the child process (app-managed connection)
+            // First, try to terminate the child process (the pkexec wrapper)
             if let Some(ref child) = self.child {
                 if let Some(pid) = child.id() {
-                    debug!("Sending SIGTERM to OpenVPN process (PID: {})", pid);
+                    debug!("Sending SIGTERM to pkexec process (PID: {})", pid);
                     let _ = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
                 }
             }
+
+            // CRITICAL: pkexec does not forward signals to its children.
+            // The openvpn process running as root will continue even after pkexec dies.
+            // We must explicitly kill the openvpn process using pkexec pkill.
+            self.kill_openvpn_process().await;
         }
 
         if intentional {
@@ -547,6 +562,48 @@ impl VpnActor {
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
+    }
+
+    /// Kill any running OpenVPN process using pkexec pkill
+    ///
+    /// This is necessary because pkexec does not forward signals to its children.
+    /// When we kill the pkexec process, the openvpn process running as root becomes
+    /// orphaned and continues running. This method uses pkexec pkill to directly
+    /// terminate the openvpn process with root privileges.
+    ///
+    /// Note: This will kill ALL openvpn processes on the system, not just ones
+    /// started by this application. This is intentional - this application is
+    /// designed to be the sole manager of OpenVPN connections, and any other
+    /// openvpn processes would conflict with new connections anyway.
+    async fn kill_openvpn_process(&self) {
+        debug!("Killing any running OpenVPN processes with pkexec pkill");
+        let result = Command::new("pkexec")
+            .arg("pkill")
+            .arg("-x")  // Exact match on process name
+            .arg("openvpn")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        match result {
+            Ok(status) => {
+                if status.success() {
+                    debug!("Successfully killed OpenVPN process(es)");
+                } else {
+                    // pkill exit codes: 0 = matched, 1 = no match, 2 = syntax error, 3 = fatal
+                    // Exit code 1 (no processes matched) is expected and acceptable
+                    debug!("pkill returned non-zero (exit code {}), likely no openvpn processes running",
+                           status.code().unwrap_or(-1));
+                }
+            }
+            Err(e) => {
+                warn!("Failed to execute pkexec pkill: {}", e);
+            }
+        }
+
+        // Brief delay to ensure process cleanup completes
+        sleep(Duration::from_millis(KILL_CLEANUP_DELAY_MS)).await;
     }
 
     /// Toggle auto-reconnect feature
