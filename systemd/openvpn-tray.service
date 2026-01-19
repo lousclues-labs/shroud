@@ -1,0 +1,18 @@
+[Unit]
+Description=OpenVPN System Tray Application
+Documentation=https://github.com/loujr/archtools
+After=graphical-session.target
+Requires=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/openvpn-tray
+Restart=on-failure
+RestartSec=5
+
+# Pass through session environment for display and D-Bus access
+# This allows the service to inherit DISPLAY, WAYLAND_DISPLAY, etc.
+PassEnvironment=DISPLAY WAYLAND_DISPLAY DBUS_SESSION_BUS_ADDRESS
+
+[Install]
+WantedBy=graphical-session.target
