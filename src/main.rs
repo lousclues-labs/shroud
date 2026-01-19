@@ -59,7 +59,7 @@ const DISCONNECT_VERIFY_MAX_ATTEMPTS: u32 = 20;
 const DISCONNECT_VERIFY_INTERVAL_MS: u64 = 500;
 
 /// Settle time after disconnect is verified before connecting to new VPN
-const POST_DISCONNECT_SETTLE_SECS: u64 = 2;
+const POST_DISCONNECT_SETTLE_SECS: u64 = 3;
 
 /// Interval for syncing cached state to tray in milliseconds
 const CACHE_SYNC_INTERVAL_MS: u64 = 50;
@@ -841,6 +841,57 @@ async fn nm_list_vpn_connections() -> Vec<String> {
     connections
 }
 
+/// Get the UUID of a VPN connection by name
+async fn nm_get_vpn_uuid(connection_name: &str) -> Option<String> {
+    debug!("Getting UUID for VPN connection: {}", connection_name);
+
+    let output = match timeout(
+        Duration::from_secs(NMCLI_TIMEOUT_SECS),
+        Command::new("nmcli")
+            .args(["-t", "-f", "UUID,NAME,TYPE", "con", "show"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output(),
+    )
+    .await
+    {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            warn!("Failed to execute nmcli: {}", e);
+            return None;
+        }
+        Err(_) => {
+            warn!("nmcli timed out after {} seconds", NMCLI_TIMEOUT_SECS);
+            return None;
+        }
+    };
+
+    if !output.status.success() {
+        debug!("nmcli returned non-zero exit status");
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        // Format: UUID:NAME:TYPE
+        // Handle connection names that contain colons by splitting from the right
+        let parts: Vec<&str> = line.rsplitn(3, ':').collect();
+        if parts.len() >= 3 {
+            let conn_type = parts[0];
+            let name = parts[1];
+            let uuid = parts[2];
+
+            if conn_type == "vpn" && name == connection_name {
+                debug!("Found UUID for {}: {}", connection_name, uuid);
+                return Some(uuid.to_string());
+            }
+        }
+    }
+
+    debug!("No UUID found for connection: {}", connection_name);
+    None
+}
+
 /// Connect to a VPN via NetworkManager
 async fn nm_connect(connection_name: &str) -> Result<(), String> {
     info!("Activating VPN connection: {}", connection_name);
@@ -883,6 +934,43 @@ async fn nm_connect(connection_name: &str) -> Result<(), String> {
 async fn nm_disconnect(connection_name: &str) -> Result<(), String> {
     info!("Deactivating VPN connection: {}", connection_name);
 
+    // First, try to get UUID for more reliable disconnection
+    let uuid_opt = nm_get_vpn_uuid(connection_name).await;
+    
+    // Try disconnecting by UUID first (more reliable)
+    if let Some(uuid) = uuid_opt {
+        debug!("Attempting disconnect by UUID: {}", uuid);
+        let output_result = timeout(
+            Duration::from_secs(NMCLI_TIMEOUT_SECS),
+            Command::new("nmcli")
+                .args(["con", "down", "uuid", &uuid])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output(),
+        )
+        .await;
+        
+        match output_result {
+            Ok(Ok(output)) => {
+                if output.status.success() {
+                    info!("VPN deactivation by UUID successful");
+                    return Ok(());
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    warn!("Disconnect by UUID failed: {}, trying by name", stderr.trim());
+                }
+            }
+            Ok(Err(e)) => {
+                warn!("Failed to execute nmcli with UUID: {}, trying by name", e);
+            }
+            Err(_) => {
+                warn!("nmcli timed out after {} seconds with UUID, trying by name", NMCLI_TIMEOUT_SECS);
+            }
+        }
+    }
+
+    // Fallback: Try disconnecting by name
+    debug!("Attempting disconnect by name: {}", connection_name);
     let output = match timeout(
         Duration::from_secs(NMCLI_TIMEOUT_SECS),
         Command::new("nmcli")
@@ -907,11 +995,76 @@ async fn nm_disconnect(connection_name: &str) -> Result<(), String> {
     };
 
     if output.status.success() {
-        info!("VPN deactivation successful");
+        info!("VPN deactivation by name successful");
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let msg = format!("nmcli failed: {}", stderr.trim());
+        warn!("Disconnect by name also failed: {}", stderr.trim());
+        
+        // Last resort: Try device-level disconnect
+        // First, find the VPN device
+        debug!("Attempting device-level disconnect as last resort");
+        let dev_output = match timeout(
+            Duration::from_secs(NMCLI_TIMEOUT_SECS),
+            Command::new("nmcli")
+                .args(["-t", "-f", "DEVICE,TYPE", "dev"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output(),
+        )
+        .await
+        {
+            Ok(Ok(output)) => output,
+            Ok(Err(e)) => {
+                let msg = format!("Failed to list devices: {}", e);
+                error!("{}", msg);
+                return Err(msg);
+            }
+            Err(_) => {
+                let msg = format!("Device list timed out");
+                error!("{}", msg);
+                return Err(msg);
+            }
+        };
+
+        if dev_output.status.success() {
+            let dev_stdout = String::from_utf8_lossy(&dev_output.stdout);
+            for line in dev_stdout.lines() {
+                let parts: Vec<&str> = line.split(':').collect();
+                if parts.len() >= 2 && parts[1] == "tun" {
+                    let device = parts[0];
+                    debug!("Found VPN device: {}, attempting disconnect", device);
+                    
+                    let disconnect_output = match timeout(
+                        Duration::from_secs(NMCLI_TIMEOUT_SECS),
+                        Command::new("nmcli")
+                            .args(["dev", "disconnect", device])
+                            .stdout(Stdio::piped())
+                            .stderr(Stdio::piped())
+                            .output(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(output)) => output,
+                        Ok(Err(e)) => {
+                            warn!("Failed to disconnect device: {}", e);
+                            continue;
+                        }
+                        Err(_) => {
+                            warn!("Device disconnect timed out");
+                            continue;
+                        }
+                    };
+                    
+                    if disconnect_output.status.success() {
+                        info!("VPN device disconnect successful");
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        
+        let msg = format!("All disconnect methods failed for: {}", connection_name);
         error!("{}", msg);
         Err(msg)
     }
