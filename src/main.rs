@@ -805,7 +805,8 @@ impl Tray for VpnTray {
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
         let state = self.cached_state.read().unwrap();
-        let color: (u8, u8, u8, u8) = match state.state {
+        // Define colors as (Red, Green, Blue, Alpha)
+        let (r, g, b, a) = match state.state {
             VpnState::Connected { .. } => (0, 200, 0, 255),        // Bright Green
             VpnState::Connecting { .. } => (255, 200, 0, 255),     // Yellow
             VpnState::Reconnecting { .. } => (255, 165, 0, 255),   // Orange
@@ -817,12 +818,12 @@ impl Tray for VpnTray {
         let size = 24i32;
         let mut data = Vec::with_capacity((size * size * 4) as usize);
 
-        // ARGB format (Alpha, Red, Green, Blue)
+        // StatusNotifierItem expects ARGB format (Alpha, Red, Green, Blue)
         for _ in 0..(size * size) {
-            data.push(color.3);  // Alpha
-            data.push(color.0);  // Red
-            data.push(color.1);  // Green
-            data.push(color.2);  // Blue
+            data.push(a);  // Alpha
+            data.push(r);  // Red
+            data.push(g);  // Green
+            data.push(b);  // Blue
         }
 
         vec![ksni::Icon {
