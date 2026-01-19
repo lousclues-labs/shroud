@@ -1269,9 +1269,10 @@ fn draw_dots(x: i32, y: i32, size: i32, center: i32, fg: &[u8; 4], bg: &[u8; 4])
     let rel_x = x - center;
     let rel_y = y - center;
     let scale = size as f32 / 32.0;
+    // Dot radius of 2.0 creates visible but not overwhelming dots
     let dot_radius = (2.0 * scale) as i32;
     
-    // Three dots: left, center, right
+    // Three dots spaced evenly: left (-6), center (0), right (+6)
     let dots = [
         (-6.0 * scale) as i32,
         0,
@@ -1295,6 +1296,7 @@ fn draw_dash(x: i32, y: i32, size: i32, center: i32, fg: &[u8; 4], bg: &[u8; 4])
     let rel_y = y - center;
     let scale = size as f32 / 32.0;
     
+    // Dash is a horizontal bar: width 8.0 for visibility, height 2.0 for clean line
     let dash_width = (8.0 * scale) as i32;
     let dash_height = (2.0 * scale) as i32;
     
@@ -1310,6 +1312,7 @@ fn draw_x(x: i32, y: i32, size: i32, center: i32, fg: &[u8; 4], bg: &[u8; 4]) ->
     let rel_x = x - center;
     let rel_y = y - center;
     let scale = size as f32 / 32.0;
+    // Thickness 2.0 provides clear X strokes without being too bold
     let thickness = (2.0 * scale) as i32;
     
     // Diagonal from top-left to bottom-right
