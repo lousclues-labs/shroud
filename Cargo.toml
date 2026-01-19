@@ -19,7 +19,7 @@ readme = "README.md"
 
 [dependencies]
 # Native KDE/SNI tray support - do NOT use tray-icon or libappindicator
-ksni = "0.2.2"
+ksni = "0.3.3"
 
 # Async runtime with required features for process management
 tokio = { version = "1.45.1", features = ["rt-multi-thread", "process", "fs", "time", "signal", "sync", "macros"] }
@@ -35,3 +35,7 @@ libc = "0.2.172"
 
 # Unix-specific functionality for process management
 nix = { version = "0.29.0", features = ["signal", "process"] }
+
+# Structured logging with RUST_LOG environment variable support
+log = "0.4.29"
+env_logger = "0.11.0"

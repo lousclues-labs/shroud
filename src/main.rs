@@ -23,7 +23,8 @@
 //! cargo build --release
 //! ```
 
-use ksni::{menu::StandardItem, Icon, MenuItem, Tray, TrayService};
+use ksni::{menu::StandardItem, Icon, MenuItem, Tray, TrayMethods};
+use log::{debug, error, info, warn};
 use nix::sys::signal::{self, Signal};
 use nix::unistd::Pid;
 use notify_rust::Notification;
@@ -33,10 +34,13 @@ use std::process::Stdio;
 use std::sync::{Arc, LazyLock};
 use tokio::process::{Child, Command};
 use tokio::sync::{mpsc, Mutex, RwLock};
-use tokio::time::{sleep, Duration};
+use tokio::time::{sleep, timeout, Duration};
 
 /// Interval for polling NetworkManager state in seconds
 const NM_POLL_INTERVAL_SECS: u64 = 5;
+
+/// Timeout for nmcli commands in seconds
+const NMCLI_TIMEOUT_SECS: u64 = 10;
 
 /// Path to the OpenVPN configuration directory
 const OVPN_CONFIG_DIR: &str = "/etc/openvpn";
@@ -178,6 +182,8 @@ impl VpnActor {
 
     /// Run the actor's main loop
     pub async fn run(mut self) {
+        info!("VPN actor starting");
+        
         // Initial server refresh and NM state sync
         self.refresh_servers().await;
         self.sync_nm_state().await;
@@ -189,6 +195,7 @@ impl VpnActor {
             tokio::select! {
                 // Handle commands from the tray
                 Some(cmd) = self.rx.recv() => {
+                    debug!("Received command: {:?}", cmd);
                     match cmd {
                         VpnCommand::Connect(server) => {
                             self.handle_connect(&server).await;
@@ -210,6 +217,7 @@ impl VpnActor {
 
                 // Poll NetworkManager state periodically
                 _ = nm_poll_interval.tick() => {
+                    debug!("Polling NetworkManager state");
                     self.sync_nm_state().await;
                 }
 
@@ -232,11 +240,14 @@ impl VpnActor {
 
     /// Handle connection to a server
     async fn handle_connect(&mut self, server: &str) {
+        info!("Connecting to server: {}", server);
+        
         // If already connected to a different server, disconnect first
         {
             let state = self.state.read().await;
             if let Some(current) = state.state.server_name() {
                 if current != server {
+                    debug!("Switching from {} to {}", current, server);
                     drop(state);
                     self.handle_disconnect(false).await;
                     // Wait for the process to fully exit
@@ -262,11 +273,13 @@ impl VpnActor {
         match self.start_openvpn(server).await {
             Ok(child) => {
                 self.child = Some(child);
+                debug!("OpenVPN process started, waiting for connection");
                 // Give OpenVPN some time to establish connection
                 sleep(Duration::from_secs(3)).await;
 
                 // Check if process is still running (connection likely successful)
                 if self.is_child_running() {
+                    info!("Connected to {}", server);
                     let mut state = self.state.write().await;
                     state.state = VpnState::Connected {
                         server: server.to_string(),
@@ -278,7 +291,7 @@ impl VpnActor {
                 }
             }
             Err(e) => {
-                eprintln!("Failed to start OpenVPN: {}", e);
+                error!("Failed to start OpenVPN: {}", e);
                 let mut state = self.state.write().await;
                 state.state = VpnState::Disconnected;
                 drop(state);
@@ -290,6 +303,8 @@ impl VpnActor {
 
     /// Handle disconnection
     async fn handle_disconnect(&mut self, intentional: bool) {
+        info!("Disconnecting (intentional: {})", intentional);
+        
         // Get current state to determine if this is an external connection
         let (is_external, nm_conn_name) = {
             let state = self.state.read().await;
@@ -308,6 +323,7 @@ impl VpnActor {
         // If external connection, disconnect via nmcli
         if is_external {
             if let Some(conn_name) = nm_conn_name {
+                debug!("Disconnecting external NM connection: {}", conn_name);
                 let _ = Command::new("nmcli")
                     .arg("con")
                     .arg("down")
@@ -321,6 +337,7 @@ impl VpnActor {
             // Send SIGTERM to the child process (app-managed connection)
             if let Some(ref child) = self.child {
                 if let Some(pid) = child.id() {
+                    debug!("Sending SIGTERM to OpenVPN process (PID: {})", pid);
                     let _ = signal::kill(Pid::from_raw(pid as i32), Signal::SIGTERM);
                 }
             }
@@ -344,6 +361,8 @@ impl VpnActor {
 
     /// Handle unexpected process exit (for auto-reconnect)
     async fn handle_process_exit(&mut self) {
+        debug!("OpenVPN process exited");
+        
         let (should_reconnect, server) = {
             let state = self.state.read().await;
 
@@ -360,6 +379,11 @@ impl VpnActor {
                 && state.auto_reconnect
                 && is_app_connection;
 
+            debug!(
+                "Process exit analysis: intentional={}, auto_reconnect={}, is_app={}, should_reconnect={}",
+                state.intentional_disconnect, state.auto_reconnect, is_app_connection, should_reconnect
+            );
+
             let server = state.state.server_name().map(|s| s.to_string());
             (should_reconnect, server)
         };
@@ -368,11 +392,13 @@ impl VpnActor {
 
         if should_reconnect {
             if let Some(server) = server {
+                info!("Initiating auto-reconnect to {}", server);
                 self.attempt_reconnect(&server).await;
             }
         } else {
             let mut state = self.state.write().await;
             if !state.intentional_disconnect {
+                debug!("Setting state to Disconnected (no auto-reconnect)");
                 state.state = VpnState::Disconnected;
                 drop(state);
                 self.update_tray().await;
@@ -389,10 +415,13 @@ impl VpnActor {
             {
                 let state = self.state.read().await;
                 if state.intentional_disconnect || !state.auto_reconnect {
+                    info!("Reconnect cancelled (intentional disconnect or auto-reconnect disabled)");
                     return;
                 }
             }
 
+            info!("Reconnection attempt {}/{} to {}", attempt, MAX_RETRY_ATTEMPTS, server);
+            
             // Update state to retrying
             {
                 let mut state = self.state.write().await;
@@ -408,12 +437,14 @@ impl VpnActor {
             );
 
             // Wait before retrying
+            debug!("Waiting {} seconds before retry", RETRY_DELAY_SECS);
             sleep(Duration::from_secs(RETRY_DELAY_SECS)).await;
 
             // Check again if user disconnected during wait
             {
                 let state = self.state.read().await;
                 if state.intentional_disconnect || !state.auto_reconnect {
+                    info!("Reconnect cancelled during wait");
                     return;
                 }
             }
@@ -422,11 +453,13 @@ impl VpnActor {
             match self.start_openvpn(server).await {
                 Ok(child) => {
                     self.child = Some(child);
+                    debug!("OpenVPN process started, waiting for connection");
                     // Give OpenVPN some time to establish connection
                     sleep(Duration::from_secs(3)).await;
 
                     // Check if process is still running
                     if self.is_child_running() {
+                        info!("Reconnected successfully to {}", server);
                         let mut state = self.state.write().await;
                         state.state = VpnState::Connected {
                             server: server.to_string(),
@@ -438,11 +471,12 @@ impl VpnActor {
                         return;
                     } else {
                         // Process exited immediately, will retry
+                        warn!("OpenVPN process exited immediately, will retry");
                         self.child = None;
                     }
                 }
                 Err(e) => {
-                    eprintln!("Reconnection attempt {} failed: {}", attempt, e);
+                    error!("Reconnection attempt {} failed: {}", attempt, e);
                 }
             }
 
@@ -495,7 +529,9 @@ impl VpnActor {
 
     /// Refresh the list of available servers
     async fn refresh_servers(&mut self) {
+        debug!("Refreshing server list");
         let servers = scan_ovpn_files().await;
+        info!("Found {} VPN configuration files", servers.len());
         let mut state = self.state.write().await;
         state.servers = servers;
         drop(state);
@@ -509,10 +545,10 @@ impl VpnActor {
     /// - NM shows a VPN connected but internal state is disconnected
     /// - NM shows no VPN but internal state (external) shows connected
     async fn sync_nm_state(&mut self) {
-        // Query NM for active VPN connections
+        // Query NM for active VPN connections with timeout
         let nm_vpn = query_nm_active_vpn().await;
 
-        let needs_tray_update = {
+        let (needs_tray_update, state_change) = {
             let mut state = self.state.write().await;
 
             match (&state.state.clone(), &nm_vpn) {
@@ -526,9 +562,9 @@ impl VpnActor {
                             source: VpnSource::External,
                         };
                         state.nm_connection_name = Some(conn_name.clone());
-                        true
+                        (true, Some(format!("Detected external VPN: {}", server_name)))
                     } else {
-                        false
+                        (false, None)
                     }
                 }
 
@@ -537,14 +573,14 @@ impl VpnActor {
                 (VpnState::Connected { source: VpnSource::External, .. }, None) => {
                     state.state = VpnState::Disconnected;
                     state.nm_connection_name = None;
-                    true
+                    (true, Some("External VPN disconnected".to_string()))
                 }
 
                 // Case 3: NM shows VPN connected, we show connected (app-initiated)
                 // -> App process may have been picked up by NM, keep as App
                 (VpnState::Connected { source: VpnSource::App, .. }, Some(_)) => {
                     // No action needed, app-initiated connection still valid
-                    false
+                    (false, None)
                 }
 
                 // Case 4: NM shows different VPN than external state
@@ -555,9 +591,9 @@ impl VpnActor {
                             source: VpnSource::External,
                         };
                         state.nm_connection_name = Some(conn_name.clone());
-                        true
+                        (true, Some(format!("External VPN changed to: {}", new_server)))
                     } else {
-                        false
+                        (false, None)
                     }
                 }
 
@@ -565,20 +601,24 @@ impl VpnActor {
                 // -> Trust the internal state as we're actively managing it
                 (VpnState::Connecting(_) | VpnState::Retrying { .. }, _) => {
                     // No action during transitional states
-                    false
+                    (false, None)
                 }
 
                 // Case 6: NM shows no VPN, app shows connected (app-initiated)
                 // -> The process exit handler will deal with this
                 (VpnState::Connected { source: VpnSource::App, .. }, None) => {
                     // Let the process monitor handle this
-                    false
+                    (false, None)
                 }
 
                 // Default: No state change needed
-                _ => false,
+                _ => (false, None),
             }
         }; // state lock is released here
+
+        if let Some(change) = state_change {
+            info!("NM sync: {}", change);
+        }
 
         if needs_tray_update {
             self.update_tray().await;
@@ -589,7 +629,7 @@ impl VpnActor {
     async fn update_tray(&self) {
         let handle = self.tray_handle.lock().await;
         if let Some(ref h) = *handle {
-            h.update(|_| {});
+            let _ = h.update(|_| {}).await;
         }
     }
 
@@ -630,16 +670,30 @@ async fn scan_ovpn_files() -> Vec<String> {
 /// Uses `nmcli -t -f NAME,TYPE,STATE con show --active` to find active VPNs.
 /// Note: nmcli output format is "NAME:TYPE:STATE" but connection names can
 /// contain colons, so we parse from the end to get TYPE and STATE reliably.
+///
+/// This function has a timeout to prevent blocking on slow nmcli responses.
 async fn query_nm_active_vpn() -> Option<(String, String)> {
-    let output = Command::new("nmcli")
+    // Execute nmcli with timeout to prevent blocking
+    let nmcli_future = Command::new("nmcli")
         .args(["-t", "-f", "NAME,TYPE,STATE", "con", "show", "--active"])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output()
-        .await
-        .ok()?;
+        .output();
+
+    let output = match timeout(Duration::from_secs(NMCLI_TIMEOUT_SECS), nmcli_future).await {
+        Ok(Ok(output)) => output,
+        Ok(Err(e)) => {
+            warn!("nmcli execution failed: {}", e);
+            return None;
+        }
+        Err(_) => {
+            warn!("nmcli timed out after {} seconds", NMCLI_TIMEOUT_SECS);
+            return None;
+        }
+    };
 
     if !output.status.success() {
+        debug!("nmcli returned non-zero exit status");
         return None;
     }
 
@@ -660,6 +714,7 @@ async fn query_nm_active_vpn() -> Option<(String, String)> {
                 let name = &rest[..second_last_colon];
 
                 if conn_type == "vpn" && state == "activated" {
+                    debug!("NM reports active VPN: {}", name);
                     // Use connection name as both the connection identifier and display name
                     return Some((name.to_string(), name.to_string()));
                 }
@@ -715,6 +770,9 @@ impl VpnTray {
 }
 
 impl Tray for VpnTray {
+    /// Enable menu popup on left-click (in addition to right-click)
+    const MENU_ON_ACTIVATE: bool = true;
+
     fn id(&self) -> String {
         "openvpn-tray".to_string()
     }
@@ -898,6 +956,12 @@ impl Tray for VpnTray {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize logging from RUST_LOG environment variable
+    // Default to "info" level if not set
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+
+    info!("OpenVPN Tray starting");
+    
     // Shared state between tray and actor
     let state = Arc::new(RwLock::new(SharedState::default()));
 
@@ -910,20 +974,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create the tray
     let tray = VpnTray::new(Arc::clone(&state), tx);
 
-    // Create and spawn the tray service
-    let service = TrayService::new(tray);
-    let handle = service.handle();
+    // Spawn the tray service (ksni 0.3 API)
+    let handle = tray.spawn().await?;
     
     // Store the handle
     {
         let mut h = tray_handle.lock().await;
         *h = Some(handle);
     }
-
-    // Spawn the tray service
-    tokio::spawn(async move {
-        let _ = service.run();
-    });
 
     // Create and run the VPN actor
     let actor = VpnActor::new(Arc::clone(&state), rx, Arc::clone(&tray_handle));
@@ -935,13 +993,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::select! {
         _ = actor.run() => {}
         _ = ctrl_c => {
-            println!("\nReceived SIGINT, shutting down...");
+            info!("Received SIGINT, shutting down...");
         }
         _ = sigterm.recv() => {
-            println!("\nReceived SIGTERM, shutting down...");
+            info!("Received SIGTERM, shutting down...");
         }
     }
 
+    info!("OpenVPN Tray shutting down");
     Ok(())
 }
 
