@@ -18,7 +18,7 @@
 //! cargo build --release
 //! ```
 
-use ksni::{menu::StandardItem, MenuItem, Tray};
+use ksni::{menu::StandardItem, menu::CheckmarkItem, MenuItem, Tray};
 use log::{debug, error, info, warn};
 use notify_rust::Notification;
 use std::process::Stdio;
@@ -48,9 +48,6 @@ const RECONNECT_MAX_DELAY_SECS: u64 = 30;
 
 /// Grace period after intentional disconnect to prevent false drop detection
 const POST_DISCONNECT_GRACE_SECS: u64 = 5;
-
-/// Wait after disconnect before initiating new connection
-const POST_DISCONNECT_SETTLE_SECS: u64 = 2;
 
 /// VPN connection state
 #[derive(Debug, Clone, PartialEq)]
@@ -202,29 +199,56 @@ impl VpnSupervisor {
 
     /// Handle connection to a server
     async fn handle_connect(&mut self, connection_name: &str) {
-        info!("Connecting to: {}", connection_name);
+        info!("Connect requested: {}", connection_name);
 
-        // Check current state
-        let current_state = {
+        // Step 1: Get current state and determine what to do
+        let current_server = {
             let state = self.state.read().await;
-            state.state.clone()
+            state.state.server_name().map(|s| s.to_string())
         };
 
-        // If we're already connected to a different server, disconnect first
-        if let Some(current_server) = current_state.server_name() {
-            if current_server != connection_name {
-                info!(
-                    "Switching from {} to {}",
-                    current_server, connection_name
-                );
-                // Disconnect the old connection
-                let _ = nm_disconnect(current_server).await;
-                // Wait for resources to settle
-                sleep(Duration::from_secs(POST_DISCONNECT_SETTLE_SECS)).await;
-            }
+        // Step 2: If already connected to this server, do nothing
+        if current_server.as_deref() == Some(connection_name) {
+            info!("Already connected to {}", connection_name);
+            return;
         }
 
-        // Update state to Connecting
+        // Step 3: If connected to different server, disconnect first with verification
+        if let Some(ref current) = current_server {
+            info!(
+                "Disconnecting from {} before connecting to {}",
+                current, connection_name
+            );
+
+            // Update state to show we're transitioning
+            {
+                let mut state = self.state.write().await;
+                state.state = VpnState::Connecting {
+                    server: connection_name.to_string(),
+                };
+            }
+            self.update_tray().await;
+
+            // Disconnect and wait for it to complete
+            let disconnect_result = nm_disconnect(current).await;
+            if let Err(e) = disconnect_result {
+                warn!("Disconnect failed (continuing anyway): {}", e);
+            }
+
+            // Wait and verify disconnect completed
+            for _ in 0..10 {
+                sleep(Duration::from_millis(500)).await;
+                if nm_get_active_vpn().await.is_none() {
+                    debug!("Previous VPN disconnected successfully");
+                    break;
+                }
+            }
+
+            // Extra settle time for NetworkManager
+            sleep(Duration::from_secs(1)).await;
+        }
+
+        // Step 4: Update state to Connecting
         {
             let mut state = self.state.write().await;
             state.state = VpnState::Connecting {
@@ -232,54 +256,71 @@ impl VpnSupervisor {
             };
         }
         self.update_tray().await;
+        self.show_notification("VPN", &format!("Connecting to {}...", connection_name));
 
-        // Attempt connection via NetworkManager
-        match nm_connect(connection_name).await {
-            Ok(_) => {
-                info!("Connection command sent successfully");
-                // Wait for connection to establish
-                sleep(Duration::from_secs(CONNECTION_VERIFY_DELAY_SECS)).await;
+        // Step 5: Attempt connection with retries
+        let mut attempts = 0;
+        const MAX_CONNECT_ATTEMPTS: u32 = 3;
 
-                // Verify connection
-                if let Some(active_vpn) = nm_get_active_vpn().await {
-                    if active_vpn == connection_name {
-                        info!("Successfully connected to {}", connection_name);
-                        {
-                            let mut state = self.state.write().await;
-                            state.state = VpnState::Connected {
-                                server: connection_name.to_string(),
-                            };
+        while attempts < MAX_CONNECT_ATTEMPTS {
+            attempts += 1;
+
+            match nm_connect(connection_name).await {
+                Ok(_) => {
+                    // Wait for connection to establish
+                    sleep(Duration::from_secs(CONNECTION_VERIFY_DELAY_SECS)).await;
+
+                    // Verify connection
+                    if let Some(active) = nm_get_active_vpn().await {
+                        if active == connection_name {
+                            info!("Successfully connected to {}", connection_name);
+                            {
+                                let mut state = self.state.write().await;
+                                state.state = VpnState::Connected {
+                                    server: connection_name.to_string(),
+                                };
+                            }
+                            self.update_tray().await;
+                            self.show_notification(
+                                "VPN Connected",
+                                &format!("Connected to {}", connection_name),
+                            );
+                            return;
                         }
-                        self.update_tray().await;
-                        self.show_notification("VPN Connected", &format!("Connected to {}", connection_name));
-                        return;
                     }
-                }
 
-                // Connection verification failed
-                warn!("Connection verification failed for {}", connection_name);
-                {
-                    let mut state = self.state.write().await;
-                    state.state = VpnState::Failed {
-                        server: connection_name.to_string(),
-                        reason: "Connection verification failed".to_string(),
-                    };
+                    warn!(
+                        "Connection verification failed (attempt {}/{})",
+                        attempts, MAX_CONNECT_ATTEMPTS
+                    );
                 }
-                self.update_tray().await;
+                Err(e) => {
+                    warn!("Connection attempt {} failed: {}", attempts, e);
+                }
             }
-            Err(e) => {
-                error!("Failed to connect to {}: {}", connection_name, e);
-                {
-                    let mut state = self.state.write().await;
-                    state.state = VpnState::Failed {
-                        server: connection_name.to_string(),
-                        reason: e,
-                    };
-                }
-                self.update_tray().await;
-                self.show_notification("VPN Connection Failed", &format!("Failed to connect to {}", connection_name));
+
+            if attempts < MAX_CONNECT_ATTEMPTS {
+                sleep(Duration::from_secs(2)).await;
             }
         }
+
+        // Connection failed after all attempts
+        error!(
+            "Failed to connect to {} after {} attempts",
+            connection_name, MAX_CONNECT_ATTEMPTS
+        );
+        {
+            let mut state = self.state.write().await;
+            state.state = VpnState::Failed {
+                server: connection_name.to_string(),
+                reason: "Connection verification failed".to_string(),
+            };
+        }
+        self.update_tray().await;
+        self.show_notification(
+            "VPN Failed",
+            &format!("Could not connect to {}", connection_name),
+        );
     }
 
     /// Handle disconnect command
@@ -322,7 +363,6 @@ impl VpnSupervisor {
                 debug!("In grace period after intentional disconnect");
                 return;
             } else {
-                // Grace period expired
                 self.last_disconnect_time = None;
             }
         }
@@ -335,38 +375,100 @@ impl VpnSupervisor {
             (state.state.clone(), state.auto_reconnect)
         };
 
-        match (&current_state, active_vpn) {
-            // We think we're connected, but NM shows nothing - connection dropped!
+        let mut needs_tray_update = false;
+
+        match (&current_state, &active_vpn) {
+            // Case 1: We think we're connected, but NM shows nothing - DROP!
             (VpnState::Connected { server }, None) => {
                 warn!("Connection to {} dropped unexpectedly", server);
-                
+
                 if auto_reconnect {
                     info!("Auto-reconnect enabled, attempting to reconnect");
                     let server_clone = server.clone();
                     self.attempt_reconnect(&server_clone, 1).await;
                 } else {
-                    info!("Auto-reconnect disabled, staying disconnected");
                     {
                         let mut state = self.state.write().await;
                         state.state = VpnState::Disconnected;
                     }
-                    self.update_tray().await;
+                    needs_tray_update = true;
                     self.show_notification("VPN Disconnected", "Connection dropped");
                 }
             }
-            // We're disconnected but NM shows a VPN - external connection
+
+            // Case 2: We think we're connected to X, but NM shows Y - external switch
+            (VpnState::Connected { server: our_server }, Some(nm_server))
+                if our_server != nm_server =>
+            {
+                info!(
+                    "VPN changed externally from {} to {}",
+                    our_server, nm_server
+                );
+                {
+                    let mut state = self.state.write().await;
+                    state.state = VpnState::Connected {
+                        server: nm_server.clone(),
+                    };
+                }
+                needs_tray_update = true;
+            }
+
+            // Case 3: We're disconnected but NM shows a VPN - external connection
             (VpnState::Disconnected, Some(vpn_name)) => {
                 info!("Detected external VPN connection: {}", vpn_name);
                 {
                     let mut state = self.state.write().await;
-                    state.state = VpnState::Connected { server: vpn_name };
+                    state.state = VpnState::Connected {
+                        server: vpn_name.clone(),
+                    };
                 }
-                self.update_tray().await;
+                needs_tray_update = true;
             }
-            // We're in a stable state and NM agrees
+
+            // Case 4: We're connecting and NM shows the target connected - success!
+            (VpnState::Connecting { server: target }, Some(active)) if target == active => {
+                info!("Connection to {} confirmed by NM sync", target);
+                {
+                    let mut state = self.state.write().await;
+                    state.state = VpnState::Connected {
+                        server: target.clone(),
+                    };
+                }
+                needs_tray_update = true;
+            }
+
+            // Case 5: We're in Failed state but NM shows connected - recovered!
+            (VpnState::Failed { .. }, Some(vpn_name)) => {
+                info!("VPN recovered, now connected to {}", vpn_name);
+                {
+                    let mut state = self.state.write().await;
+                    state.state = VpnState::Connected {
+                        server: vpn_name.clone(),
+                    };
+                }
+                needs_tray_update = true;
+            }
+
+            // Case 6: NM shows nothing, we show disconnected - all good
+            (VpnState::Disconnected, None) => {
+                debug!("State synchronized: disconnected");
+            }
+
+            // Case 7: NM shows same as us - all good
+            (VpnState::Connected { server: our_server }, Some(nm_server))
+                if our_server == nm_server =>
+            {
+                debug!("State synchronized: connected to {}", our_server);
+            }
+
+            // Other cases: transitional states, let them play out
             _ => {
-                debug!("State synchronized with NetworkManager");
+                debug!("Transitional state, not syncing");
             }
+        }
+
+        if needs_tray_update {
+            self.update_tray().await;
         }
     }
 
@@ -734,6 +836,13 @@ async fn nm_disconnect(connection_name: &str) -> Result<(), String> {
 // System Tray UI
 //
 
+/// Extract a short display name from a VPN connection name
+/// e.g., "ie211-dublin" -> "ie211" or "us8399-ashburn" -> "us8399"
+fn extract_short_name(full_name: &str) -> &str {
+    // Take everything before the first hyphen, or the whole name if no hyphen
+    full_name.split('-').next().unwrap_or(full_name)
+}
+
 /// System tray interface
 pub struct VpnTray {
     /// Cached state for synchronous tray methods
@@ -758,7 +867,7 @@ impl VpnTray {
                     let mut cached = cached_clone.write().unwrap();
                     *cached = current.clone();
                 }
-                sleep(Duration::from_millis(100)).await;
+                sleep(Duration::from_millis(50)).await;
             }
         });
         
@@ -767,22 +876,6 @@ impl VpnTray {
             tx,
         }
     }
-
-    /// Get the status text for the current state
-    fn get_status_text(state: &VpnState) -> String {
-        match state {
-            VpnState::Disconnected => "Disconnected".to_string(),
-            VpnState::Connecting { server } => format!("Connecting to {}...", server),
-            VpnState::Connected { server } => format!("Connected: {}", server),
-            VpnState::Reconnecting {
-                server,
-                attempt,
-                max_attempts,
-            } => format!("Reconnecting {}/{}: {}", attempt, max_attempts, server),
-            VpnState::Failed { server, reason } => format!("Failed ({}): {}", server, reason),
-        }
-    }
-
 }
 
 impl Tray for VpnTray {
@@ -794,75 +887,140 @@ impl Tray for VpnTray {
     }
 
     fn icon_name(&self) -> String {
-        // Return empty to prefer icon_pixmap with colored status icons
-        String::new()
+        // Use themed icons based on state for a native look
+        let state = self.cached_state.read().unwrap();
+        match state.state {
+            VpnState::Connected { .. } => "network-vpn".to_string(),
+            VpnState::Connecting { .. } | VpnState::Reconnecting { .. } => {
+                "network-vpn-acquiring".to_string()
+            }
+            VpnState::Failed { .. } => "network-vpn-disconnected".to_string(),
+            VpnState::Disconnected => "network-vpn-disconnected".to_string(),
+        }
     }
 
     fn title(&self) -> String {
         let state = self.cached_state.read().unwrap();
-        Self::get_status_text(&state.state)
+        match &state.state {
+            VpnState::Connected { server } => format!("🔒 {}", extract_short_name(server)),
+            VpnState::Connecting { server } => format!("⏳ {}...", extract_short_name(server)),
+            VpnState::Reconnecting {
+                server,
+                attempt,
+                max_attempts,
+            } => format!(
+                "🔄 {} ({}/{})",
+                extract_short_name(server),
+                attempt,
+                max_attempts
+            ),
+            VpnState::Failed { server, .. } => format!("❌ {}", extract_short_name(server)),
+            VpnState::Disconnected => "VPN".to_string(),
+        }
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
+        // Return empty to prefer themed icon_name
+        Vec::new()
+    }
+
+    fn tool_tip(&self) -> ksni::ToolTip {
         let state = self.cached_state.read().unwrap();
-        // Define colors as (Red, Green, Blue, Alpha)
-        let (r, g, b, a) = match state.state {
-            VpnState::Connected { .. } => (0, 200, 0, 255),        // Bright Green
-            VpnState::Connecting { .. } => (255, 200, 0, 255),     // Yellow
-            VpnState::Reconnecting { .. } => (255, 165, 0, 255),   // Orange
-            VpnState::Failed { .. } => (200, 0, 0, 255),           // Red
-            VpnState::Disconnected => (128, 128, 128, 255),        // Gray
+        let (title, description) = match &state.state {
+            VpnState::Connected { server } => (
+                format!("🔒 Connected: {}", server),
+                "VPN tunnel active".to_string(),
+            ),
+            VpnState::Connecting { server } => (
+                format!("Connecting to {}...", server),
+                "Establishing connection".to_string(),
+            ),
+            VpnState::Reconnecting {
+                server,
+                attempt,
+                max_attempts,
+            } => (
+                format!("Reconnecting: {}", server),
+                format!("Attempt {} of {}", attempt, max_attempts),
+            ),
+            VpnState::Failed { server, reason } => {
+                (format!("Failed: {}", server), reason.clone())
+            }
+            VpnState::Disconnected => (
+                "VPN Disconnected".to_string(),
+                "Click to connect to a VPN".to_string(),
+            ),
         };
 
-        // Use 24x24 for better visibility on HiDPI
-        let size = 24i32;
-        let mut data = Vec::with_capacity((size * size * 4) as usize);
-
-        // StatusNotifierItem expects ARGB format (Alpha, Red, Green, Blue)
-        for _ in 0..(size * size) {
-            data.push(a);  // Alpha
-            data.push(r);  // Red
-            data.push(g);  // Green
-            data.push(b);  // Blue
+        ksni::ToolTip {
+            icon_name: String::new(),
+            icon_pixmap: Vec::new(),
+            title,
+            description,
         }
-
-        vec![ksni::Icon {
-            width: size,
-            height: size,
-            data,
-        }]
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
         let state = self.cached_state.read().unwrap().clone();
         let mut items = Vec::new();
 
-        // Status label
+        // Status header with clear visual indicators
+        let status_text = match &state.state {
+            VpnState::Connected { server } => format!("🔒 Connected: {}", server),
+            VpnState::Connecting { server } => format!("⏳ Connecting: {}...", server),
+            VpnState::Reconnecting {
+                server,
+                attempt,
+                max_attempts,
+            } => {
+                format!("🔄 Reconnecting: {} ({}/{})", server, attempt, max_attempts)
+            }
+            VpnState::Failed { server, reason } => format!("❌ Failed: {} - {}", server, reason),
+            VpnState::Disconnected => "⭕ Disconnected".to_string(),
+        };
+
         items.push(MenuItem::Standard(StandardItem {
-            label: Self::get_status_text(&state.state),
+            label: status_text,
             enabled: false,
             ..Default::default()
         }));
 
         items.push(MenuItem::Separator);
 
-        // VPN connections
+        // VPN connections with clear selection state
         if state.connections.is_empty() {
             items.push(MenuItem::Standard(StandardItem {
-                label: "No VPN connections found".to_string(),
+                label: "No VPN connections configured".to_string(),
+                enabled: false,
+                ..Default::default()
+            }));
+            items.push(MenuItem::Standard(StandardItem {
+                label: "Use 'nmcli con import' to add VPNs".to_string(),
                 enabled: false,
                 ..Default::default()
             }));
         } else {
+            let current_server = state.state.server_name();
+            let is_busy = matches!(
+                state.state,
+                VpnState::Connecting { .. } | VpnState::Reconnecting { .. }
+            );
+
             for connection in &state.connections {
-                let conn_clone: String = connection.clone();
-                let is_current = state.state.server_name() == Some(connection);
+                let conn_clone = connection.clone();
+                let is_current = current_server == Some(connection.as_str());
+                let is_connected =
+                    matches!(&state.state, VpnState::Connected { server } if server == connection);
+
                 items.push(MenuItem::Standard(StandardItem {
-                    label: if is_current {
-                        format!("● {}", connection)
+                    label: if is_connected {
+                        format!("✓ {} (connected)", extract_short_name(connection))
+                    } else if is_current {
+                        format!("⋯ {} (in progress)", extract_short_name(connection))
                     } else {
-                        connection.clone()
+                        format!("  {}", extract_short_name(connection))
                     },
+                    enabled: !is_current && !is_busy, // Disable if this one or busy
                     activate: Box::new(move |tray: &mut Self| {
                         let tx = tray.tx.clone();
                         let conn = conn_clone.clone();
@@ -877,8 +1035,8 @@ impl Tray for VpnTray {
 
         items.push(MenuItem::Separator);
 
-        // Disconnect button
-        let can_disconnect = state.state.server_name().is_some();
+        // Disconnect button - only enabled when connected
+        let can_disconnect = matches!(state.state, VpnState::Connected { .. });
         items.push(MenuItem::Standard(StandardItem {
             label: "Disconnect".to_string(),
             enabled: can_disconnect,
@@ -893,13 +1051,11 @@ impl Tray for VpnTray {
 
         items.push(MenuItem::Separator);
 
-        // Auto-reconnect toggle
-        items.push(MenuItem::Standard(StandardItem {
-            label: if state.auto_reconnect {
-                "✓ Auto-Reconnect".to_string()
-            } else {
-                "Auto-Reconnect".to_string()
-            },
+        // Auto-reconnect toggle with checkbox
+        items.push(MenuItem::Checkmark(CheckmarkItem {
+            label: "Auto-Reconnect".to_string(),
+            enabled: true,
+            checked: state.auto_reconnect,
             activate: Box::new(|tray: &mut Self| {
                 let tx = tray.tx.clone();
                 tokio::spawn(async move {
@@ -912,6 +1068,7 @@ impl Tray for VpnTray {
         // Refresh connections
         items.push(MenuItem::Standard(StandardItem {
             label: "Refresh Connections".to_string(),
+            enabled: true,
             activate: Box::new(|tray: &mut Self| {
                 let tx = tray.tx.clone();
                 tokio::spawn(async move {
@@ -927,6 +1084,7 @@ impl Tray for VpnTray {
         items.push(MenuItem::Standard(StandardItem {
             label: "Quit".to_string(),
             icon_name: "application-exit".to_string(),
+            enabled: true,
             activate: Box::new(|_| {
                 std::process::exit(0);
             }),
@@ -1009,5 +1167,21 @@ mod tests {
         assert_eq!(state.state, VpnState::Disconnected);
         assert!(state.auto_reconnect);
         assert!(state.connections.is_empty());
+    }
+
+    #[test]
+    fn test_extract_short_name() {
+        // Name with hyphen - should take the part before the first hyphen
+        assert_eq!(extract_short_name("ie211-dublin"), "ie211");
+        assert_eq!(extract_short_name("us8399-ashburn"), "us8399");
+        
+        // Name with multiple hyphens - should only split on the first
+        assert_eq!(extract_short_name("de123-berlin-west"), "de123");
+        
+        // Name without hyphen - should return the whole name
+        assert_eq!(extract_short_name("myvpn"), "myvpn");
+        
+        // Empty string
+        assert_eq!(extract_short_name(""), "");
     }
 }
