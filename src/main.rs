@@ -885,11 +885,12 @@ async fn nm_get_vpn_uuid(connection_name: &str) -> Option<String> {
     for line in stdout.lines() {
         // Format: UUID:NAME:TYPE
         // Handle connection names that contain colons by splitting from the right
+        // rsplitn returns parts in reverse order: [TYPE, NAME, UUID]
         let parts: Vec<&str> = line.rsplitn(3, ':').collect();
         if parts.len() >= 3 {
-            let conn_type = parts[0];
-            let name = parts[1];
-            let uuid = parts[2];
+            let conn_type = parts[0];  // Last field (TYPE)
+            let name = parts[1];       // Middle field (NAME)
+            let uuid = parts[2];       // First field (UUID)
 
             if conn_type == "vpn" && name == connection_name {
                 debug!("Found UUID for {}: {}", connection_name, uuid);
@@ -1244,8 +1245,10 @@ fn draw_checkmark(x: i32, y: i32, size: i32, center: i32, fg: &[u8; 4], bg: &[u8
     let rel_y = y - center;
     let scale = size as f32 / 32.0;
     
-    // Checkmark path: down-right then up-right
-    // Bottom of checkmark at (0, 4*scale), left at (-4*scale, 0), top-right at (6*scale, -6*scale)
+    // Checkmark is composed of two diagonal strokes that meet at the bottom
+    // Left stroke: descends from upper-left to bottom-center with slope ~1.2
+    // Right stroke: ascends from bottom-center to upper-right with slope ~-0.8
+    // The magic numbers (1.2, 0.8) define the slopes, and 2.0 defines stroke thickness
     let on_left_stroke = rel_x >= (-5.0 * scale) as i32 && rel_x <= (-3.0 * scale) as i32
         && rel_y >= -scale as i32 && rel_y <= (5.0 * scale) as i32
         && (rel_y as f32 + rel_x as f32 * 1.2).abs() < 2.0 * scale;
@@ -1324,35 +1327,6 @@ fn draw_x(x: i32, y: i32, size: i32, center: i32, fg: &[u8; 4], bg: &[u8; 4]) ->
     } else {
         *bg
     }
-}
-
-/// Create a solid color icon in ARGB32 format (legacy function for compatibility)
-///
-/// Returns icons in common sizes (16x16, 24x24, 32x32) for different DPI scales.
-/// The data is in ARGB32 format with network byte order (big endian).
-#[allow(dead_code)]
-fn create_colored_icon(r: u8, g: u8, b: u8, a: u8) -> Vec<ksni::Icon> {
-    let sizes = [16, 24, 32];
-    let pixel = [a, r, g, b]; // ARGB32 in network byte order
-    
-    sizes
-        .iter()
-        .map(|&size| {
-            let pixel_count = (size * size) as usize;
-            let mut data = Vec::with_capacity(pixel_count * 4);
-            
-            // Efficiently fill with repeated ARGB pixel data
-            for _ in 0..pixel_count {
-                data.extend_from_slice(&pixel);
-            }
-            
-            ksni::Icon {
-                width: size,
-                height: size,
-                data,
-            }
-        })
-        .collect()
 }
 
 /// System tray interface
