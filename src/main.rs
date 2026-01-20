@@ -5,15 +5,20 @@
 //!
 //! # Architecture
 //!
-//! - `state/` - State machine types and transitions
+//! - `state/` - State machine types and transitions (formal state machine)
 //! - `nm/` - NetworkManager interface (nmcli, future: D-Bus)
 //! - `tray/` - System tray UI (ksni)
 //!
-//! # Building
+//! # State Machine
 //!
-//! ```bash
-//! cargo build --release
-//! ```
+//! The supervisor uses a formal state machine that processes events:
+//! - User events: UserEnable, UserDisable
+//! - NM events: NmVpnUp, NmVpnDown, NmVpnChanged
+//! - System events: Wake (from sleep)
+//! - Internal events: Timeout
+//!
+//! All state transitions go through StateMachine::handle_event() which logs
+//! every transition with its reason.
 
 mod nm;
 mod state;
@@ -35,7 +40,7 @@ use crate::nm::{
     get_active_vpn_with_state as nm_get_active_vpn_with_state, get_vpn_state as nm_get_vpn_state,
     kill_orphan_openvpn_processes, list_vpn_connections as nm_list_vpn_connections,
 };
-use crate::state::{NmVpnState, VpnState};
+use crate::state::{Event, NmVpnState, StateMachine, StateMachineConfig, TransitionReason, VpnState};
 use crate::tray::{SharedState, VpnCommand, VpnTray};
 
 // ============================================================================
@@ -83,28 +88,42 @@ const POST_DISCONNECT_SETTLE_SECS: u64 = 3;
 // ============================================================================
 
 /// VPN Supervisor that manages VPN connections via NetworkManager
+/// 
+/// Uses a formal state machine for all state transitions, ensuring:
+/// - Every transition is logged with reason
+/// - Predictable behavior based on current state + event
+/// - Clean separation between state logic and I/O
 pub struct VpnSupervisor {
-    /// Shared state accessible by the tray
-    state: Arc<RwLock<SharedState>>,
+    /// The formal state machine (owns the canonical VPN state)
+    machine: StateMachine,
+    /// Shared state for the tray (view of the machine state + UI state)
+    shared_state: Arc<RwLock<SharedState>>,
     /// Channel receiver for commands from the tray
     rx: mpsc::Receiver<VpnCommand>,
     /// Tray handle for updating the icon
     tray_handle: Arc<std::sync::Mutex<Option<ksni::blocking::Handle<VpnTray>>>>,
-    /// Timestamp of last intentional disconnect
+    /// Timestamp of last intentional disconnect (for grace period)
     last_disconnect_time: Option<Instant>,
-    /// Timestamp of last polling tick (for detecting time jumps/sleep/wake)
+    /// Timestamp of last polling tick (for detecting sleep/wake)
     last_poll_time: Instant,
 }
 
 impl VpnSupervisor {
-    /// Create a new VPN supervisor
+    /// Create a new VPN supervisor with formal state machine
     pub fn new(
-        state: Arc<RwLock<SharedState>>,
+        shared_state: Arc<RwLock<SharedState>>,
         rx: mpsc::Receiver<VpnCommand>,
         tray_handle: Arc<std::sync::Mutex<Option<ksni::blocking::Handle<VpnTray>>>>,
     ) -> Self {
+        let config = StateMachineConfig {
+            max_retries: MAX_RECONNECT_ATTEMPTS,
+            base_delay_secs: RECONNECT_BASE_DELAY_SECS,
+            max_delay_secs: RECONNECT_MAX_DELAY_SECS,
+        };
+        
         Self {
-            state,
+            machine: StateMachine::with_config(config),
+            shared_state,
             rx,
             tray_handle,
             last_disconnect_time: None,
@@ -112,13 +131,31 @@ impl VpnSupervisor {
         }
     }
 
+    /// Dispatch an event to the state machine and sync the shared state
+    fn dispatch(&mut self, event: Event) -> Option<TransitionReason> {
+        let reason = self.machine.handle_event(event);
+        
+        // Always sync shared state after event processing
+        if let Ok(mut state) = self.shared_state.try_write() {
+            state.state = self.machine.state.clone();
+        }
+        
+        reason
+    }
+
+    /// Sync the shared state with current machine state (for async contexts)
+    async fn sync_shared_state(&self) {
+        let mut state = self.shared_state.write().await;
+        state.state = self.machine.state.clone();
+    }
+
     /// Run the supervisor's main loop
     pub async fn run(mut self) {
-        info!("VPN supervisor starting");
+        info!("VPN supervisor starting with formal state machine");
 
         // Initial connection refresh and state sync
         self.refresh_connections().await;
-        self.sync_with_nm().await;
+        self.initial_nm_sync().await;
         self.last_poll_time = Instant::now();
 
         // Create an interval for NM polling
@@ -147,17 +184,18 @@ impl VpnSupervisor {
 
                 // Poll NetworkManager state periodically
                 _ = nm_poll_interval.tick() => {
-                    // Detect time jumps (sleep/wake events)
                     let elapsed = self.last_poll_time.elapsed();
                     if elapsed > Duration::from_secs(NM_POLL_INTERVAL_SECS * 3) {
+                        // Time jump detected - dispatch Wake event
                         warn!(
-                            "Time jump detected ({:.1}s since last poll), forcing state resync",
+                            "Time jump detected ({:.1}s since last poll), dispatching Wake event",
                             elapsed.as_secs_f32()
                         );
+                        self.dispatch(Event::Wake);
                         self.force_state_resync().await;
                     } else {
                         debug!("Polling NetworkManager state");
-                        self.sync_with_nm().await;
+                        self.poll_nm_state().await;
                     }
                     self.last_poll_time = Instant::now();
                 }
@@ -165,188 +203,30 @@ impl VpnSupervisor {
         }
     }
 
-    /// Handle connection to a server
-    async fn handle_connect(&mut self, connection_name: &str) {
-        info!("Connect requested: {}", connection_name);
-
-        // Get current state and determine what to do
-        let current_server = {
-            let state = self.state.read().await;
-            state.state.server_name().map(|s| s.to_string())
-        };
-
-        // If already connected to this server, do nothing
-        if current_server.as_deref() == Some(connection_name) {
-            info!("Already connected to {}", connection_name);
-            return;
-        }
-
-        // If connected to different server, disconnect first with verification
-        if let Some(ref current) = current_server {
-            info!(
-                "Disconnecting from {} before connecting to {}",
-                current, connection_name
-            );
-
-            // Update state to show we're transitioning
-            {
-                let mut state = self.state.write().await;
-                state.state = VpnState::Connecting {
-                    server: connection_name.to_string(),
-                };
-            }
-            self.update_tray();
-
-            // Disconnect and wait for it to complete
-            debug!("Calling nm_disconnect for: {}", current);
-            if let Err(e) = nm_disconnect(current).await {
-                warn!("Disconnect command failed (continuing anyway): {}", e);
-            }
-
-            // Wait and verify the connection is fully disconnected
-            let mut disconnected = false;
-            for attempt in 1..=DISCONNECT_VERIFY_MAX_ATTEMPTS {
-                sleep(Duration::from_millis(DISCONNECT_VERIFY_INTERVAL_MS)).await;
-
-                match nm_get_vpn_state(current).await {
-                    Some(NmVpnState::Activated | NmVpnState::Deactivating | NmVpnState::Activating) => {
-                        debug!("VPN '{}' still active, waiting... (attempt {})", current, attempt);
-                    }
-                    Some(NmVpnState::Inactive) | None => {
-                        info!("Previous VPN '{}' disconnected successfully", current);
-                        disconnected = true;
-                        break;
-                    }
+    /// Initial sync with NetworkManager on startup
+    async fn initial_nm_sync(&mut self) {
+        let active_vpn_info = nm_get_active_vpn_with_state().await;
+        
+        if let Some(info) = active_vpn_info {
+            match info.state {
+                NmVpnState::Activated => {
+                    info!("Initial sync: VPN {} is active", info.name);
+                    self.dispatch(Event::NmVpnUp { server: info.name });
                 }
+                NmVpnState::Activating => {
+                    info!("Initial sync: VPN {} is activating", info.name);
+                    self.dispatch(Event::UserEnable { server: info.name });
+                }
+                _ => {}
             }
-
-            if !disconnected {
-                warn!("Disconnect verification timed out, cleaning up orphan processes");
-            }
-            kill_orphan_openvpn_processes().await;
-
-            // Extra settle time
-            sleep(Duration::from_secs(POST_DISCONNECT_SETTLE_SECS)).await;
         }
-
-        // Update state to Connecting
-        {
-            let mut state = self.state.write().await;
-            state.state = VpnState::Connecting {
-                server: connection_name.to_string(),
-            };
-        }
+        
+        self.sync_shared_state().await;
         self.update_tray();
-        self.show_notification("VPN", &format!("Connecting to {}...", connection_name));
-
-        // Attempt connection with retries
-        let mut attempts = 0;
-
-        while attempts < MAX_CONNECT_ATTEMPTS {
-            attempts += 1;
-            debug!("Connection attempt {} of {} for {}", attempts, MAX_CONNECT_ATTEMPTS, connection_name);
-
-            match nm_connect(connection_name).await {
-                Ok(_) => {
-                    // Monitor the connection state
-                    let mut connection_succeeded = false;
-                    let mut failure_reason: Option<String> = None;
-
-                    for monitor_attempt in 1..=CONNECTION_MONITOR_MAX_ATTEMPTS {
-                        sleep(Duration::from_millis(CONNECTION_MONITOR_INTERVAL_MS)).await;
-
-                        match nm_get_vpn_state(connection_name).await {
-                            Some(NmVpnState::Activated) => {
-                                info!("VPN '{}' successfully activated", connection_name);
-                                connection_succeeded = true;
-                                break;
-                            }
-                            Some(NmVpnState::Activating) => {
-                                // Still connecting, keep waiting
-                            }
-                            Some(NmVpnState::Deactivating) => {
-                                failure_reason = Some("Connection failed during activation".to_string());
-                                break;
-                            }
-                            Some(NmVpnState::Inactive) | None => {
-                                if monitor_attempt > 10 {
-                                    failure_reason = Some("Connection never became active".to_string());
-                                    break;
-                                }
-                            }
-                        }
-                    }
-
-                    if connection_succeeded {
-                        {
-                            let mut state = self.state.write().await;
-                            state.state = VpnState::Connected {
-                                server: connection_name.to_string(),
-                            };
-                        }
-                        self.sync_with_nm().await;
-                        self.update_tray();
-                        self.show_notification("VPN Connected", &format!("Connected to {}", connection_name));
-                        return;
-                    }
-
-                    warn!("Connection monitoring failed: {}", failure_reason.as_deref().unwrap_or("timeout"));
-                }
-                Err(e) => {
-                    warn!("Connection attempt {} failed: {}", attempts, e);
-                }
-            }
-
-            if attempts < MAX_CONNECT_ATTEMPTS {
-                sleep(Duration::from_secs(2)).await;
-            }
-        }
-
-        // Connection failed after all attempts
-        error!("Failed to connect to {} after {} attempts", connection_name, MAX_CONNECT_ATTEMPTS);
-        {
-            let mut state = self.state.write().await;
-            state.state = VpnState::Failed {
-                server: connection_name.to_string(),
-                reason: "Connection verification failed".to_string(),
-            };
-        }
-        self.update_tray();
-        self.show_notification("VPN Failed", &format!("Could not connect to {}", connection_name));
     }
 
-    /// Handle disconnect command
-    async fn handle_disconnect(&mut self) {
-        info!("Disconnecting VPN");
-
-        let connection_name = {
-            let state = self.state.read().await;
-            state.state.server_name().map(|s| s.to_string())
-        };
-
-        if let Some(name) = connection_name {
-            self.last_disconnect_time = Some(Instant::now());
-
-            match nm_disconnect(&name).await {
-                Ok(_) => {
-                    info!("Disconnected successfully");
-                    {
-                        let mut state = self.state.write().await;
-                        state.state = VpnState::Disconnected;
-                    }
-                    self.sync_with_nm().await;
-                    self.update_tray();
-                    self.show_notification("VPN Disconnected", "VPN connection closed");
-                }
-                Err(e) => {
-                    error!("Failed to disconnect: {}", e);
-                }
-            }
-        }
-    }
-
-    /// Sync internal state with NetworkManager
-    async fn sync_with_nm(&mut self) {
+    /// Poll NetworkManager state and dispatch appropriate events
+    async fn poll_nm_state(&mut self) {
         // Check if we're in grace period after intentional disconnect
         if let Some(disconnect_time) = self.last_disconnect_time {
             if disconnect_time.elapsed().as_secs() < POST_DISCONNECT_GRACE_SECS {
@@ -358,119 +238,80 @@ impl VpnSupervisor {
         }
 
         let active_vpn_info = nm_get_active_vpn_with_state().await;
-        let (current_state, auto_reconnect) = {
-            let state = self.state.read().await;
-            (state.state.clone(), state.auto_reconnect)
-        };
+        let current_state = self.machine.state.clone();
+        let auto_reconnect = self.shared_state.read().await.auto_reconnect;
 
-        let mut needs_tray_update = false;
-
-        // Handle activating state
-        if let Some(ref info) = active_vpn_info {
-            if info.state == NmVpnState::Activating {
-                match &current_state {
-                    VpnState::Connecting { server } if server == &info.name => {
-                        debug!("State synchronized: connecting to {}", info.name);
-                    }
-                    VpnState::Disconnected => {
-                        info!("Detected external VPN activation: {}", info.name);
-                        {
-                            let mut state = self.state.write().await;
-                            state.state = VpnState::Connecting { server: info.name.clone() };
-                        }
-                        needs_tray_update = true;
-                    }
-                    _ => {}
-                }
-                if needs_tray_update {
-                    self.update_tray();
-                }
-                return;
-            }
-        }
-
-        let active_vpn = active_vpn_info
-            .filter(|info| info.state == NmVpnState::Activated)
-            .map(|info| info.name);
-
-        match (&current_state, &active_vpn) {
-            // Connection dropped
+        // Determine what event to dispatch based on NM state vs our state
+        match (&current_state, &active_vpn_info) {
+            // We think we're connected, but NM shows nothing -> VPN dropped
             (VpnState::Connected { server }, None) => {
                 warn!("Connection to {} dropped unexpectedly", server);
                 if auto_reconnect {
-                    info!("Auto-reconnect enabled, attempting to reconnect");
+                    info!("Auto-reconnect enabled, will attempt reconnection");
                     let server_clone = server.clone();
-                    self.attempt_reconnect(&server_clone, 1).await;
+                    self.dispatch(Event::NmVpnDown);
+                    self.sync_shared_state().await;
+                    self.update_tray();
+                    self.show_notification("VPN Disconnected", "Connection dropped, reconnecting...");
+                    self.attempt_reconnect(&server_clone).await;
                 } else {
-                    {
-                        let mut state = self.state.write().await;
-                        state.state = VpnState::Disconnected;
-                    }
-                    needs_tray_update = true;
+                    self.dispatch(Event::NmVpnDown);
+                    self.sync_shared_state().await;
+                    self.update_tray();
                     self.show_notification("VPN Disconnected", "Connection dropped");
                 }
             }
 
-            // External switch
-            (VpnState::Connected { server: our_server }, Some(nm_server)) if our_server != nm_server => {
-                info!("VPN changed externally from {} to {}", our_server, nm_server);
-                {
-                    let mut state = self.state.write().await;
-                    state.state = VpnState::Connected { server: nm_server.clone() };
-                }
-                needs_tray_update = true;
+            // We think we're connected to X, but NM shows Y -> external switch
+            (VpnState::Connected { server: our_server }, Some(info)) 
+                if info.state == NmVpnState::Activated && &info.name != our_server => 
+            {
+                info!("VPN changed externally from {} to {}", our_server, info.name);
+                self.dispatch(Event::NmVpnChanged { server: info.name.clone() });
+                self.sync_shared_state().await;
+                self.update_tray();
             }
 
-            // External connection
-            (VpnState::Disconnected, Some(vpn_name)) => {
-                info!("Detected external VPN connection: {}", vpn_name);
-                {
-                    let mut state = self.state.write().await;
-                    state.state = VpnState::Connected { server: vpn_name.clone() };
-                }
-                needs_tray_update = true;
+            // We're disconnected but NM shows a VPN -> external connection
+            (VpnState::Disconnected, Some(info)) if info.state == NmVpnState::Activated => {
+                info!("Detected external VPN connection: {}", info.name);
+                self.dispatch(Event::NmVpnUp { server: info.name.clone() });
+                self.sync_shared_state().await;
+                self.update_tray();
             }
 
-            // Connecting confirmed
-            (VpnState::Connecting { server: target }, Some(active)) if target == active => {
-                info!("Connection to {} confirmed by NM sync", target);
-                {
-                    let mut state = self.state.write().await;
-                    state.state = VpnState::Connected { server: target.clone() };
-                }
-                needs_tray_update = true;
+            // We're disconnected but NM shows activating -> external activation
+            (VpnState::Disconnected, Some(info)) if info.state == NmVpnState::Activating => {
+                info!("Detected external VPN activation: {}", info.name);
+                self.dispatch(Event::UserEnable { server: info.name.clone() });
+                self.sync_shared_state().await;
+                self.update_tray();
             }
 
-            // Recovered from failed
-            (VpnState::Failed { .. }, Some(vpn_name)) => {
-                info!("VPN recovered, now connected to {}", vpn_name);
-                {
-                    let mut state = self.state.write().await;
-                    state.state = VpnState::Connected { server: vpn_name.clone() };
-                }
-                needs_tray_update = true;
+            // We're connecting and NM confirms it's up -> success
+            (VpnState::Connecting { server: target }, Some(info)) 
+                if info.state == NmVpnState::Activated && &info.name == target =>
+            {
+                info!("Connection to {} confirmed by NM poll", target);
+                self.dispatch(Event::NmVpnUp { server: info.name.clone() });
+                self.sync_shared_state().await;
+                self.update_tray();
             }
 
-            // Failed to disconnected
-            (VpnState::Failed { server, .. }, None) => {
-                info!("Failed connection to {} confirmed, transitioning to Disconnected", server);
-                {
-                    let mut state = self.state.write().await;
-                    state.state = VpnState::Disconnected;
-                }
-                needs_tray_update = true;
+            // We're in Failed state but NM shows connected -> recovered
+            (VpnState::Failed { .. }, Some(info)) if info.state == NmVpnState::Activated => {
+                info!("VPN recovered, now connected to {}", info.name);
+                self.dispatch(Event::NmVpnUp { server: info.name.clone() });
+                self.sync_shared_state().await;
+                self.update_tray();
             }
 
-            // Already in sync
+            // Everything else: no event needed
             _ => {}
-        }
-
-        if needs_tray_update {
-            self.update_tray();
         }
     }
 
-    /// Force a complete state resync with NetworkManager
+    /// Force a complete state resync with NetworkManager (after wake from sleep)
     async fn force_state_resync(&mut self) {
         info!("Forcing complete state resync with NetworkManager");
         self.last_disconnect_time = None;
@@ -478,98 +319,241 @@ impl VpnSupervisor {
 
         let active_vpn_info = nm_get_active_vpn_with_state().await;
 
-        {
-            let mut state = self.state.write().await;
-            match active_vpn_info {
-                Some(info) => match info.state {
-                    NmVpnState::Activated => {
-                        info!("Resync: VPN {} is fully active", info.name);
-                        state.state = VpnState::Connected { server: info.name };
-                    }
-                    NmVpnState::Activating => {
-                        info!("Resync: VPN {} is activating", info.name);
-                        state.state = VpnState::Connecting { server: info.name };
-                    }
-                    _ => {
-                        info!("Resync: No active VPN");
-                        state.state = VpnState::Disconnected;
-                    }
-                },
-                None => {
-                    if !matches!(state.state, VpnState::Connecting { .. } | VpnState::Reconnecting { .. }) {
-                        state.state = VpnState::Disconnected;
-                    }
+        // Force set the state based on what NM reports
+        match active_vpn_info {
+            Some(info) => match info.state {
+                NmVpnState::Activated => {
+                    info!("Resync: VPN {} is fully active", info.name);
+                    self.machine.set_state(
+                        VpnState::Connected { server: info.name },
+                        TransitionReason::WakeResync,
+                    );
+                }
+                NmVpnState::Activating => {
+                    info!("Resync: VPN {} is activating", info.name);
+                    self.machine.set_state(
+                        VpnState::Connecting { server: info.name },
+                        TransitionReason::WakeResync,
+                    );
+                }
+                _ => {
+                    info!("Resync: No active VPN");
+                    self.machine.set_state(VpnState::Disconnected, TransitionReason::WakeResync);
+                }
+            },
+            None => {
+                if !self.machine.state.is_busy() {
+                    info!("Resync: No VPN detected");
+                    self.machine.set_state(VpnState::Disconnected, TransitionReason::WakeResync);
                 }
             }
         }
 
+        self.sync_shared_state().await;
         self.update_tray();
     }
 
-    /// Attempt to reconnect with exponential backoff
-    async fn attempt_reconnect(&mut self, connection_name: &str, initial_attempt: u32) {
-        let mut attempt = initial_attempt;
+    /// Handle user request to connect to a server
+    async fn handle_connect(&mut self, connection_name: &str) {
+        info!("Connect requested: {}", connection_name);
 
-        loop {
-            if attempt > MAX_RECONNECT_ATTEMPTS {
-                error!("Max reconnection attempts reached for {}", connection_name);
-                {
-                    let mut state = self.state.write().await;
-                    state.state = VpnState::Failed {
-                        server: connection_name.to_string(),
-                        reason: format!("Max attempts ({}) exceeded", MAX_RECONNECT_ATTEMPTS),
-                    };
-                }
-                self.update_tray();
-                self.show_notification("VPN Reconnection Failed", &format!("Failed after {} attempts", MAX_RECONNECT_ATTEMPTS));
+        // Check if already connected to this server
+        if let Some(current) = self.machine.state.server_name() {
+            if current == connection_name {
+                info!("Already connected to {}", connection_name);
                 return;
             }
-
-            info!("Reconnection attempt {}/{} for {}", attempt, MAX_RECONNECT_ATTEMPTS, connection_name);
-
-            {
-                let mut state = self.state.write().await;
-                state.state = VpnState::Reconnecting {
-                    server: connection_name.to_string(),
-                    attempt,
-                    max_attempts: MAX_RECONNECT_ATTEMPTS,
-                };
-            }
+            
+            // Need to disconnect first
+            info!("Disconnecting from {} before connecting to {}", current, connection_name);
+            let current_owned = current.to_string();
+            
+            // Dispatch connecting event for new server
+            self.dispatch(Event::UserEnable { server: connection_name.to_string() });
+            self.sync_shared_state().await;
             self.update_tray();
+            
+            // Perform disconnect
+            if let Err(e) = nm_disconnect(&current_owned).await {
+                warn!("Disconnect command failed (continuing anyway): {}", e);
+            }
+            
+            // Wait for disconnect to complete
+            let mut disconnected = false;
+            for attempt in 1..=DISCONNECT_VERIFY_MAX_ATTEMPTS {
+                sleep(Duration::from_millis(DISCONNECT_VERIFY_INTERVAL_MS)).await;
+                match nm_get_vpn_state(&current_owned).await {
+                    Some(NmVpnState::Activated | NmVpnState::Deactivating | NmVpnState::Activating) => {
+                        debug!("VPN '{}' still active (attempt {})", current_owned, attempt);
+                    }
+                    _ => {
+                        info!("Previous VPN '{}' disconnected", current_owned);
+                        disconnected = true;
+                        break;
+                    }
+                }
+            }
+            
+            if !disconnected {
+                warn!("Disconnect verification timed out");
+            }
+            kill_orphan_openvpn_processes().await;
+            sleep(Duration::from_secs(POST_DISCONNECT_SETTLE_SECS)).await;
+        } else {
+            // Not connected, just dispatch the enable event
+            self.dispatch(Event::UserEnable { server: connection_name.to_string() });
+            self.sync_shared_state().await;
+            self.update_tray();
+        }
 
-            let delay = std::cmp::min(RECONNECT_BASE_DELAY_SECS * (attempt as u64), RECONNECT_MAX_DELAY_SECS);
-            sleep(Duration::from_secs(delay)).await;
+        self.show_notification("VPN", &format!("Connecting to {}...", connection_name));
+
+        // Attempt connection with retries
+        for attempt in 1..=MAX_CONNECT_ATTEMPTS {
+            debug!("Connection attempt {} of {} for {}", attempt, MAX_CONNECT_ATTEMPTS, connection_name);
 
             match nm_connect(connection_name).await {
                 Ok(_) => {
-                    sleep(Duration::from_secs(CONNECTION_VERIFY_DELAY_SECS)).await;
-
-                    if let Some(active_vpn) = nm_get_active_vpn().await {
-                        if active_vpn == connection_name {
-                            info!("Successfully reconnected to {}", connection_name);
-                            {
-                                let mut state = self.state.write().await;
-                                state.state = VpnState::Connected { server: connection_name.to_string() };
+                    // Monitor connection state
+                    for _ in 1..=CONNECTION_MONITOR_MAX_ATTEMPTS {
+                        sleep(Duration::from_millis(CONNECTION_MONITOR_INTERVAL_MS)).await;
+                        
+                        match nm_get_vpn_state(connection_name).await {
+                            Some(NmVpnState::Activated) => {
+                                info!("VPN '{}' successfully activated", connection_name);
+                                self.dispatch(Event::NmVpnUp { server: connection_name.to_string() });
+                                self.sync_shared_state().await;
+                                self.update_tray();
+                                self.show_notification("VPN Connected", &format!("Connected to {}", connection_name));
+                                return;
                             }
+                            Some(NmVpnState::Activating) => {
+                                // Still connecting
+                            }
+                            Some(NmVpnState::Deactivating) | Some(NmVpnState::Inactive) | None => {
+                                break;
+                            }
+                        }
+                    }
+                    
+                    warn!("Connection monitoring timed out");
+                }
+                Err(e) => {
+                    warn!("Connection attempt {} failed: {}", attempt, e);
+                }
+            }
+
+            if attempt < MAX_CONNECT_ATTEMPTS {
+                sleep(Duration::from_secs(2)).await;
+            }
+        }
+
+        // All attempts failed
+        error!("Failed to connect to {} after {} attempts", connection_name, MAX_CONNECT_ATTEMPTS);
+        self.dispatch(Event::Timeout);
+        self.sync_shared_state().await;
+        self.update_tray();
+        self.show_notification("VPN Failed", &format!("Could not connect to {}", connection_name));
+    }
+
+    /// Handle user request to disconnect
+    async fn handle_disconnect(&mut self) {
+        info!("Disconnect requested");
+
+        let connection_name = match self.machine.state.server_name() {
+            Some(name) => name.to_string(),
+            None => {
+                info!("Not connected, nothing to disconnect");
+                return;
+            }
+        };
+
+        self.last_disconnect_time = Some(Instant::now());
+
+        match nm_disconnect(&connection_name).await {
+            Ok(_) => {
+                info!("Disconnected successfully");
+                self.dispatch(Event::UserDisable);
+                self.sync_shared_state().await;
+                self.update_tray();
+                self.show_notification("VPN Disconnected", "VPN connection closed");
+            }
+            Err(e) => {
+                error!("Failed to disconnect: {}", e);
+            }
+        }
+    }
+
+    /// Attempt to reconnect with exponential backoff (triggered by connection drop)
+    async fn attempt_reconnect(&mut self, connection_name: &str) {
+        let max_attempts = self.machine.max_retries();
+        
+        for attempt in 1..=max_attempts {
+            info!("Reconnection attempt {}/{} for {}", attempt, max_attempts, connection_name);
+
+            // Update state to Reconnecting
+            self.machine.set_state(
+                VpnState::Reconnecting {
+                    server: connection_name.to_string(),
+                    attempt,
+                    max_attempts,
+                },
+                TransitionReason::Retrying,
+            );
+            self.sync_shared_state().await;
+            self.update_tray();
+
+            // Calculate backoff delay
+            let delay = std::cmp::min(
+                RECONNECT_BASE_DELAY_SECS * (attempt as u64),
+                RECONNECT_MAX_DELAY_SECS,
+            );
+            sleep(Duration::from_secs(delay)).await;
+
+            // Attempt connection
+            match nm_connect(connection_name).await {
+                Ok(_) => {
+                    sleep(Duration::from_secs(CONNECTION_VERIFY_DELAY_SECS)).await;
+                    
+                    if let Some(active) = nm_get_active_vpn().await {
+                        if active == connection_name {
+                            info!("Successfully reconnected to {}", connection_name);
+                            self.dispatch(Event::NmVpnUp { server: connection_name.to_string() });
+                            self.sync_shared_state().await;
                             self.update_tray();
                             self.show_notification("VPN Reconnected", &format!("Reconnected to {}", connection_name));
                             return;
                         }
                     }
-                    warn!("Reconnection verification failed, retrying");
+                    warn!("Reconnection verification failed");
                 }
                 Err(e) => {
                     error!("Reconnection attempt {} failed: {}", attempt, e);
                 }
             }
-            attempt += 1;
         }
+
+        // All attempts exhausted
+        error!("Max reconnection attempts reached for {}", connection_name);
+        self.machine.set_state(
+            VpnState::Failed {
+                server: connection_name.to_string(),
+                reason: format!("Max attempts ({}) exceeded", max_attempts),
+            },
+            TransitionReason::RetriesExhausted,
+        );
+        self.sync_shared_state().await;
+        self.update_tray();
+        self.show_notification(
+            "VPN Reconnection Failed",
+            &format!("Failed after {} attempts", max_attempts),
+        );
     }
 
     /// Toggle auto-reconnect setting
     async fn toggle_auto_reconnect(&mut self) {
         let new_value = {
-            let mut state = self.state.write().await;
+            let mut state = self.shared_state.write().await;
             state.auto_reconnect = !state.auto_reconnect;
             state.auto_reconnect
         };
@@ -583,7 +567,7 @@ impl VpnSupervisor {
         info!("Refreshing VPN connections");
         let connections = nm_list_vpn_connections().await;
         {
-            let mut state = self.state.write().await;
+            let mut state = self.shared_state.write().await;
             state.connections = connections;
         }
         self.update_tray();
@@ -591,7 +575,7 @@ impl VpnSupervisor {
 
     /// Update the tray icon with current state
     fn update_tray(&self) {
-        let current_state = match self.state.try_read() {
+        let current_state = match self.shared_state.try_read() {
             Ok(guard) => guard.clone(),
             Err(_) => return,
         };
@@ -628,14 +612,12 @@ impl VpnSupervisor {
 // Instance Lock
 // ============================================================================
 
-/// Path to the lock file for single-instance enforcement
 fn get_lock_file_path() -> PathBuf {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
         .expect("XDG_RUNTIME_DIR not set - cannot safely create lock file");
     PathBuf::from(runtime_dir).join("openvpn-tray.lock")
 }
 
-/// Acquire an exclusive lock on the instance lock file
 fn acquire_instance_lock() -> Result<File, String> {
     let lock_path = get_lock_file_path();
 
@@ -663,7 +645,9 @@ fn acquire_instance_lock() -> Result<File, String> {
             if let Ok(mut f) = File::open(&lock_path) {
                 let _ = f.read_to_string(&mut contents);
             }
-            let pid_info = contents.trim().parse::<u32>().map(|pid| format!(" (PID {})", pid)).unwrap_or_default();
+            let pid_info = contents.trim().parse::<u32>()
+                .map(|pid| format!(" (PID {})", pid))
+                .unwrap_or_default();
             return Err(format!("Another instance is already running{}", pid_info));
         }
         return Err(format!("Failed to acquire lock: {}", errno));
@@ -684,7 +668,6 @@ fn acquire_instance_lock() -> Result<File, String> {
     Ok(file)
 }
 
-/// Clean up lock file on exit
 fn release_instance_lock() {
     let lock_path = get_lock_file_path();
     if let Err(e) = fs::remove_file(&lock_path) {
@@ -719,13 +702,13 @@ async fn main() {
     })
     .expect("Error setting Ctrl-C handler");
 
-    info!("Starting NetworkManager VPN Supervisor");
+    info!("Starting NetworkManager VPN Supervisor (Phase 2: Formal State Machine)");
 
-    let state = Arc::new(RwLock::new(SharedState::default()));
+    let shared_state = Arc::new(RwLock::new(SharedState::default()));
     let (tx, rx) = mpsc::channel(16);
     let tray_handle = Arc::new(std::sync::Mutex::new(None));
 
-    let supervisor = VpnSupervisor::new(state.clone(), rx, tray_handle.clone());
+    let supervisor = VpnSupervisor::new(shared_state.clone(), rx, tray_handle.clone());
     tokio::spawn(supervisor.run());
 
     let tray_service = VpnTray::new(tx);
