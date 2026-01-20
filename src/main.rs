@@ -20,6 +20,7 @@
 //! All state transitions go through StateMachine::handle_event() which logs
 //! every transition with its reason.
 
+mod dbus;
 mod health;
 mod nm;
 mod state;
@@ -36,6 +37,7 @@ use std::time::Instant;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{sleep, Duration};
 
+use crate::dbus::{NmEvent, NmMonitor};
 use crate::health::{HealthChecker, HealthResult};
 use crate::nm::{
     connect as nm_connect, disconnect as nm_disconnect, get_active_vpn as nm_get_active_vpn,
@@ -105,6 +107,8 @@ pub struct VpnSupervisor {
     shared_state: Arc<RwLock<SharedState>>,
     /// Channel receiver for commands from the tray
     rx: mpsc::Receiver<VpnCommand>,
+    /// Channel receiver for D-Bus events from NetworkManager
+    dbus_rx: mpsc::Receiver<NmEvent>,
     /// Tray handle for updating the icon
     tray_handle: Arc<std::sync::Mutex<Option<ksni::blocking::Handle<VpnTray>>>>,
     /// Timestamp of last intentional disconnect (for grace period)
@@ -120,6 +124,7 @@ impl VpnSupervisor {
     pub fn new(
         shared_state: Arc<RwLock<SharedState>>,
         rx: mpsc::Receiver<VpnCommand>,
+        dbus_rx: mpsc::Receiver<NmEvent>,
         tray_handle: Arc<std::sync::Mutex<Option<ksni::blocking::Handle<VpnTray>>>>,
     ) -> Self {
         let config = StateMachineConfig {
@@ -132,6 +137,7 @@ impl VpnSupervisor {
             machine: StateMachine::with_config(config),
             shared_state,
             rx,
+            dbus_rx,
             tray_handle,
             last_disconnect_time: None,
             last_poll_time: Instant::now(),
@@ -198,7 +204,12 @@ impl VpnSupervisor {
                     }
                 }
 
-                // Poll NetworkManager state periodically
+                // Handle D-Bus events from NetworkManager (real-time)
+                Some(event) = self.dbus_rx.recv() => {
+                    self.handle_dbus_event(event).await;
+                }
+
+                // Poll NetworkManager state periodically (fallback/backup)
                 _ = nm_poll_interval.tick() => {
                     let elapsed = self.last_poll_time.elapsed();
                     if elapsed > Duration::from_secs(NM_POLL_INTERVAL_SECS * 3) {
@@ -209,10 +220,8 @@ impl VpnSupervisor {
                         );
                         self.dispatch(Event::Wake);
                         self.force_state_resync().await;
-                    } else {
-                        debug!("Polling NetworkManager state");
-                        self.poll_nm_state().await;
                     }
+                    // Polling is now just a backup - D-Bus events are primary
                     self.last_poll_time = Instant::now();
                 }
                 
@@ -220,6 +229,84 @@ impl VpnSupervisor {
                 _ = health_check_interval.tick() => {
                     self.run_health_check().await;
                 }
+            }
+        }
+    }
+
+    /// Handle D-Bus event from NetworkManager
+    async fn handle_dbus_event(&mut self, event: NmEvent) {
+        debug!("Received D-Bus event: {:?}", event);
+
+        // Check if we're in grace period after intentional disconnect
+        if let Some(disconnect_time) = self.last_disconnect_time {
+            if disconnect_time.elapsed().as_secs() < POST_DISCONNECT_GRACE_SECS {
+                debug!("Ignoring D-Bus event during grace period");
+                return;
+            } else {
+                self.last_disconnect_time = None;
+            }
+        }
+
+        let auto_reconnect = self.shared_state.read().await.auto_reconnect;
+
+        match event {
+            NmEvent::VpnActivated { name } => {
+                info!("D-Bus: VPN '{}' activated", name);
+                self.dispatch(Event::NmVpnUp { server: name });
+                self.sync_shared_state().await;
+                self.update_tray();
+            }
+            NmEvent::VpnActivating { name } => {
+                // Only update if we're not already aware of this activation
+                if !matches!(&self.machine.state, VpnState::Connecting { server } if server == &name) {
+                    info!("D-Bus: VPN '{}' activating (external)", name);
+                    self.dispatch(Event::UserEnable { server: name });
+                    self.sync_shared_state().await;
+                    self.update_tray();
+                }
+            }
+            NmEvent::VpnDeactivated { name } => {
+                info!("D-Bus: VPN '{}' deactivated", name);
+                
+                // Check if this was our connected VPN
+                if let Some(current) = self.machine.state.server_name() {
+                    if current == name {
+                        if auto_reconnect && matches!(self.machine.state, VpnState::Connected { .. }) {
+                            let server = name.clone();
+                            self.dispatch(Event::NmVpnDown);
+                            self.sync_shared_state().await;
+                            self.update_tray();
+                            self.show_notification("VPN Disconnected", "Connection dropped, reconnecting...");
+                            self.attempt_reconnect(&server).await;
+                        } else {
+                            self.dispatch(Event::NmVpnDown);
+                            self.sync_shared_state().await;
+                            self.update_tray();
+                        }
+                    }
+                }
+            }
+            NmEvent::VpnFailed { name, reason } => {
+                warn!("D-Bus: VPN '{}' failed: {}", name, reason);
+                
+                if auto_reconnect {
+                    self.dispatch(Event::NmVpnDown);
+                    self.sync_shared_state().await;
+                    self.update_tray();
+                    self.show_notification("VPN Failed", &format!("{}: {}", name, reason));
+                    self.attempt_reconnect(&name).await;
+                } else {
+                    self.machine.set_state(
+                        VpnState::Failed { server: name, reason },
+                        TransitionReason::VpnLost,
+                    );
+                    self.sync_shared_state().await;
+                    self.update_tray();
+                }
+            }
+            NmEvent::ConnectivityChanged { connected } => {
+                debug!("D-Bus: Connectivity changed: {}", connected);
+                // Could trigger health check here
             }
         }
     }
@@ -778,13 +865,22 @@ async fn main() {
     })
     .expect("Error setting Ctrl-C handler");
 
-    info!("Starting NetworkManager VPN Supervisor (Phase 2: Formal State Machine)");
+    info!("Starting NetworkManager VPN Supervisor (Phase 4: D-Bus Events)");
 
     let shared_state = Arc::new(RwLock::new(SharedState::default()));
     let (tx, rx) = mpsc::channel(16);
+    let (dbus_tx, dbus_rx) = mpsc::channel(32);
     let tray_handle = Arc::new(std::sync::Mutex::new(None));
 
-    let supervisor = VpnSupervisor::new(shared_state.clone(), rx, tray_handle.clone());
+    // Start D-Bus monitor for real-time NetworkManager events
+    let nm_monitor = NmMonitor::new(dbus_tx);
+    tokio::spawn(async move {
+        if let Err(e) = nm_monitor.run().await {
+            error!("D-Bus monitor failed: {}. Falling back to polling only.", e);
+        }
+    });
+
+    let supervisor = VpnSupervisor::new(shared_state.clone(), rx, dbus_rx, tray_handle.clone());
     tokio::spawn(supervisor.run());
 
     let tray_service = VpnTray::new(tx);
