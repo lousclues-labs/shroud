@@ -20,6 +20,7 @@
 //! All state transitions go through StateMachine::handle_event() which logs
 //! every transition with its reason.
 
+mod health;
 mod nm;
 mod state;
 mod tray;
@@ -35,6 +36,7 @@ use std::time::Instant;
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{sleep, Duration};
 
+use crate::health::{HealthChecker, HealthResult};
 use crate::nm::{
     connect as nm_connect, disconnect as nm_disconnect, get_active_vpn as nm_get_active_vpn,
     get_active_vpn_with_state as nm_get_active_vpn_with_state, get_vpn_state as nm_get_vpn_state,
@@ -49,6 +51,9 @@ use crate::tray::{SharedState, VpnCommand, VpnTray};
 
 /// Poll NetworkManager state every 2 seconds
 const NM_POLL_INTERVAL_SECS: u64 = 2;
+
+/// Health check interval when connected (seconds)
+const HEALTH_CHECK_INTERVAL_SECS: u64 = 30;
 
 /// Wait after nmcli con up before verifying connection
 const CONNECTION_VERIFY_DELAY_SECS: u64 = 5;
@@ -106,6 +111,8 @@ pub struct VpnSupervisor {
     last_disconnect_time: Option<Instant>,
     /// Timestamp of last polling tick (for detecting sleep/wake)
     last_poll_time: Instant,
+    /// Health checker for VPN connectivity verification
+    health_checker: HealthChecker,
 }
 
 impl VpnSupervisor {
@@ -128,12 +135,18 @@ impl VpnSupervisor {
             tray_handle,
             last_disconnect_time: None,
             last_poll_time: Instant::now(),
+            health_checker: HealthChecker::new(),
         }
     }
 
     /// Dispatch an event to the state machine and sync the shared state
     fn dispatch(&mut self, event: Event) -> Option<TransitionReason> {
         let reason = self.machine.handle_event(event);
+        
+        // Reset health checker when we successfully connect
+        if matches!(self.machine.state, VpnState::Connected { .. }) {
+            self.health_checker.reset();
+        }
         
         // Always sync shared state after event processing
         if let Ok(mut state) = self.shared_state.try_write() {
@@ -160,6 +173,9 @@ impl VpnSupervisor {
 
         // Create an interval for NM polling
         let mut nm_poll_interval = tokio::time::interval(Duration::from_secs(NM_POLL_INTERVAL_SECS));
+        
+        // Create an interval for health checks (only runs when connected)
+        let mut health_check_interval = tokio::time::interval(Duration::from_secs(HEALTH_CHECK_INTERVAL_SECS));
 
         loop {
             tokio::select! {
@@ -198,6 +214,11 @@ impl VpnSupervisor {
                         self.poll_nm_state().await;
                     }
                     self.last_poll_time = Instant::now();
+                }
+                
+                // Run health checks when connected
+                _ = health_check_interval.tick() => {
+                    self.run_health_check().await;
                 }
             }
         }
@@ -351,6 +372,61 @@ impl VpnSupervisor {
 
         self.sync_shared_state().await;
         self.update_tray();
+    }
+
+    /// Run health check when connected
+    async fn run_health_check(&mut self) {
+        // Only run health checks when in Connected or Degraded state
+        let server = match &self.machine.state {
+            VpnState::Connected { server } => server.clone(),
+            VpnState::Degraded { server } => server.clone(),
+            _ => return,
+        };
+
+        debug!("Running health check for {}", server);
+        
+        let result = self.health_checker.check().await;
+        
+        match result {
+            HealthResult::Healthy => {
+                // If we were degraded, transition back to connected
+                if matches!(self.machine.state, VpnState::Degraded { .. }) {
+                    info!("Health check passed, VPN recovered from degraded state");
+                    self.dispatch(Event::HealthOk);
+                    self.sync_shared_state().await;
+                    self.update_tray();
+                    self.show_notification("VPN Recovered", "Connection is healthy again");
+                } else {
+                    debug!("Health check passed");
+                }
+            }
+            HealthResult::Degraded { latency_ms } => {
+                if matches!(self.machine.state, VpnState::Connected { .. }) {
+                    warn!("Health check degraded: {}ms latency", latency_ms);
+                    self.dispatch(Event::HealthDegraded);
+                    self.sync_shared_state().await;
+                    self.update_tray();
+                    self.show_notification("VPN Degraded", &format!("High latency: {}ms", latency_ms));
+                }
+            }
+            HealthResult::Dead { reason } => {
+                error!("Health check failed: {}", reason);
+                let auto_reconnect = self.shared_state.read().await.auto_reconnect;
+                
+                if auto_reconnect {
+                    self.dispatch(Event::HealthDead);
+                    self.sync_shared_state().await;
+                    self.update_tray();
+                    self.show_notification("VPN Dead", "Connection lost, reconnecting...");
+                    self.attempt_reconnect(&server).await;
+                } else {
+                    self.dispatch(Event::HealthDead);
+                    self.sync_shared_state().await;
+                    self.update_tray();
+                    self.show_notification("VPN Dead", &reason);
+                }
+            }
+        }
     }
 
     /// Handle user request to connect to a server

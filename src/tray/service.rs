@@ -110,7 +110,7 @@ impl Tray for VpnTray {
             VpnState::Connecting { .. } | VpnState::Reconnecting { .. } => {
                 get_status_icon(IconType::Connecting)
             }
-            VpnState::Degraded { .. } => get_status_icon(IconType::Connecting), // Yellow for degraded
+            VpnState::Degraded { .. } => get_status_icon(IconType::Degraded),
             VpnState::Failed { .. } => get_status_icon(IconType::Failed),
             VpnState::Disconnected => get_status_icon(IconType::Disconnected),
         }
