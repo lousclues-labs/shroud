@@ -9,7 +9,9 @@
 //! The kill switch uses a separate table "vpn_killswitch" to avoid
 //! interfering with other firewall rules.
 
-use log::{debug, error, info, warn};
+#![allow(dead_code)]
+
+use log::{debug, info, warn};
 use std::net::IpAddr;
 use std::process::Stdio;
 use tokio::process::Command;

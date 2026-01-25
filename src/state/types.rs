@@ -98,6 +98,7 @@ impl fmt::Display for VpnState {
 }
 
 /// Events that can trigger state transitions
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum Event {
     // User-initiated events
@@ -158,6 +159,7 @@ impl fmt::Display for Event {
 }
 
 /// Reason for a state transition (for logging and diagnostics)
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub enum TransitionReason {
     /// User requested the change
@@ -207,6 +209,7 @@ impl fmt::Display for TransitionReason {
 }
 
 /// NetworkManager VPN connection state (from nmcli)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NmVpnState {
     /// VPN is activating (connecting)

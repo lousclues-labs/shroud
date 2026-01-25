@@ -5,4 +5,4 @@
 pub mod icons;
 pub mod service;
 
-pub use service::{extract_short_name, SharedState, VpnCommand, VpnTray};
+pub use service::{SharedState, VpnCommand, VpnTray};

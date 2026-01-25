@@ -3,7 +3,7 @@
 //! Persistent storage for user preferences using TOML format.
 //! Config file is stored in XDG_CONFIG_HOME/openvpn-tray/config.toml
 
-use log::{debug, error, info, warn};
+use log::{debug, info, warn};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -64,6 +64,7 @@ impl ConfigManager {
     }
 
     /// Get the config file path
+    #[allow(dead_code)]
     pub fn config_path(&self) -> &PathBuf {
         &self.config_path
     }
@@ -132,6 +133,7 @@ impl ConfigManager {
     }
 
     /// Update a single setting and save
+    #[allow(dead_code)]
     pub fn update<F>(&self, config: &mut Config, updater: F) -> Result<(), String>
     where
         F: FnOnce(&mut Config),

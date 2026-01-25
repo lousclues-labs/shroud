@@ -5,4 +5,4 @@
 
 pub mod firewall;
 
-pub use firewall::{KillSwitch, KillSwitchStatus};
+pub use firewall::KillSwitch;

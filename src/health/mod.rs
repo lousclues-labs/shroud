@@ -4,4 +4,4 @@
 
 pub mod checker;
 
-pub use checker::{HealthChecker, HealthResult, HealthConfig};
+pub use checker::{HealthChecker, HealthResult};

@@ -65,6 +65,7 @@ const HEALTH_CHECK_INTERVAL_SECS: u64 = 30;
 const CONNECTION_VERIFY_DELAY_SECS: u64 = 5;
 
 /// Maximum number of reconnection attempts before giving up
+#[allow(dead_code)]
 const MAX_RECONNECT_ATTEMPTS: u32 = 10;
 
 /// Maximum number of connection attempts during handle_connect
@@ -202,6 +203,7 @@ impl VpnSupervisor {
     }
 
     /// Update kill switch based on current VPN state (call after state transitions)
+    #[allow(dead_code)]
     async fn update_kill_switch_for_state(&mut self) {
         // Only act if kill switch is enabled in config
         if !self.app_config.kill_switch_enabled {
@@ -955,6 +957,19 @@ impl VpnSupervisor {
 
     /// Attempt to reconnect with exponential backoff (triggered by connection drop)
     async fn attempt_reconnect(&mut self, connection_name: &str) {
+        // First, verify the connection still exists in NetworkManager
+        let available_connections = nm_list_vpn_connections().await;
+        if !available_connections.iter().any(|c| c == connection_name) {
+            error!("Cannot reconnect: VPN '{}' no longer exists in NetworkManager", connection_name);
+            self.show_notification("Reconnect Failed", &format!("VPN '{}' not found", connection_name));
+            self.dispatch(Event::NmVpnDown);
+            self.sync_shared_state().await;
+            self.update_tray();
+            // Refresh connection list to update the tray menu
+            self.refresh_connections().await;
+            return;
+        }
+        
         let max_attempts = self.machine.max_retries();
         
         // NOTE: Kill switch stays enabled - VPN server IPs are already whitelisted

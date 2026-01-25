@@ -167,6 +167,7 @@ impl HealthChecker {
     /// Quick connectivity check using ping
     ///
     /// This is a lightweight check that can be used more frequently.
+    #[allow(dead_code)]
     pub async fn quick_check(&self) -> bool {
         let result = timeout(
             Duration::from_secs(5),

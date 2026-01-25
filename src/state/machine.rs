@@ -7,6 +7,7 @@ use log::info;
 use crate::state::types::{Event, TransitionReason, VpnState};
 
 /// Configuration for the state machine
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct StateMachineConfig {
     /// Maximum number of reconnection attempts before failing
@@ -59,6 +60,7 @@ impl StateMachine {
     }
 
     /// Get the current retry count
+    #[allow(dead_code)]
     pub fn retries(&self) -> u32 {
         self.retries
     }
@@ -69,6 +71,7 @@ impl StateMachine {
     }
 
     /// Calculate the backoff delay for the current retry attempt
+    #[allow(dead_code)]
     pub fn backoff_delay_secs(&self) -> u64 {
         std::cmp::min(
             self.config.base_delay_secs * (self.retries as u64 + 1),
