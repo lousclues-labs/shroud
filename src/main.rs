@@ -127,6 +127,14 @@ pub struct VpnSupervisor {
     app_config: Config,
     /// Kill switch for blocking non-VPN traffic
     kill_switch: KillSwitch,
+    /// Flag to indicate a VPN switch is in progress (prevents D-Bus event interference)
+    switching_in_progress: bool,
+    /// The target server we're switching TO (to ignore deactivation events for old VPN)
+    switching_target: Option<String>,
+    /// The server we're switching FROM (to ignore late deactivation events)
+    switching_from: Option<String>,
+    /// Timestamp when switch completed (to ignore late D-Bus events)
+    switch_completed_time: Option<Instant>,
 }
 
 impl VpnSupervisor {
@@ -161,6 +169,10 @@ impl VpnSupervisor {
             config_manager,
             app_config,
             kill_switch: KillSwitch::new(),
+            switching_in_progress: false,
+            switching_target: None,
+            switching_from: None,
+            switch_completed_time: None,
         }
     }
 
@@ -308,8 +320,10 @@ impl VpnSupervisor {
                         );
                         self.dispatch(Event::Wake);
                         self.force_state_resync().await;
+                    } else {
+                        // Regular poll - check for multiple VPNs and sync state
+                        self.poll_nm_state().await;
                     }
-                    // Polling is now just a backup - D-Bus events are primary
                     self.last_poll_time = Instant::now();
                 }
                 
@@ -324,6 +338,32 @@ impl VpnSupervisor {
     /// Handle D-Bus event from NetworkManager
     async fn handle_dbus_event(&mut self, event: NmEvent) {
         debug!("Received D-Bus event: {:?}", event);
+
+        // CRITICAL: Ignore ALL D-Bus events while a VPN switch is in progress
+        // handle_connect manages everything during a switch - D-Bus events only cause interference
+        if self.switching_in_progress {
+            debug!("Ignoring D-Bus event during VPN switch: {:?}", event);
+            return;
+        }
+
+        // CRITICAL: Ignore late deactivation events from VPN we recently switched FROM
+        // D-Bus events can arrive after we've already connected to the new VPN
+        if let Some(ref from_server) = self.switching_from {
+            if let NmEvent::VpnDeactivated { ref name } = event {
+                if name == from_server {
+                    // Check if we're within the grace window after switch completed
+                    if let Some(completed) = self.switch_completed_time {
+                        if completed.elapsed().as_secs() < POST_DISCONNECT_GRACE_SECS {
+                            info!("Ignoring late deactivation event for switched-from VPN: {}", name);
+                            return;
+                        }
+                    }
+                    // Clear the switching_from after processing
+                    self.switching_from = None;
+                    self.switch_completed_time = None;
+                }
+            }
+        }
 
         // Check if we're in grace period after intentional disconnect
         if let Some(disconnect_time) = self.last_disconnect_time {
@@ -340,8 +380,39 @@ impl VpnSupervisor {
         match event {
             NmEvent::VpnActivated { name } => {
                 info!("D-Bus: VPN '{}' activated", name);
+                
+                // CRITICAL: If we already have a different VPN connected, disconnect the OLD one
+                // Policy: newest VPN wins (the one that just activated)
+                if let Some(current) = self.machine.state.server_name() {
+                    if current != &name {
+                        info!("External VPN '{}' activated while connected to '{}' - disconnecting old VPN", name, current);
+                        let old_vpn = current.to_string();
+                        // Update our state to the new VPN first
+                        self.dispatch(Event::NmVpnUp { server: name.clone() });
+                        self.sync_shared_state().await;
+                        self.update_tray();
+                        // Then disconnect the old one
+                        if let Err(e) = nm_disconnect(&old_vpn).await {
+                            warn!("Failed to disconnect old VPN '{}': {}", old_vpn, e);
+                        }
+                        self.show_notification("VPN Switched", &format!("Now connected to {}", name));
+                        return;
+                    }
+                }
+                
+                // Also check for any other active VPNs in NetworkManager
+                let all_active = nm_get_all_active_vpns().await;
+                if all_active.len() > 1 {
+                    info!("Multiple VPNs detected ({}) - cleaning up extras", all_active.len());
+                    for vpn in &all_active {
+                        if vpn.name != name {
+                            info!("Disconnecting extra VPN: {}", vpn.name);
+                            let _ = nm_disconnect(&vpn.name).await;
+                        }
+                    }
+                }
+                
                 self.dispatch(Event::NmVpnUp { server: name });
-                self.update_kill_switch_for_state().await;
                 self.sync_shared_state().await;
                 self.update_tray();
             }
@@ -436,6 +507,12 @@ impl VpnSupervisor {
 
     /// Poll NetworkManager state and dispatch appropriate events
     async fn poll_nm_state(&mut self) {
+        // CRITICAL: Skip polling entirely while a VPN switch is in progress
+        if self.switching_in_progress {
+            debug!("Skipping NM poll during VPN switch");
+            return;
+        }
+        
         // Check if we're in grace period after intentional disconnect
         if let Some(disconnect_time) = self.last_disconnect_time {
             if disconnect_time.elapsed().as_secs() < POST_DISCONNECT_GRACE_SECS {
@@ -449,12 +526,38 @@ impl VpnSupervisor {
         // CRITICAL: Detect multiple simultaneous VPNs and clean up extras
         let all_vpns = nm_get_all_active_vpns().await;
         if all_vpns.len() > 1 {
-            warn!("Multiple VPNs detected: {:?}", all_vpns.iter().map(|v| &v.name).collect::<Vec<_>>());
-            // Keep the first (most recently activated) and disconnect others
-            for extra_vpn in &all_vpns[1..] {
-                warn!("Disconnecting extra VPN: {}", extra_vpn.name);
-                let _ = nm_disconnect(&extra_vpn.name).await;
+            warn!("Poll detected {} VPNs active: {:?}", all_vpns.len(), 
+                  all_vpns.iter().map(|v| &v.name).collect::<Vec<_>>());
+            
+            // Determine which VPN to keep:
+            // 1. If our state says we're connected to one of them, keep that one
+            // 2. Otherwise keep the first one (most recently activated)
+            let keep_vpn = if let Some(our_server) = self.machine.state.server_name() {
+                if all_vpns.iter().any(|v| v.name == our_server) {
+                    our_server.to_string()
+                } else {
+                    all_vpns[0].name.clone()
+                }
+            } else {
+                all_vpns[0].name.clone()
+            };
+            
+            info!("Keeping VPN '{}', disconnecting others", keep_vpn);
+            for vpn in &all_vpns {
+                if vpn.name != keep_vpn {
+                    warn!("Disconnecting extra VPN: {}", vpn.name);
+                    let _ = nm_disconnect(&vpn.name).await;
+                }
             }
+            
+            // Update our state to match the kept VPN
+            if self.machine.state.server_name() != Some(&keep_vpn) {
+                info!("Updating state to match kept VPN: {}", keep_vpn);
+                self.dispatch(Event::NmVpnUp { server: keep_vpn });
+                self.sync_shared_state().await;
+                self.update_tray();
+            }
+            return; // Don't run the rest of the poll logic
         }
 
         let active_vpn_info = nm_get_active_vpn_with_state().await;
@@ -632,57 +735,90 @@ impl VpnSupervisor {
     async fn handle_connect(&mut self, connection_name: &str) {
         info!("Connect requested: {}", connection_name);
 
-        // CRITICAL: Check for and clean up multiple active VPNs first
-        let all_active = nm_get_all_active_vpns().await;
-        if all_active.len() > 1 {
-            warn!("Multiple VPNs detected simultaneously: {:?}", all_active.iter().map(|v| &v.name).collect::<Vec<_>>());
+        // CRITICAL: Set switching flag to prevent D-Bus events from interfering
+        self.switching_in_progress = true;
+        self.switching_target = Some(connection_name.to_string());
+        
+        // Track the VPN we're switching FROM (to ignore late D-Bus events)
+        if let Some(current) = self.machine.state.server_name() {
+            if current != connection_name {
+                self.switching_from = Some(current.to_string());
+            }
         }
         
-        // Disconnect ALL active VPNs (not just the one we think we're connected to)
-        if !all_active.is_empty() {
-            info!("Found {} active VPN(s), disconnecting all before connecting", all_active.len());
-            
-            // Dispatch connecting event for new server first
-            self.dispatch(Event::UserEnable { server: connection_name.to_string() });
-            self.sync_shared_state().await;
-            self.update_tray();
-            
-            for vpn in &all_active {
-                info!("Disconnecting VPN: {}", vpn.name);
+        // Set grace period immediately to block any D-Bus deactivation events
+        self.last_disconnect_time = Some(Instant::now());
+
+        // NOTE: We do NOT disable kill switch during VPN switch anymore.
+        // The kill switch rules already whitelist all VPN server IPs from NetworkManager,
+        // so VPN connections should work even with kill switch enabled.
+
+        // STEP 1: ALWAYS check NM for active VPNs first (don't trust our state machine)
+        // This catches VPNs that NM still has active even if our state is wrong
+        let all_active = nm_get_all_active_vpns().await;
+        info!("NM reports {} active VPN(s): {:?}", all_active.len(), 
+              all_active.iter().map(|v| &v.name).collect::<Vec<_>>());
+        
+        // Also track any active VPNs as "switching from" to ignore their deactivation events
+        for vpn in &all_active {
+            if vpn.name != connection_name && self.switching_from.is_none() {
+                self.switching_from = Some(vpn.name.clone());
+            }
+        }
+        
+        // Disconnect ALL VPNs that aren't the one we're connecting to
+        for vpn in &all_active {
+            if vpn.name != connection_name {
+                info!("Disconnecting VPN before switch: {}", vpn.name);
                 if let Err(e) = nm_disconnect(&vpn.name).await {
                     warn!("Failed to disconnect {}: {}", vpn.name, e);
                 }
             }
-            
-            // Wait for all disconnects to complete
-            let mut all_disconnected = false;
+        }
+        
+        // STEP 2: Wait for ALL disconnects to complete (with verification)
+        if all_active.iter().any(|v| v.name != connection_name) {
+            info!("Waiting for VPN disconnection(s) to complete...");
             for attempt in 1..=DISCONNECT_VERIFY_MAX_ATTEMPTS {
                 sleep(Duration::from_millis(DISCONNECT_VERIFY_INTERVAL_MS)).await;
                 let remaining = nm_get_all_active_vpns().await;
-                if remaining.is_empty() {
-                    info!("All previous VPNs disconnected");
-                    all_disconnected = true;
+                let others: Vec<_> = remaining.iter().filter(|v| v.name != connection_name).collect();
+                if others.is_empty() {
+                    info!("All other VPNs disconnected after {} attempts", attempt);
                     break;
                 }
-                debug!("Still have {} active VPN(s), attempt {}", remaining.len(), attempt);
-            }
-            
-            if !all_disconnected {
-                warn!("Disconnect verification timed out - proceeding anyway");
+                if attempt == DISCONNECT_VERIFY_MAX_ATTEMPTS {
+                    warn!("Disconnect verification timed out after {} attempts", attempt);
+                    // Force cleanup
+                    for other in &others {
+                        warn!("Forcing disconnect of stuck VPN: {}", other.name);
+                        let _ = nm_disconnect(&other.name).await;
+                    }
+                }
+                debug!("Still have {} other active VPN(s), attempt {}", others.len(), attempt);
             }
             
             kill_orphan_openvpn_processes().await;
             sleep(Duration::from_secs(POST_DISCONNECT_SETTLE_SECS)).await;
-        } else {
-            // No active VPNs, just dispatch the enable event
-            self.dispatch(Event::UserEnable { server: connection_name.to_string() });
-            self.sync_shared_state().await;
-            self.update_tray();
         }
+        
+        // Final verification before connect
+        let final_check = nm_get_all_active_vpns().await;
+        let other_vpns: Vec<_> = final_check.iter().filter(|v| v.name != connection_name).collect();
+        if !other_vpns.is_empty() {
+            error!("CRITICAL: Still have {} other VPN(s) active before connect: {:?}", 
+                   other_vpns.len(), other_vpns.iter().map(|v| &v.name).collect::<Vec<_>>());
+        }
+        
+        // Dispatch connecting event for new server
+        self.dispatch(Event::UserEnable { server: connection_name.to_string() });
+        self.sync_shared_state().await;
+        self.update_tray();
 
         self.show_notification("VPN", &format!("Connecting to {}...", connection_name));
 
         // Attempt connection with retries
+        let mut connection_succeeded = false;
         for attempt in 1..=MAX_CONNECT_ATTEMPTS {
             debug!("Connection attempt {} of {} for {}", attempt, MAX_CONNECT_ATTEMPTS, connection_name);
 
@@ -699,7 +835,8 @@ impl VpnSupervisor {
                                 self.sync_shared_state().await;
                                 self.update_tray();
                                 self.show_notification("VPN Connected", &format!("Connected to {}", connection_name));
-                                return;
+                                connection_succeeded = true;
+                                break;
                             }
                             Some(NmVpnState::Activating) => {
                                 // Still connecting
@@ -710,6 +847,9 @@ impl VpnSupervisor {
                         }
                     }
                     
+                    if connection_succeeded {
+                        break;
+                    }
                     warn!("Connection monitoring timed out");
                 }
                 Err(e) => {
@@ -722,12 +862,27 @@ impl VpnSupervisor {
             }
         }
 
-        // All attempts failed
-        error!("Failed to connect to {} after {} attempts", connection_name, MAX_CONNECT_ATTEMPTS);
-        self.dispatch(Event::Timeout);
-        self.sync_shared_state().await;
-        self.update_tray();
-        self.show_notification("VPN Failed", &format!("Could not connect to {}", connection_name));
+        // NOTE: Kill switch stays enabled throughout - no need to re-enable
+        // VPN server IPs are already whitelisted in the rules
+
+        // CRITICAL: Clear switching flags - we're done with the switch
+        // BUT keep switching_from and set switch_completed_time to ignore late D-Bus events
+        self.switching_in_progress = false;
+        self.switching_target = None;
+        self.last_disconnect_time = None;
+        // Set completion time so late D-Bus events for the old VPN are ignored
+        self.switch_completed_time = Some(Instant::now());
+
+        if !connection_succeeded {
+            // All attempts failed - also clear switching_from since there's nothing to ignore
+            self.switching_from = None;
+            self.switch_completed_time = None;
+            error!("Failed to connect to {} after {} attempts", connection_name, MAX_CONNECT_ATTEMPTS);
+            self.dispatch(Event::Timeout);
+            self.sync_shared_state().await;
+            self.update_tray();
+            self.show_notification("VPN Failed", &format!("Could not connect to {}", connection_name));
+        }
     }
 
     /// Handle user request to disconnect
@@ -761,6 +916,11 @@ impl VpnSupervisor {
     /// Attempt to reconnect with exponential backoff (triggered by connection drop)
     async fn attempt_reconnect(&mut self, connection_name: &str) {
         let max_attempts = self.machine.max_retries();
+        
+        // NOTE: Kill switch stays enabled - VPN server IPs are already whitelisted
+        // No need to disable/re-enable which would require pkexec prompts
+        
+        let mut reconnect_succeeded = false;
         
         for attempt in 1..=max_attempts {
             info!("Reconnection attempt {}/{} for {}", attempt, max_attempts, connection_name);
@@ -796,7 +956,8 @@ impl VpnSupervisor {
                             self.sync_shared_state().await;
                             self.update_tray();
                             self.show_notification("VPN Reconnected", &format!("Reconnected to {}", connection_name));
-                            return;
+                            reconnect_succeeded = true;
+                            break;
                         }
                     }
                     warn!("Reconnection verification failed");
@@ -805,6 +966,12 @@ impl VpnSupervisor {
                     error!("Reconnection attempt {} failed: {}", attempt, e);
                 }
             }
+        }
+
+        // NOTE: Kill switch stays enabled - no need to re-enable
+
+        if reconnect_succeeded {
+            return;
         }
 
         // All attempts exhausted
