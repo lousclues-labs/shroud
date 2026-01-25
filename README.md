@@ -250,4 +250,4 @@ The app maintains internal state that is reconciled with NetworkManager:
 
 ## License
 
-MIT
+APACHE 2.0
