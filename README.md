@@ -1,4 +1,4 @@
-# shroud - OpenVPN System Tray Application
+# Shroud - OpenVPN System Tray Application
 
 A production-ready system tray application for managing OpenVPN connections with auto-reconnect capabilities, designed for Arch Linux / KDE Plasma (X11).
 
