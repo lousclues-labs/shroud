@@ -2,7 +2,7 @@
 
 **A provider-agnostic VPN connection manager for Linux.**
 
-[![License: Apache--2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
 
 Shroud wraps around NetworkManager and OpenVPN like a protective shroud around a lock mechanism — hardening security without replacing the tools you already have.
@@ -56,34 +56,101 @@ The name has layers:
 
 ---
 
-## Screenshots
+## Quick Start
 
-*Coming soon*
+```bash
+git clone https://github.com/loujr/shroud.git
+cd shroud
+./setup.sh
+```
+
+That's it! The setup script handles everything: dependencies, building, installation, systemd service, shell completions, and more.
 
 ---
 
 ## Installation
 
-### Dependencies
+### Using setup.sh (Recommended)
+
+The setup script provides a complete installation experience:
+
+```bash
+# Clone the repository
+git clone https://github.com/loujr/shroud.git
+cd shroud
+
+# Full installation (builds, installs, configures everything)
+./setup.sh
+
+# Or with options
+./setup.sh --help              # Show all options
+./setup.sh --dry-run install   # Preview what would be done
+./setup.sh --verbose install   # Detailed output
+./setup.sh --force install     # Skip confirmations
+```
+
+#### What setup.sh Does
+
+1. **Pre-flight checks** — Verifies distro, display server, NetworkManager
+2. **Dependencies** — Installs required packages via your package manager
+3. **Build** — Compiles release binary with cargo
+4. **Install** — Places binary in `~/.local/bin/` with backup/rollback
+5. **Configure** — Creates `~/.config/shroud/config.toml` with defaults
+6. **Service** — Installs and enables systemd user service
+7. **Desktop** — Creates application menu entry and autostart
+8. **Completions** — Installs shell completions for bash, zsh, fish
+9. **Polkit** — Optionally configures passwordless kill switch (with security warning)
+10. **Verify** — Tests the installation and shows summary
+
+#### Other Commands
+
+```bash
+./setup.sh status      # Check installation status
+./setup.sh update      # Update to latest (preserves config)
+./setup.sh repair      # Reinstall without rebuilding
+./setup.sh check       # Check dependencies only
+./setup.sh uninstall   # Complete removal (prompts for config/logs)
+```
+
+### Manual Installation
+
+If you prefer manual control:
+
+#### Dependencies
 
 ```bash
 # Arch Linux
-sudo pacman -S networkmanager networkmanager-openvpn nftables polkit
+sudo pacman -S rust networkmanager networkmanager-openvpn openvpn nftables polkit libappindicator-gtk3
 
 # Debian/Ubuntu
-sudo apt install network-manager network-manager-openvpn nftables policykit-1
+sudo apt install rustc cargo network-manager network-manager-openvpn openvpn nftables policykit-1 libayatana-appindicator3-1
 
 # Fedora
-sudo dnf install NetworkManager NetworkManager-openvpn nftables polkit
+sudo dnf install rust cargo NetworkManager NetworkManager-openvpn openvpn nftables polkit libappindicator-gtk3
 ```
 
-### From Source
+#### Build and Install
 
 ```bash
-git clone https://github.com/loujr/shroud.git
-cd shroud
+# Build
 cargo build --release
+
+# Install binary
+mkdir -p ~/.local/bin
 cp target/release/shroud ~/.local/bin/
+chmod +x ~/.local/bin/shroud
+
+# Verify
+shroud --version
+```
+
+#### Systemd Service (Optional)
+
+```bash
+mkdir -p ~/.config/systemd/user
+cp systemd/shroud.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now shroud.service
 ```
 
 ### Arch Linux (AUR)
@@ -92,64 +159,30 @@ cp target/release/shroud ~/.local/bin/
 
 ---
 
-## Configuration
+## Importing VPN Configs
 
-Shroud stores configuration in `~/.config/shroud/config.toml`:
-
-```toml
-# Config version for migration support
-version = 1
-
-# Automatically reconnect when VPN drops
-auto_reconnect = true
-
-# Last successfully connected server (for quick reconnect)
-last_server = "us-east-1"
-
-# Health check interval in seconds (0 to disable)
-health_check_interval_secs = 30
-
-# Latency threshold for degraded state (ms)
-health_degraded_threshold_ms = 2000
-
-# Maximum reconnection attempts before giving up
-max_reconnect_attempts = 10
-
-# Enable kill switch (blocks non-VPN traffic)
-kill_switch_enabled = false
-
-# DNS leak protection mode: "tunnel" | "localhost" | "any"
-# - tunnel: DNS only via VPN tunnel interfaces (most secure, default)
-# - localhost: DNS only to 127.0.0.0/8, ::1 (for local resolvers like systemd-resolved)
-# - any: DNS to any destination (legacy, least secure)
-dns_mode = "tunnel"
-
-# IPv6 leak protection: "block" | "tunnel" | "off"
-# - block: Drop all IPv6 except loopback (most secure, default)
-# - tunnel: Allow IPv6 only via VPN tunnel interfaces
-# - off: No special IPv6 handling (legacy)
-ipv6_mode = "block"
-```
-
----
-
-## Usage
-
-### Importing VPN Configs
-
-First, import your `.ovpn` files into NetworkManager:
+Before using Shroud, import your `.ovpn` files into NetworkManager:
 
 ```bash
 # Import a single config
 nmcli connection import type openvpn file /path/to/config.ovpn
 
 # The connection will be named after the file (e.g., "us-east-1")
+# You can rename it:
+nmcli connection modify "us-east-1" connection.id "USA East"
+
+# List imported VPN connections
+nmcli -t -f NAME,TYPE connection show | grep vpn
 ```
+
+---
+
+## Usage
 
 ### Starting Shroud
 
 ```bash
-# Run directly
+# Start the daemon (tray application)
 shroud
 
 # With verbose logging
@@ -159,17 +192,15 @@ shroud -vvv        # Trace level
 
 # With specific log level
 shroud --log-level debug
-shroud --log-level trace
 
 # With file logging
 shroud --log-file /tmp/shroud.log
 
-# Environment variable (takes precedence)
-RUST_LOG=debug shroud
-RUST_LOG=shroud=trace shroud
+# Via systemd (recommended)
+systemctl --user start shroud
 ```
 
-### CLI Commands
+### CLI Architecture
 
 Shroud operates in two modes from a single binary:
 
@@ -194,7 +225,7 @@ Shroud operates in two modes from a single binary:
 - **Daemon mode** (`shroud`): Starts the tray application, listens for CLI commands
 - **Client mode** (`shroud <command>`): Sends command to running daemon and exits
 
-#### Available Commands
+### CLI Commands
 
 ```bash
 # Connection management
@@ -239,7 +270,8 @@ shroud help connect             # Help for specific command
 shroud connect --help           # Alternative help syntax
 ```
 
-**Exit codes:**
+### Exit Codes
+
 | Code | Meaning |
 |------|---------|
 | 0 | Success |
@@ -249,28 +281,37 @@ shroud connect --help           # Alternative help syntax
 
 ---
 
-### Systemd User Service
+## Configuration
 
-```bash
-# Copy the service file
-cp systemd/shroud.service ~/.config/systemd/user/
+Shroud stores configuration in `~/.config/shroud/config.toml`:
 
-# Enable and start
-systemctl --user daemon-reload
-systemctl --user enable --now shroud.service
+```toml
+# Config version for migration support
+version = 1
 
-# Check status
-systemctl --user status shroud.service
+# Automatically reconnect when VPN drops
+auto_reconnect = true
 
-# View logs
-journalctl --user -u shroud.service -f
-```
+# Last successfully connected server (for quick reconnect)
+last_server = "us-east-1"
 
-### XDG Autostart
+# Health check interval in seconds (0 to disable)
+health_check_interval_secs = 30
 
-```bash
-# Copy the desktop file
-cp autostart/shroud.desktop ~/.config/autostart/
+# Latency threshold for degraded state (ms)
+health_degraded_threshold_ms = 2000
+
+# Maximum reconnection attempts before giving up
+max_reconnect_attempts = 10
+
+# Enable kill switch (blocks non-VPN traffic)
+kill_switch_enabled = false
+
+# DNS leak protection mode: "tunnel" | "localhost" | "any"
+dns_mode = "tunnel"
+
+# IPv6 leak protection: "block" | "tunnel" | "off"
+ipv6_mode = "block"
 ```
 
 ---
@@ -307,8 +348,6 @@ When enabled, the kill switch creates nftables rules that:
 
 ### Auditing Rules
 
-You can inspect exactly what Shroud applies:
-
 ```bash
 # View active kill switch rules
 sudo nft list table inet shroud_killswitch
@@ -316,34 +355,6 @@ sudo nft list table inet shroud_killswitch
 # View all tables
 sudo nft list tables
 ```
-
-**Security through clarity** — if you can't explain what a rule does, it shouldn't exist.
-
----
-
-## Architecture
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed system design, including:
-
-- Module structure
-- State machine transitions
-- Data flow diagrams
-- Concurrency model
-- Key design decisions
-
----
-
-## Principles
-
-See [PRINCIPLES.md](PRINCIPLES.md) for the core values that guide Shroud's development.
-
-Key highlights:
-
-- **Wrap, Don't Replace** — We enhance NetworkManager, not compete with it
-- **Fail Loud, Recover Quiet** — No silent failures, graceful recovery
-- **Leave No Trace** — Clean shutdown, no orphaned rules
-- **The User Is Not the Enemy** — No telemetry, no phoning home
-- **State Is Sacred** — Every transition logged, no ambiguity
 
 ---
 
@@ -367,127 +378,70 @@ Key highlights:
 2. Check NetworkManager logs: `journalctl -u NetworkManager -f`
 3. Verify OpenVPN plugin is installed
 
+### Network Locked After Crash
+
+If Shroud crashes with kill switch enabled:
+
+```bash
+# Shroud automatically cleans stale rules on next start
+shroud
+
+# Or manually clean up
+sudo nft delete table inet shroud_killswitch
+```
+
 ### Debug Logging
 
 ```bash
-RUST_LOG=debug shroud 2>&1 | tee shroud.log
-```
+# Enable debug output
+RUST_LOG=debug shroud
 
-For more detailed logging options, see [Debug Logging](#debug-logging-1) below.
+# Or use CLI
+shroud debug on
+shroud debug tail
+```
 
 ---
 
-## Debug Logging
-
-Shroud provides comprehensive logging for troubleshooting and development. Logs are structured with timestamps, levels, and module paths.
-
-### Activation Methods
-
-| Method | Description | Example |
-|--------|-------------|---------|
-| Environment variable | `RUST_LOG` (takes precedence) | `RUST_LOG=debug shroud` |
-| Verbose flags | Stackable `-v` flags | `shroud -vvv` (trace) |
-| Log level flag | Explicit level | `shroud --log-level trace` |
-| Log file flag | Also write to file | `shroud --log-file ./debug.log` |
-| Tray menu | Toggle at runtime | Click "🔧 Debug Logging" checkbox |
-
-### Verbosity Levels
-
-| Level | Flag | What's Logged |
-|-------|------|---------------|
-| Error | (default) | Errors only |
-| Warn | — | + Warnings |
-| Info | `-v` | + State transitions, connections |
-| Debug | `-vv` | + D-Bus signals, health checks |
-| Trace | `-vvv` | + All internal operations |
-
-### Command-Line Flags
+## Uninstalling
 
 ```bash
-# Show help
-shroud --help
+# Complete uninstall with prompts
+./setup.sh uninstall
 
-# Verbose flags (stackable)
-shroud -v        # Info
-shroud -vv       # Debug
-shroud -vvv      # Trace
-
-# Explicit level
-shroud --log-level debug
-shroud --log-level trace
-
-# Log to file (in addition to stderr)
-shroud --log-file ~/.local/share/shroud/debug.log
+# Force uninstall without prompts
+./setup.sh --force uninstall
 ```
 
-### Environment Variable
+This removes:
+- Binary from `~/.local/bin/`
+- Systemd service
+- Desktop entries and autostart
+- Shell completions
+- Polkit policy (if installed)
+- Optionally: config and logs (prompts)
 
-The `RUST_LOG` environment variable provides fine-grained control:
+---
 
-```bash
-# Enable debug for all modules
-RUST_LOG=debug shroud
+## Architecture
 
-# Enable trace for Shroud only (less noise from dependencies)
-RUST_LOG=shroud=trace shroud
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detailed system design.
 
-# Multiple module levels
-RUST_LOG=shroud=trace,ksni=debug shroud
+## Principles
 
-# Specific module
-RUST_LOG=shroud::health=trace shroud
-```
-
-### Runtime Toggle (Tray Menu)
-
-You can enable/disable debug logging at runtime from the tray menu:
-
-1. Click the Shroud tray icon
-2. Check/uncheck "🔧 Debug Logging"
-3. Logs are written to `~/.local/share/shroud/debug.log`
-4. Click "📄 Open Log File" to view in your default text viewer
-
-### Log File Rotation
-
-When using file logging (via tray or `--log-file`):
-
-- Maximum file size: **10 MB**
-- Rotation: Keeps **3 files** (debug.log, debug.log.1, debug.log.2)
-- Permissions: **0600** (owner read/write only)
-- Location: `~/.local/share/shroud/debug.log`
-
-### Log Format
-
-```
-2024-01-15 14:30:45.123 [INFO ] [shroud::state] Transition: Disconnected → Connecting
-2024-01-15 14:30:45.234 [DEBUG] [shroud::dbus] D-Bus signal: StateChanged(...)
-2024-01-15 14:30:46.345 [TRACE] [shroud::health] Health check ping: 45ms
-```
-
-### Security Considerations
-
-Shroud's logging follows these security principles:
-
-- ❌ **Never logs** credentials, passwords, or auth tokens
-- ❌ **Never logs** full VPN configuration file contents
-- ✅ **Logs** connection names (which are user-defined)
-- ✅ **Logs** VPN server IPs (necessary for troubleshooting)
-- ✅ **Logs** state transitions and timing
-
-If you share logs publicly, review for any sensitive connection names.
+See [PRINCIPLES.md](PRINCIPLES.md) for the core values that guide development.
 
 ---
 
 ## Contributing
 
-Contributions are welcome! Please read [PRINCIPLES.md](PRINCIPLES.md) first — they guide all design decisions.
+Contributions are welcome! Please read [PRINCIPLES.md](PRINCIPLES.md) first.
 
 Before submitting a PR:
 
 1. `cargo fmt` — Format code
 2. `cargo clippy -D warnings` — No warnings
 3. `cargo test` — All tests pass
-4. Consider: "Does this make Shroud more like a shroud, or more like NordVPN?"
 
 ---
 

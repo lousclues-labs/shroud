@@ -32,15 +32,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dedicated CLI module (`src/cli/`)
 - "Open Log File" tray menu option
 - `Quit` command for graceful daemon shutdown
+- **Comprehensive setup.sh installation script** (1500+ lines)
+  - Commands: `install`, `update`, `uninstall`, `check`, `repair`, `status`
+  - Options: `--force`, `--dry-run`, `--verbose`, `--quiet`, `--help`
+  - Pre-flight checks (distro, display, NetworkManager, desktop environment)
+  - Multi-distro support (Arch primary, Debian/Fedora with appropriate packages)
+  - Binary backup and rollback on installation failure
+  - Default `config.toml` creation with full documentation
+  - Systemd user service with automatic kill switch cleanup
+  - Desktop entries for application menu and autostart
+  - Shell completions for bash, zsh, and fish
+  - Optional polkit policy for passwordless nft (with security warnings)
+  - Installation verification and summary
+  - Detailed logging to `/tmp/shroud-setup-*.log`
 
 ### Fixed
 - Kill switch now automatically disabled on intentional user disconnect to prevent network lockout
 - Restart command properly cleans up resources before spawning new instance
 - Quit command now properly exits the process instead of just returning from event loop
+- **Signal handler now cleans up kill switch rules before exit** — prevents orphaned nftables rules
+- **Startup now detects and cleans stale kill switch rules** — recovers from previous crashes
 
 ### Security
 - CLI socket created with 0600 permissions (owner-only access)
 - Socket located in `$XDG_RUNTIME_DIR` which is user-private
+- Kill switch cleanup on SIGTERM/SIGINT prevents network lockout after crash
 
 ## [0.1.0] - 2026-01-25
 
