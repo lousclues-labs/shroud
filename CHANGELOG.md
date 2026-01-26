@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **CLI command system** for controlling Shroud from scripts and terminal
+  - Connection management: `connect`, `disconnect`, `reconnect`, `switch`
+  - Status commands: `status`, `list` (with `--json` support)
+  - Kill switch control: `killswitch on/off/toggle/status`
+  - Auto-reconnect control: `auto-reconnect on/off/toggle/status`
+  - Debug commands: `debug on/off/log-path/tail/dump`
+  - Daemon control: `ping`, `refresh`, `quit`, `restart`
+  - Unix socket IPC at `$XDG_RUNTIME_DIR/shroud.sock`
+  - Proper exit codes: 0 (success), 1 (error), 2 (daemon not running), 3 (timeout)
+  - JSON output support for scripting
+  - Command aliases: `ls`, `ks`, `ar`, `stop`, `exit`
+- Debug logging mode with multiple activation methods
+  - CLI flags: `-v`, `--verbose`, `--log-level`, `--log-file`
+  - Environment variable: `RUST_LOG=debug`
+  - Runtime toggle via tray menu
+- Log file rotation (10MB max, 3 files kept)
+- Help (`--help`) and version (`--version`) command-line flags
+- Dedicated logging module (`src/logging.rs`)
+- Dedicated CLI module (`src/cli/`)
+- "Open Log File" tray menu option
+- `Quit` command for graceful daemon shutdown
+
+### Fixed
+- Kill switch now automatically disabled on intentional user disconnect to prevent network lockout
+- Restart command properly cleans up resources before spawning new instance
+- Quit command now properly exits the process instead of just returning from event loop
+
+### Security
+- CLI socket created with 0600 permissions (owner-only access)
+- Socket located in `$XDG_RUNTIME_DIR` which is user-private
+
 ## [0.1.0] - 2026-01-25
 
 ### Added

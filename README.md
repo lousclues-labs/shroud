@@ -151,9 +151,79 @@ nmcli connection import type openvpn file /path/to/config.ovpn
 # Run directly
 shroud
 
-# Or with debug logging
+# With verbose logging
+shroud -v          # Info level
+shroud -vv         # Debug level
+shroud -vvv        # Trace level
+
+# With specific log level
+shroud --log-level debug
+shroud --log-level trace
+
+# With file logging
+shroud --log-file /tmp/shroud.log
+
+# Environment variable (takes precedence)
 RUST_LOG=debug shroud
+RUST_LOG=shroud=trace shroud
 ```
+
+### CLI Commands
+
+Shroud can be controlled from the command line while running:
+
+```bash
+# Connection management
+shroud connect ireland-42       # Connect to a VPN
+shroud disconnect               # Disconnect from VPN
+shroud reconnect                # Reconnect to current VPN
+shroud switch us-west-2         # Switch to different VPN
+
+# Status and information
+shroud status                   # Show current status
+shroud status --json            # JSON output for scripting
+shroud list                     # List available VPN connections
+shroud ls --json                # List as JSON
+
+# Kill switch control
+shroud killswitch on            # Enable kill switch
+shroud killswitch off           # Disable kill switch
+shroud ks toggle                # Toggle kill switch
+shroud ks status                # Show kill switch status
+
+# Auto-reconnect control
+shroud auto-reconnect on        # Enable auto-reconnect
+shroud ar off                   # Disable auto-reconnect
+shroud ar toggle                # Toggle auto-reconnect
+
+# Debug and diagnostics
+shroud debug on                 # Enable debug logging to file
+shroud debug off                # Disable debug logging
+shroud debug log-path           # Show log file path
+shroud debug tail               # Follow log file (like tail -f)
+shroud debug dump               # Dump internal state as JSON
+
+# Daemon control
+shroud ping                     # Check if daemon is running
+shroud refresh                  # Refresh VPN connection list
+shroud quit                     # Stop the daemon gracefully
+shroud restart                  # Restart the daemon
+
+# Help
+shroud --help                   # Show main help
+shroud help connect             # Help for specific command
+shroud connect --help           # Alternative help syntax
+```
+
+**Exit codes:**
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Command failed |
+| 2 | Daemon not running |
+| 3 | Timeout waiting for daemon |
+
+---
 
 ### Systemd User Service
 
@@ -278,6 +348,109 @@ Key highlights:
 ```bash
 RUST_LOG=debug shroud 2>&1 | tee shroud.log
 ```
+
+For more detailed logging options, see [Debug Logging](#debug-logging-1) below.
+
+---
+
+## Debug Logging
+
+Shroud provides comprehensive logging for troubleshooting and development. Logs are structured with timestamps, levels, and module paths.
+
+### Activation Methods
+
+| Method | Description | Example |
+|--------|-------------|---------|
+| Environment variable | `RUST_LOG` (takes precedence) | `RUST_LOG=debug shroud` |
+| Verbose flags | Stackable `-v` flags | `shroud -vvv` (trace) |
+| Log level flag | Explicit level | `shroud --log-level trace` |
+| Log file flag | Also write to file | `shroud --log-file ./debug.log` |
+| Tray menu | Toggle at runtime | Click "🔧 Debug Logging" checkbox |
+
+### Verbosity Levels
+
+| Level | Flag | What's Logged |
+|-------|------|---------------|
+| Error | (default) | Errors only |
+| Warn | — | + Warnings |
+| Info | `-v` | + State transitions, connections |
+| Debug | `-vv` | + D-Bus signals, health checks |
+| Trace | `-vvv` | + All internal operations |
+
+### Command-Line Flags
+
+```bash
+# Show help
+shroud --help
+
+# Verbose flags (stackable)
+shroud -v        # Info
+shroud -vv       # Debug
+shroud -vvv      # Trace
+
+# Explicit level
+shroud --log-level debug
+shroud --log-level trace
+
+# Log to file (in addition to stderr)
+shroud --log-file ~/.local/share/shroud/debug.log
+```
+
+### Environment Variable
+
+The `RUST_LOG` environment variable provides fine-grained control:
+
+```bash
+# Enable debug for all modules
+RUST_LOG=debug shroud
+
+# Enable trace for Shroud only (less noise from dependencies)
+RUST_LOG=shroud=trace shroud
+
+# Multiple module levels
+RUST_LOG=shroud=trace,ksni=debug shroud
+
+# Specific module
+RUST_LOG=shroud::health=trace shroud
+```
+
+### Runtime Toggle (Tray Menu)
+
+You can enable/disable debug logging at runtime from the tray menu:
+
+1. Click the Shroud tray icon
+2. Check/uncheck "🔧 Debug Logging"
+3. Logs are written to `~/.local/share/shroud/debug.log`
+4. Click "📄 Open Log File" to view in your default text viewer
+
+### Log File Rotation
+
+When using file logging (via tray or `--log-file`):
+
+- Maximum file size: **10 MB**
+- Rotation: Keeps **3 files** (debug.log, debug.log.1, debug.log.2)
+- Permissions: **0600** (owner read/write only)
+- Location: `~/.local/share/shroud/debug.log`
+
+### Log Format
+
+```
+2024-01-15 14:30:45.123 [INFO ] [shroud::state] Transition: Disconnected → Connecting
+2024-01-15 14:30:45.234 [DEBUG] [shroud::dbus] D-Bus signal: StateChanged(...)
+2024-01-15 14:30:46.345 [TRACE] [shroud::health] Health check ping: 45ms
+```
+
+### Security Considerations
+
+Shroud's logging follows these security principles:
+
+- ❌ **Never logs** credentials, passwords, or auth tokens
+- ❌ **Never logs** full VPN configuration file contents
+- ✅ **Logs** connection names (which are user-defined)
+- ✅ **Logs** VPN server IPs (necessary for troubleshooting)
+- ✅ **Logs** state transitions and timing
+
+If you share logs publicly, review for any sensitive connection names.
 
 ---
 

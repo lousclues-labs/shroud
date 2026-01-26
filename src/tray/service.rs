@@ -20,10 +20,16 @@ pub enum VpnCommand {
     ToggleAutoReconnect,
     /// Toggle kill switch (blocks non-VPN traffic)
     ToggleKillSwitch,
+    /// Toggle debug logging to file
+    ToggleDebugLogging,
+    /// Open the log file in default viewer
+    OpenLogFile,
     /// Refresh the list of available VPN connections
     RefreshConnections,
     /// Restart the application
     Restart,
+    /// Quit the application gracefully
+    Quit,
 }
 
 /// Shared state between the tray and the VPN supervisor
@@ -35,6 +41,8 @@ pub struct SharedState {
     pub auto_reconnect: bool,
     /// Whether kill switch is enabled
     pub kill_switch: bool,
+    /// Whether debug logging is enabled
+    pub debug_logging: bool,
     /// List of available VPN connections from NetworkManager
     pub connections: Vec<String>,
 }
@@ -45,6 +53,7 @@ impl Default for SharedState {
             state: VpnState::Disconnected,
             auto_reconnect: true,
             kill_switch: false,
+            debug_logging: false,
             connections: Vec::new(),
         }
     }
@@ -288,6 +297,35 @@ impl Tray for VpnTray {
                 let tx = tray.tx.clone();
                 tokio::spawn(async move {
                     let _ = tx.send(VpnCommand::RefreshConnections).await;
+                });
+            }),
+            ..Default::default()
+        }));
+
+        items.push(MenuItem::Separator);
+
+        // Debug logging toggle
+        items.push(MenuItem::Checkmark(CheckmarkItem {
+            label: "Debug Logging".to_string(),
+            enabled: true,
+            checked: state.debug_logging,
+            activate: Box::new(|tray: &mut Self| {
+                let tx = tray.tx.clone();
+                tokio::spawn(async move {
+                    let _ = tx.send(VpnCommand::ToggleDebugLogging).await;
+                });
+            }),
+            ..Default::default()
+        }));
+
+        // Open log file
+        items.push(MenuItem::Standard(StandardItem {
+            label: "Open Log File".to_string(),
+            enabled: state.debug_logging,
+            activate: Box::new(|tray: &mut Self| {
+                let tx = tray.tx.clone();
+                tokio::spawn(async move {
+                    let _ = tx.send(VpnCommand::OpenLogFile).await;
                 });
             }),
             ..Default::default()

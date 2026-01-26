@@ -28,10 +28,12 @@
 //! every transition with its reason. State is sacred — if the state says
 //! Disconnected, we are disconnected.
 
+mod cli;
 mod config;
 mod dbus;
 mod health;
 mod killswitch;
+mod logging;
 mod nm;
 mod state;
 mod tray;
@@ -314,11 +316,21 @@ impl VpnSupervisor {
                         VpnCommand::ToggleKillSwitch => {
                             self.toggle_kill_switch().await;
                         }
+                        VpnCommand::ToggleDebugLogging => {
+                            self.toggle_debug_logging().await;
+                        }
+                        VpnCommand::OpenLogFile => {
+                            self.open_log_file();
+                        }
                         VpnCommand::RefreshConnections => {
                             self.refresh_connections().await;
                         }
                         VpnCommand::Restart => {
                             self.handle_restart().await;
+                        }
+                        VpnCommand::Quit => {
+                            self.handle_quit().await;
+                            return; // Exit the loop
                         }
                     }
                 }
@@ -928,6 +940,26 @@ impl VpnSupervisor {
         match nm_disconnect(&connection_name).await {
             Ok(_) => {
                 info!("Disconnected successfully");
+                
+                // CRITICAL: Disable kill switch on intentional disconnect
+                // Otherwise user loses all network access
+                if self.kill_switch.is_enabled() {
+                    info!("Disabling kill switch on user disconnect");
+                    if let Err(e) = self.kill_switch.disable().await {
+                        warn!("Failed to disable kill switch: {}", e);
+                    }
+                    // Update config to reflect kill switch is now off
+                    self.app_config.kill_switch_enabled = false;
+                    if let Err(e) = self.config_manager.save(&self.app_config) {
+                        warn!("Failed to save config: {}", e);
+                    }
+                    // Update shared state
+                    {
+                        let mut state = self.shared_state.write().await;
+                        state.kill_switch = false;
+                    }
+                }
+                
                 self.dispatch(Event::UserDisable);
                 self.sync_shared_state().await;
                 self.update_tray();
@@ -958,6 +990,15 @@ impl VpnSupervisor {
         
         info!("Restarting from: {:?}", exe_path);
         
+        // Clean up resources BEFORE spawning new instance
+        // This releases the lock so the new instance can acquire it
+        release_instance_lock();
+        let socket_path = cli::server::get_socket_path();
+        let _ = std::fs::remove_file(&socket_path);
+        
+        // Small delay to ensure cleanup is complete
+        sleep(Duration::from_millis(100)).await;
+        
         // Spawn the new process
         match std::process::Command::new(&exe_path)
             .stdin(std::process::Stdio::null())
@@ -974,6 +1015,33 @@ impl VpnSupervisor {
                 self.show_notification("Restart Failed", &format!("Error: {}", e));
             }
         }
+    }
+
+    /// Handle quit command - clean shutdown
+    async fn handle_quit(&mut self) {
+        info!("Quit requested, cleaning up...");
+        
+        // Disable kill switch before exiting
+        if self.kill_switch.is_enabled() {
+            info!("Disabling kill switch before shutdown");
+            if let Err(e) = self.kill_switch.disable().await {
+                warn!("Failed to disable kill switch on shutdown: {}", e);
+            }
+        }
+        
+        // Show notification
+        self.show_notification("Shroud", "Shutting down...");
+        
+        // Give notification time to show
+        sleep(Duration::from_millis(300)).await;
+        
+        info!("Shutdown complete");
+        
+        // Clean up and exit the process
+        release_instance_lock();
+        let socket_path = cli::server::get_socket_path();
+        let _ = std::fs::remove_file(&socket_path);
+        std::process::exit(0);
     }
 
     /// Attempt to reconnect with exponential backoff (triggered by connection drop)
@@ -1186,6 +1254,54 @@ impl VpnSupervisor {
         }
     }
 
+    /// Toggle debug logging to file
+    async fn toggle_debug_logging(&mut self) {
+        let currently_enabled = logging::is_debug_logging_enabled();
+        
+        if currently_enabled {
+            logging::disable_debug_logging();
+            {
+                let mut state = self.shared_state.write().await;
+                state.debug_logging = false;
+            }
+            info!("Debug logging disabled");
+            self.update_tray();
+            self.show_notification("Debug Logging", "Disabled");
+        } else {
+            match logging::enable_debug_logging() {
+                Ok(path) => {
+                    {
+                        let mut state = self.shared_state.write().await;
+                        state.debug_logging = true;
+                    }
+                    info!("Debug logging enabled to {:?}", path);
+                    self.update_tray();
+                    self.show_notification(
+                        "Debug Logging",
+                        &format!("Enabled. Logs: {}", path.display()),
+                    );
+                }
+                Err(e) => {
+                    error!("Failed to enable debug logging: {}", e);
+                    self.show_notification("Debug Logging Error", &e);
+                }
+            }
+        }
+    }
+
+    /// Open the log file in the default viewer
+    fn open_log_file(&self) {
+        match logging::open_log_file() {
+            Ok(()) => {
+                debug!("Opened log file");
+            }
+            Err(e) => {
+                warn!("Failed to open log file: {}", e);
+                self.show_notification("Log File", &e);
+            }
+        }
+    }
+
     /// Refresh the list of available VPN connections
     async fn refresh_connections(&mut self) {
         info!("Refreshing VPN connections");
@@ -1322,10 +1438,109 @@ fn release_instance_lock() {
 // Main
 // ============================================================================
 
-#[tokio::main]
-async fn main() {
-    env_logger::init();
+/// Run client mode - send command to daemon and exit
+fn run_client_mode(args: &cli::Args) -> ! {
+    use cli::client::{send_command, print_response, OutputFormat};
+    use cli::{ParsedCommand, ToggleAction, DebugAction};
+    
+    let command = args.command.as_ref().unwrap();
+    
+    // Handle local commands that don't need the daemon
+    match command {
+        ParsedCommand::Help { command: Some(cmd) } => {
+            cli::help::print_command_help(cmd);
+            std::process::exit(0);
+        }
+        ParsedCommand::Help { command: None } => {
+            cli::help::print_main_help();
+            std::process::exit(0);
+        }
+        ParsedCommand::Debug { action: DebugAction::Tail } => {
+            // Tail is a local command
+            let log_path = logging::log_directory().join("debug.log");
+            let status = std::process::Command::new("tail")
+                .arg("-f")
+                .arg(&log_path)
+                .status();
+            match status {
+                Ok(s) => std::process::exit(s.code().unwrap_or(1)),
+                Err(e) => {
+                    eprintln!("Failed to run tail: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        _ => {}
+    }
+    
+    // Convert ParsedCommand to CliCommand for IPC
+    let cli_command = match command {
+        ParsedCommand::Connect { name } => cli::CliCommand::Connect { name: name.clone() },
+        ParsedCommand::Disconnect => cli::CliCommand::Disconnect,
+        ParsedCommand::Reconnect => cli::CliCommand::Reconnect,
+        ParsedCommand::Switch { name } => cli::CliCommand::Switch { name: name.clone() },
+        ParsedCommand::Status => cli::CliCommand::Status,
+        ParsedCommand::List => cli::CliCommand::List,
+        ParsedCommand::KillSwitch { action } => match action {
+            ToggleAction::On => cli::CliCommand::KillSwitchOn,
+            ToggleAction::Off => cli::CliCommand::KillSwitchOff,
+            ToggleAction::Toggle => cli::CliCommand::KillSwitchToggle,
+            ToggleAction::Status => cli::CliCommand::KillSwitchStatus,
+        },
+        ParsedCommand::AutoReconnect { action } => match action {
+            ToggleAction::On => cli::CliCommand::AutoReconnectOn,
+            ToggleAction::Off => cli::CliCommand::AutoReconnectOff,
+            ToggleAction::Toggle => cli::CliCommand::AutoReconnectToggle,
+            ToggleAction::Status => cli::CliCommand::AutoReconnectStatus,
+        },
+        ParsedCommand::Debug { action } => match action {
+            DebugAction::On => cli::CliCommand::DebugOn,
+            DebugAction::Off => cli::CliCommand::DebugOff,
+            DebugAction::LogPath => cli::CliCommand::DebugLogPath,
+            DebugAction::Dump => cli::CliCommand::DebugDump,
+            DebugAction::Tail => unreachable!(), // Handled above
+        },
+        ParsedCommand::Ping => cli::CliCommand::Ping,
+        ParsedCommand::Refresh => cli::CliCommand::Refresh,
+        ParsedCommand::Quit => cli::CliCommand::Quit,
+        ParsedCommand::Restart => cli::CliCommand::Restart,
+        ParsedCommand::Help { .. } => unreachable!(), // Handled above
+    };
+    
+    // Send command to daemon
+    let format = if args.json_output {
+        OutputFormat::Json
+    } else {
+        OutputFormat::Human
+    };
+    
+    match send_command(cli_command, args.timeout) {
+        Ok(response) => {
+            let exit_code = print_response(&response, format, args.quiet);
+            std::process::exit(exit_code);
+        }
+        Err(e) => {
+            if !args.quiet {
+                eprintln!("{}", e);
+            }
+            std::process::exit(e.exit_code());
+        }
+    }
+}
 
+/// Run daemon mode - start the tray application
+async fn run_daemon_mode(args: cli::Args) {
+    // Convert CLI args to logging args format
+    let log_args = logging::Args {
+        verbose: args.verbose,
+        log_level: args.log_level,
+        log_file: args.log_file,
+        ..Default::default()
+    };
+    
+    // Initialize logging
+    logging::init_logging(&log_args);
+    
     let _lock_file = match acquire_instance_lock() {
         Ok(file) => file,
         Err(msg) => {
@@ -1334,9 +1549,15 @@ async fn main() {
         }
     };
 
+    // Track start time for uptime reporting
+    let start_time = Instant::now();
+
     ctrlc::set_handler(move || {
         info!("Shutdown signal received, cleaning up...");
         release_instance_lock();
+        // Clean up CLI socket
+        let socket_path = cli::server::get_socket_path();
+        let _ = std::fs::remove_file(&socket_path);
         std::process::exit(0);
     })
     .expect("Error setting Ctrl-C handler");
@@ -1348,6 +1569,19 @@ async fn main() {
     let (dbus_tx, dbus_rx) = mpsc::channel(32);
     let tray_handle = Arc::new(std::sync::Mutex::new(None));
 
+    // Load config for sharing with CLI server
+    let config_manager = ConfigManager::new();
+    let app_config = Arc::new(RwLock::new(config_manager.load()));
+
+    // Start CLI server for receiving commands
+    let cli_server = match cli::CliServer::new().await {
+        Ok(server) => Some(server),
+        Err(e) => {
+            warn!("Failed to start CLI server: {}. CLI commands will not work.", e);
+            None
+        }
+    };
+
     // Start D-Bus monitor for real-time NetworkManager events
     let nm_monitor = NmMonitor::new(dbus_tx);
     tokio::spawn(async move {
@@ -1355,6 +1589,38 @@ async fn main() {
             error!("D-Bus monitor failed: {}. Falling back to polling only.", e);
         }
     });
+
+    // Spawn CLI connection handler if server is running
+    if let Some(server) = cli_server {
+        let cli_tx = tx.clone();
+        let cli_state = shared_state.clone();
+        let cli_config = app_config.clone();
+        tokio::spawn(async move {
+            loop {
+                match server.accept().await {
+                    Ok(stream) => {
+                        let cmd_tx = cli_tx.clone();
+                        let state = cli_state.clone();
+                        let config = cli_config.clone();
+                        let start = start_time;
+                        tokio::spawn(async move {
+                            cli::server::handle_cli_connection(
+                                stream,
+                                cmd_tx,
+                                state,
+                                config,
+                                start,
+                            )
+                            .await;
+                        });
+                    }
+                    Err(e) => {
+                        warn!("Failed to accept CLI connection: {}", e);
+                    }
+                }
+            }
+        });
+    }
 
     let supervisor = VpnSupervisor::new(shared_state.clone(), rx, dbus_rx, tray_handle.clone());
     tokio::spawn(supervisor.run());
@@ -1379,6 +1645,30 @@ async fn main() {
     });
 
     std::future::pending::<()>().await;
+}
+
+#[tokio::main]
+async fn main() {
+    // Parse command-line arguments using CLI module
+    let args = match cli::parse_args() {
+        Ok(args) => args,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+    
+    // Determine mode based on whether a command was provided
+    match args.command {
+        Some(_) => {
+            // Client mode: send command to running daemon
+            run_client_mode(&args);
+        }
+        None => {
+            // Daemon mode: start the tray application
+            run_daemon_mode(args).await;
+        }
+    }
 }
 
 #[cfg(test)]
