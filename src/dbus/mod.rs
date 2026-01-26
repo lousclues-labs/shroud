@@ -5,4 +5,4 @@
 
 pub mod monitor;
 
-pub use monitor::{NmMonitor, NmEvent};
+pub use monitor::{NmEvent, NmMonitor};

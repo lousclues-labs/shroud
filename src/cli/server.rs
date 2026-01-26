@@ -134,10 +134,12 @@ pub async fn handle_cli_connection(
 
     // Parse and handle request
     let response = match serde_json::from_str::<CliRequest>(&line) {
-        Ok(request) => {
-            handle_request(request, cmd_tx, shared_state, config, start_time).await
-        }
-        Err(e) => CliResponse::error(String::new(), "parse_error", &format!("Invalid request: {}", e)),
+        Ok(request) => handle_request(request, cmd_tx, shared_state, config, start_time).await,
+        Err(e) => CliResponse::error(
+            String::new(),
+            "parse_error",
+            &format!("Invalid request: {}", e),
+        ),
     };
 
     // Send response
@@ -172,7 +174,10 @@ async fn handle_request(
             if let Err(e) = cmd_tx.send(VpnCommand::Connect(name.clone())).await {
                 return CliResponse::error(request_id, "internal_error", &e.to_string());
             }
-            CliResponse::success(request_id, json!({"message": format!("Connecting to {}", name)}))
+            CliResponse::success(
+                request_id,
+                json!({"message": format!("Connecting to {}", name)}),
+            )
         }
 
         CliCommand::Disconnect => {
@@ -191,7 +196,10 @@ async fn handle_request(
                 let _ = cmd_tx.send(VpnCommand::Disconnect).await;
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 let _ = cmd_tx.send(VpnCommand::Connect(server.clone())).await;
-                CliResponse::success(request_id, json!({"message": format!("Reconnecting to {}", server)}))
+                CliResponse::success(
+                    request_id,
+                    json!({"message": format!("Reconnecting to {}", server)}),
+                )
             } else {
                 CliResponse::error(request_id, "not_connected", "Not connected to any VPN")
             }
@@ -205,11 +213,17 @@ async fn handle_request(
                 let _ = cmd_tx.send(VpnCommand::Disconnect).await;
                 tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
                 let _ = cmd_tx.send(VpnCommand::Connect(name.clone())).await;
-                CliResponse::success(request_id, json!({"message": format!("Switching to {}", name)}))
+                CliResponse::success(
+                    request_id,
+                    json!({"message": format!("Switching to {}", name)}),
+                )
             } else {
                 // Not connected, just connect
                 let _ = cmd_tx.send(VpnCommand::Connect(name.clone())).await;
-                CliResponse::success(request_id, json!({"message": format!("Connecting to {}", name)}))
+                CliResponse::success(
+                    request_id,
+                    json!({"message": format!("Connecting to {}", name)}),
+                )
             }
         }
 
@@ -246,7 +260,10 @@ async fn handle_request(
         CliCommand::KillSwitchOn => {
             let state = shared_state.read().await;
             if state.kill_switch {
-                return CliResponse::success(request_id, json!({"message": "Kill switch already enabled"}));
+                return CliResponse::success(
+                    request_id,
+                    json!({"message": "Kill switch already enabled"}),
+                );
             }
             drop(state);
             if let Err(e) = cmd_tx.send(VpnCommand::ToggleKillSwitch).await {
@@ -258,7 +275,10 @@ async fn handle_request(
         CliCommand::KillSwitchOff => {
             let state = shared_state.read().await;
             if !state.kill_switch {
-                return CliResponse::success(request_id, json!({"message": "Kill switch already disabled"}));
+                return CliResponse::success(
+                    request_id,
+                    json!({"message": "Kill switch already disabled"}),
+                );
             }
             drop(state);
             if let Err(e) = cmd_tx.send(VpnCommand::ToggleKillSwitch).await {
@@ -297,7 +317,10 @@ async fn handle_request(
         CliCommand::AutoReconnectOn => {
             let state = shared_state.read().await;
             if state.auto_reconnect {
-                return CliResponse::success(request_id, json!({"message": "Auto-reconnect already enabled"}));
+                return CliResponse::success(
+                    request_id,
+                    json!({"message": "Auto-reconnect already enabled"}),
+                );
             }
             drop(state);
             if let Err(e) = cmd_tx.send(VpnCommand::ToggleAutoReconnect).await {
@@ -309,7 +332,10 @@ async fn handle_request(
         CliCommand::AutoReconnectOff => {
             let state = shared_state.read().await;
             if !state.auto_reconnect {
-                return CliResponse::success(request_id, json!({"message": "Auto-reconnect already disabled"}));
+                return CliResponse::success(
+                    request_id,
+                    json!({"message": "Auto-reconnect already disabled"}),
+                );
             }
             drop(state);
             if let Err(e) = cmd_tx.send(VpnCommand::ToggleAutoReconnect).await {
@@ -345,7 +371,10 @@ async fn handle_request(
         CliCommand::DebugOn => {
             let state = shared_state.read().await;
             if state.debug_logging {
-                return CliResponse::success(request_id, json!({"message": "Debug logging already enabled"}));
+                return CliResponse::success(
+                    request_id,
+                    json!({"message": "Debug logging already enabled"}),
+                );
             }
             drop(state);
             if let Err(e) = cmd_tx.send(VpnCommand::ToggleDebugLogging).await {
@@ -363,7 +392,10 @@ async fn handle_request(
         CliCommand::DebugOff => {
             let state = shared_state.read().await;
             if !state.debug_logging {
-                return CliResponse::success(request_id, json!({"message": "Debug logging already disabled"}));
+                return CliResponse::success(
+                    request_id,
+                    json!({"message": "Debug logging already disabled"}),
+                );
             }
             drop(state);
             if let Err(e) = cmd_tx.send(VpnCommand::ToggleDebugLogging).await {
@@ -414,17 +446,15 @@ async fn handle_request(
         }
 
         // Daemon control
-        CliCommand::Ping => {
-            CliResponse::success(
-                request_id,
-                json!({
-                    "status": "running",
-                    "pid": std::process::id(),
-                    "version": env!("CARGO_PKG_VERSION"),
-                    "uptime_seconds": start_time.elapsed().as_secs(),
-                }),
-            )
-        }
+        CliCommand::Ping => CliResponse::success(
+            request_id,
+            json!({
+                "status": "running",
+                "pid": std::process::id(),
+                "version": env!("CARGO_PKG_VERSION"),
+                "uptime_seconds": start_time.elapsed().as_secs(),
+            }),
+        ),
 
         CliCommand::Refresh => {
             if let Err(e) = cmd_tx.send(VpnCommand::RefreshConnections).await {

@@ -67,3 +67,6 @@ codegen-units = 1
 strip = true
 opt-level = "s"
 panic = "abort"
+
+[dev-dependencies]
+tempfile = "3"

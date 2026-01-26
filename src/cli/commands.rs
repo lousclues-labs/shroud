@@ -155,10 +155,8 @@ mod tests {
 
     #[test]
     fn test_response_success() {
-        let resp = CliResponse::success(
-            "123".to_string(),
-            serde_json::json!({"state": "Connected"}),
-        );
+        let resp =
+            CliResponse::success("123".to_string(), serde_json::json!({"state": "Connected"}));
         assert!(resp.success);
         assert!(resp.error.is_none());
         assert!(resp.data.is_some());

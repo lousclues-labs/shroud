@@ -81,7 +81,7 @@ impl HealthChecker {
             match self.check_endpoint(endpoint).await {
                 Ok(latency_ms) => {
                     self.consecutive_failures = 0;
-                    
+
                     if latency_ms > self.config.degraded_threshold_ms {
                         debug!(
                             "Health check passed but degraded: {}ms > {}ms threshold",
@@ -89,7 +89,7 @@ impl HealthChecker {
                         );
                         return HealthResult::Degraded { latency_ms };
                     }
-                    
+
                     debug!("Health check passed: {}ms", latency_ms);
                     return HealthResult::Healthy;
                 }
@@ -102,7 +102,7 @@ impl HealthChecker {
 
         // All endpoints failed
         self.consecutive_failures += 1;
-        
+
         if self.consecutive_failures >= self.config.failure_threshold {
             warn!(
                 "Health check dead: {} consecutive failures",
@@ -136,10 +136,14 @@ impl HealthChecker {
             Command::new("curl")
                 .args([
                     "-s",
-                    "-o", "/dev/null",
-                    "-w", "%{http_code}",
-                    "--connect-timeout", "5",
-                    "--max-time", &self.config.timeout_secs.to_string(),
+                    "-o",
+                    "/dev/null",
+                    "-w",
+                    "%{http_code}",
+                    "--connect-timeout",
+                    "5",
+                    "--max-time",
+                    &self.config.timeout_secs.to_string(),
                     endpoint,
                 ])
                 .stdout(Stdio::piped())
@@ -152,7 +156,7 @@ impl HealthChecker {
             Ok(Ok(output)) => {
                 let elapsed = start.elapsed().as_millis() as u64;
                 let status = String::from_utf8_lossy(&output.stdout);
-                
+
                 if status.starts_with('2') || status.starts_with('3') {
                     Ok(elapsed)
                 } else {

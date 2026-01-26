@@ -155,9 +155,7 @@ impl Tray for VpnTray {
                 format!("⚠️ Degraded: {}", server),
                 "Connection may be unstable".to_string(),
             ),
-            VpnState::Failed { server, reason } => {
-                (format!("Failed: {}", server), reason.clone())
-            }
+            VpnState::Failed { server, reason } => (format!("Failed: {}", server), reason.clone()),
             VpnState::Disconnected => (
                 "VPN Disconnected".to_string(),
                 "Click to connect to a VPN".to_string(),
@@ -246,7 +244,10 @@ impl Tray for VpnTray {
         items.push(MenuItem::Separator);
 
         // Disconnect button - only enabled when connected
-        let can_disconnect = matches!(state.state, VpnState::Connected { .. } | VpnState::Degraded { .. });
+        let can_disconnect = matches!(
+            state.state,
+            VpnState::Connected { .. } | VpnState::Degraded { .. }
+        );
         items.push(MenuItem::Standard(StandardItem {
             label: "Disconnect".to_string(),
             enabled: can_disconnect,

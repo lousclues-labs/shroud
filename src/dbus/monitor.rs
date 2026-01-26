@@ -7,8 +7,8 @@ use futures_lite::StreamExt;
 use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
-use zbus::Connection;
 use zbus::message::Message;
+use zbus::Connection;
 
 /// Events emitted by the NetworkManager monitor
 #[derive(Debug, Clone)]
@@ -77,14 +77,20 @@ impl NmMonitor {
         let mut connection_names: HashMap<String, String> = HashMap::new();
 
         // Initial population of connection names
-        if let Err(e) = self.populate_connection_names(&connection, &mut connection_names).await {
+        if let Err(e) = self
+            .populate_connection_names(&connection, &mut connection_names)
+            .await
+        {
             warn!("Failed to populate initial connection names: {}", e);
         }
 
         while let Some(msg) = stream.next().await {
             match msg {
                 Ok(msg) => {
-                    if let Err(e) = self.handle_message(&msg, &connection, &mut connection_names).await {
+                    if let Err(e) = self
+                        .handle_message(&msg, &connection, &mut connection_names)
+                        .await
+                    {
                         debug!("Error handling D-Bus message: {}", e);
                     }
                 }
@@ -149,7 +155,7 @@ impl NmMonitor {
         if let Ok(zbus::zvariant::Value::Str(s)) = body.deserialize::<zbus::zvariant::Value>() {
             return Ok(s.to_string());
         }
-        
+
         Err(zbus::Error::Failure("Failed to get connection name".into()))
     }
 
@@ -173,7 +179,7 @@ impl NmMonitor {
         if let Ok(zbus::zvariant::Value::Str(s)) = body.deserialize::<zbus::zvariant::Value>() {
             return Ok(s.as_str() == "vpn");
         }
-        
+
         Ok(false)
     }
 
@@ -191,10 +197,12 @@ impl NmMonitor {
 
         match (interface, member) {
             (Some("org.freedesktop.NetworkManager.VPN.Connection"), Some("VpnStateChanged")) => {
-                self.handle_vpn_state_changed(msg, path, connection, cache).await?;
+                self.handle_vpn_state_changed(msg, path, connection, cache)
+                    .await?;
             }
             (Some("org.freedesktop.NetworkManager.Connection.Active"), Some("StateChanged")) => {
-                self.handle_active_state_changed(msg, path, connection, cache).await?;
+                self.handle_active_state_changed(msg, path, connection, cache)
+                    .await?;
             }
             _ => {}
         }
@@ -211,7 +219,7 @@ impl NmMonitor {
         cache: &mut HashMap<String, String>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let path = path.ok_or("No path in message")?;
-        
+
         // VpnStateChanged sends (state: u32, reason: u32)
         let body = msg.body();
         let (state, reason): (u32, u32) = body.deserialize()?;
@@ -241,7 +249,10 @@ impl NmMonitor {
             6 => {
                 let reason_str = vpn_failure_reason(reason);
                 warn!("VPN '{}' failed: {}", name, reason_str);
-                Some(NmEvent::VpnFailed { name, reason: reason_str })
+                Some(NmEvent::VpnFailed {
+                    name,
+                    reason: reason_str,
+                })
             }
             7 => {
                 info!("VPN '{}' disconnected", name);
@@ -271,7 +282,11 @@ impl NmMonitor {
         let path = path.ok_or("No path in message")?;
 
         // Check if this is a VPN connection
-        if !self.is_vpn_connection(connection, path).await.unwrap_or(false) {
+        if !self
+            .is_vpn_connection(connection, path)
+            .await
+            .unwrap_or(false)
+        {
             return Ok(());
         }
 

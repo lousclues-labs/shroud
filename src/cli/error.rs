@@ -35,7 +35,11 @@ impl fmt::Display for CliError {
             Self::Io(e) => write!(f, "I/O error: {}", e),
             Self::Json(e) => write!(f, "Protocol error: {}", e),
             Self::InvalidCommand(cmd) => {
-                write!(f, "Unknown command: '{}'. Run 'shroud --help' for usage.", cmd)
+                write!(
+                    f,
+                    "Unknown command: '{}'. Run 'shroud --help' for usage.",
+                    cmd
+                )
             }
             Self::InvalidArgument(msg) => write!(f, "{}", msg),
             Self::CommandFailed { message, .. } => write!(f, "{}", message),

@@ -89,7 +89,10 @@ pub fn print_response(response: &CliResponse, format: OutputFormat, quiet: bool)
                         "message": error.message
                     }
                 });
-                eprintln!("{}", serde_json::to_string_pretty(&err_json).unwrap_or_default());
+                eprintln!(
+                    "{}",
+                    serde_json::to_string_pretty(&err_json).unwrap_or_default()
+                );
             }
         }
         OutputFormat::Human => {
@@ -102,7 +105,11 @@ pub fn print_response(response: &CliResponse, format: OutputFormat, quiet: bool)
         }
     }
 
-    if response.success { 0 } else { 1 }
+    if response.success {
+        0
+    } else {
+        1
+    }
 }
 
 /// Print data in human-readable format
@@ -131,10 +138,7 @@ fn print_human_readable(data: &serde_json::Value) {
     }
 
     if let Some(ks) = data.get("kill_switch").and_then(|k| k.as_bool()) {
-        println!(
-            "Kill switch: {}",
-            if ks { "enabled" } else { "disabled" }
-        );
+        println!("Kill switch: {}", if ks { "enabled" } else { "disabled" });
     }
 
     if let Some(ar) = data.get("auto_reconnect").and_then(|a| a.as_bool()) {

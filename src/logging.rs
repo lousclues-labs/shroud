@@ -174,10 +174,7 @@ struct FileWriter {
 
 impl FileWriter {
     fn new(path: PathBuf) -> std::io::Result<Self> {
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let file = OpenOptions::new().create(true).append(true).open(&path)?;
 
         #[cfg(unix)]
         {
@@ -270,13 +267,7 @@ impl log::Log for ShroudLogger {
         let target = record.target();
         let message = record.args();
 
-        let line = format!(
-            "[{}] [{:5}] [{}] {}\n",
-            now,
-            level,
-            target,
-            message
-        );
+        let line = format!("[{}] [{:5}] [{}] {}\n", now, level, target, message);
 
         // Write to file if enabled
         if DEBUG_LOGGING_ENABLED.load(Ordering::Relaxed) {

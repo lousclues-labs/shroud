@@ -109,11 +109,7 @@ pub fn parse_args_from(argv: &[String]) -> Result<Args, String> {
             "-vvv" => args.verbose = args.verbose.saturating_add(3),
             "--log-level" => {
                 i += 1;
-                args.log_level = Some(
-                    argv.get(i)
-                        .ok_or("--log-level requires a value")?
-                        .clone(),
-                );
+                args.log_level = Some(argv.get(i).ok_or("--log-level requires a value")?.clone());
             }
             "--log-file" => {
                 i += 1;

@@ -73,6 +73,30 @@ fn parse_active_vpns(stdout: &str) -> Vec<ActiveVpnInfo> {
     vpns
 }
 
+/// Parse VPN connection names from nmcli "NAME:TYPE" output
+fn parse_vpn_connections(stdout: &str) -> Vec<String> {
+    let mut connections = Vec::new();
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.rsplitn(2, ':').collect();
+        if parts.len() >= 2 && parts[0] == "vpn" {
+            connections.push(parts[1].to_string());
+        }
+    }
+    connections
+}
+
+/// Parse VPN UUID from nmcli "UUID:NAME:TYPE" output for a specific connection
+fn parse_vpn_uuid(stdout: &str, connection_name: &str) -> Option<String> {
+    for line in stdout.lines() {
+        // Format: UUID:NAME:TYPE - split from right to handle names with colons
+        let parts: Vec<&str> = line.rsplitn(3, ':').collect();
+        if parts.len() >= 3 && parts[0] == "vpn" && parts[1] == connection_name {
+            return Some(parts[2].to_string());
+        }
+    }
+    None
+}
+
 /// Get the active VPN connection name from NetworkManager (legacy compatibility wrapper)
 #[inline]
 pub async fn get_active_vpn() -> Option<String> {
@@ -101,7 +125,8 @@ pub async fn get_active_vpn_with_state() -> Option<ActiveVpnInfo> {
 
 /// Get ALL active VPN connections from NetworkManager (to detect multiple simultaneous VPNs)
 pub async fn get_all_active_vpns() -> Vec<ActiveVpnInfo> {
-    let output = match run_nmcli(&["-t", "-f", "NAME,TYPE,STATE", "con", "show", "--active"]).await {
+    let output = match run_nmcli(&["-t", "-f", "NAME,TYPE,STATE", "con", "show", "--active"]).await
+    {
         Some(o) => o,
         None => return Vec::new(),
     };
@@ -131,14 +156,7 @@ pub async fn list_vpn_connections() -> Vec<String> {
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut connections = Vec::new();
-
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.rsplitn(2, ':').collect();
-        if parts.len() >= 2 && parts[0] == "vpn" {
-            connections.push(parts[1].to_string());
-        }
-    }
+    let connections = parse_vpn_connections(&stdout);
 
     info!("Found {} VPN connection(s)", connections.len());
     connections
@@ -148,15 +166,7 @@ pub async fn list_vpn_connections() -> Vec<String> {
 pub async fn get_vpn_uuid(connection_name: &str) -> Option<String> {
     let output = run_nmcli(&["-t", "-f", "UUID,NAME,TYPE", "con", "show"]).await?;
     let stdout = String::from_utf8_lossy(&output.stdout);
-
-    for line in stdout.lines() {
-        // Format: UUID:NAME:TYPE - split from right to handle names with colons
-        let parts: Vec<&str> = line.rsplitn(3, ':').collect();
-        if parts.len() >= 3 && parts[0] == "vpn" && parts[1] == connection_name {
-            return Some(parts[2].to_string());
-        }
-    }
-    None
+    parse_vpn_uuid(&stdout, connection_name)
 }
 
 /// Connect to a VPN via NetworkManager
@@ -231,10 +241,7 @@ pub async fn disconnect(connection_name: &str) -> Result<(), String> {
                 }
             }
             Ok(Err(e)) => {
-                warn!(
-                    "Failed to execute nmcli with UUID: {}, trying by name",
-                    e
-                );
+                warn!("Failed to execute nmcli with UUID: {}, trying by name", e);
             }
             Err(_) => {
                 warn!(
@@ -410,5 +417,134 @@ mod tests {
         let output = "vpn1:vpn:activated\nvpn2:vpn:deactivating\n";
         let vpns = parse_active_vpns(output);
         assert_eq!(vpns.len(), 2);
+    }
+
+    // --- parse_vpn_connections tests ---
+
+    #[test]
+    fn test_parse_vpn_connections_basic() {
+        let output = "my-vpn:vpn\nwifi:802-11-wireless\nwork-vpn:vpn\n";
+        let connections = parse_vpn_connections(output);
+        assert_eq!(connections, vec!["my-vpn", "work-vpn"]);
+    }
+
+    #[test]
+    fn test_parse_vpn_connections_with_colons_in_name() {
+        let output = "vpn:server:east:vpn\nregular-vpn:vpn\n";
+        let connections = parse_vpn_connections(output);
+        assert_eq!(connections, vec!["vpn:server:east", "regular-vpn"]);
+    }
+
+    #[test]
+    fn test_parse_vpn_connections_empty_output() {
+        let output = "";
+        let connections = parse_vpn_connections(output);
+        assert!(connections.is_empty());
+    }
+
+    #[test]
+    fn test_parse_vpn_connections_no_vpns() {
+        let output = "wifi:802-11-wireless\nethernet:802-3-ethernet\n";
+        let connections = parse_vpn_connections(output);
+        assert!(connections.is_empty());
+    }
+
+    #[test]
+    fn test_parse_vpn_connections_with_spaces_in_name() {
+        let output = "My VPN Connection:vpn\n";
+        let connections = parse_vpn_connections(output);
+        assert_eq!(connections, vec!["My VPN Connection"]);
+    }
+
+    // --- parse_vpn_uuid tests ---
+
+    #[test]
+    fn test_parse_vpn_uuid_basic() {
+        let output = "abc-123:my-vpn:vpn\ndef-456:other:vpn\n";
+        let uuid = parse_vpn_uuid(output, "my-vpn");
+        assert_eq!(uuid, Some("abc-123".to_string()));
+    }
+
+    #[test]
+    fn test_parse_vpn_uuid_with_single_colon_in_uuid() {
+        // Real-world UUID format is hyphenated, not colons
+        let output = "550e8400-e29b-41d4-a716-446655440000:my-vpn:vpn\n";
+        let uuid = parse_vpn_uuid(output, "my-vpn");
+        assert_eq!(
+            uuid,
+            Some("550e8400-e29b-41d4-a716-446655440000".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_vpn_uuid_not_found() {
+        let output = "abc-123:my-vpn:vpn\n";
+        let uuid = parse_vpn_uuid(output, "nonexistent");
+        assert!(uuid.is_none());
+    }
+
+    #[test]
+    fn test_parse_vpn_uuid_ignores_non_vpn() {
+        let output = "abc-123:my-connection:802-11-wireless\n";
+        let uuid = parse_vpn_uuid(output, "my-connection");
+        assert!(uuid.is_none());
+    }
+
+    #[test]
+    fn test_parse_vpn_uuid_empty_output() {
+        let output = "";
+        let uuid = parse_vpn_uuid(output, "anything");
+        assert!(uuid.is_none());
+    }
+
+    // --- Active VPN selection priority tests ---
+
+    #[test]
+    fn test_parse_active_vpns_priority_activated_over_activating() {
+        let output = "activating-vpn:vpn:activating\nactive-vpn:vpn:activated\n";
+        let vpns = parse_active_vpns(output);
+        assert_eq!(vpns.len(), 2);
+
+        let preferred = vpns
+            .iter()
+            .find(|v| v.state == NmVpnState::Activated)
+            .or_else(|| vpns.iter().find(|v| v.state == NmVpnState::Activating));
+        assert_eq!(preferred.unwrap().name, "active-vpn");
+    }
+
+    #[test]
+    fn test_parse_active_vpns_activating_over_deactivating() {
+        let output = "leaving-vpn:vpn:deactivating\njoining-vpn:vpn:activating\n";
+        let vpns = parse_active_vpns(output);
+
+        let preferred = vpns
+            .iter()
+            .find(|v| v.state == NmVpnState::Activated)
+            .or_else(|| vpns.iter().find(|v| v.state == NmVpnState::Activating))
+            .or_else(|| vpns.iter().find(|v| v.state == NmVpnState::Deactivating));
+        assert_eq!(preferred.unwrap().name, "joining-vpn");
+    }
+
+    #[test]
+    fn test_parse_active_vpns_only_deactivating() {
+        let output = "leaving-vpn:vpn:deactivating\n";
+        let vpns = parse_active_vpns(output);
+        assert_eq!(vpns.len(), 1);
+        assert_eq!(vpns[0].state, NmVpnState::Deactivating);
+    }
+
+    #[test]
+    fn test_parse_active_vpns_unknown_state_ignored() {
+        let output = "weird-vpn:vpn:unknown_state\nnormal-vpn:vpn:activated\n";
+        let vpns = parse_active_vpns(output);
+        assert_eq!(vpns.len(), 1);
+        assert_eq!(vpns[0].name, "normal-vpn");
+    }
+
+    #[test]
+    fn test_parse_active_vpns_empty_output() {
+        let output = "";
+        let vpns = parse_active_vpns(output);
+        assert!(vpns.is_empty());
     }
 }

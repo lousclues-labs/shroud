@@ -13,24 +13,24 @@ use std::fmt;
 pub enum VpnState {
     /// No active VPN connection
     Disconnected,
-    
+
     /// Currently establishing connection to a server
     Connecting { server: String },
-    
+
     /// Successfully connected and verified healthy
     Connected { server: String },
-    
+
     /// Connected but health checks failing (tunnel may be dead)
     /// This is a transitional state before Reconnecting
     Degraded { server: String },
-    
+
     /// Connection dropped, attempting to reconnect with backoff
     Reconnecting {
         server: String,
         attempt: u32,
         max_attempts: u32,
     },
-    
+
     /// Connection failed after exhausting retries
     Failed { server: String, reason: String },
 }
@@ -87,8 +87,16 @@ impl fmt::Display for VpnState {
             VpnState::Connecting { server } => write!(f, "Connecting to {}", server),
             VpnState::Connected { server } => write!(f, "Connected to {}", server),
             VpnState::Degraded { server } => write!(f, "Degraded: {}", server),
-            VpnState::Reconnecting { server, attempt, max_attempts } => {
-                write!(f, "Reconnecting to {} ({}/{})", server, attempt, max_attempts)
+            VpnState::Reconnecting {
+                server,
+                attempt,
+                max_attempts,
+            } => {
+                write!(
+                    f,
+                    "Reconnecting to {} ({}/{})",
+                    server, attempt, max_attempts
+                )
             }
             VpnState::Failed { server, reason } => {
                 write!(f, "Failed: {} - {}", server, reason)
@@ -106,7 +114,7 @@ pub enum Event {
     UserEnable { server: String },
     /// User requested disconnection
     UserDisable,
-    
+
     // NetworkManager events
     /// NM reports VPN is now active
     NmVpnUp { server: String },
@@ -116,7 +124,7 @@ pub enum Event {
     NmVpnChanged { server: String },
     /// NM device changed (wifi roam, ethernet plug/unplug)
     NmDeviceChanged,
-    
+
     // Health check events
     /// Health check passed
     HealthOk,
@@ -124,13 +132,13 @@ pub enum Event {
     HealthDegraded,
     /// Health check failed completely (tunnel is dead)
     HealthDead,
-    
+
     // System events
     /// System is going to sleep
     Sleep,
     /// System woke from sleep
     Wake,
-    
+
     // Internal events
     /// Connection/reconnection attempt timed out
     Timeout,
@@ -256,7 +264,7 @@ mod tests {
 
         let state = VpnState::Disconnected;
         assert_eq!(state.server_name(), None);
-        
+
         let state = VpnState::Degraded {
             server: "degraded-server".to_string(),
         };
@@ -269,7 +277,11 @@ mod tests {
         assert!(VpnState::Connected { server: "s".into() }.is_active());
         assert!(VpnState::Connecting { server: "s".into() }.is_active());
         assert!(VpnState::Degraded { server: "s".into() }.is_active());
-        assert!(!VpnState::Failed { server: "s".into(), reason: "r".into() }.is_active());
+        assert!(!VpnState::Failed {
+            server: "s".into(),
+            reason: "r".into()
+        }
+        .is_active());
     }
 
     #[test]
@@ -277,6 +289,11 @@ mod tests {
         assert!(!VpnState::Disconnected.is_busy());
         assert!(!VpnState::Connected { server: "s".into() }.is_busy());
         assert!(VpnState::Connecting { server: "s".into() }.is_busy());
-        assert!(VpnState::Reconnecting { server: "s".into(), attempt: 1, max_attempts: 5 }.is_busy());
+        assert!(VpnState::Reconnecting {
+            server: "s".into(),
+            attempt: 1,
+            max_attempts: 5
+        }
+        .is_busy());
     }
 }

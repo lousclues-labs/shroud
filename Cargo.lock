@@ -966,6 +966,7 @@ dependencies = [
  "once_cell",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "toml",
  "zbus",
