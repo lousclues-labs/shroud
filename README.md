@@ -153,10 +153,6 @@ systemctl --user daemon-reload
 systemctl --user enable --now shroud.service
 ```
 
-### Arch Linux (AUR)
-
-*Coming soon*
-
 ---
 
 ## Importing VPN Configs
