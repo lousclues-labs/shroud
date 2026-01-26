@@ -1549,11 +1549,19 @@ async fn run_daemon_mode(args: cli::Args) {
         }
     };
 
+    // Clean up any stale kill switch rules from previous crash
+    if killswitch::rules_exist() {
+        warn!("Found stale kill switch rules from previous run, cleaning up...");
+        killswitch::cleanup_stale_rules();
+    }
+
     // Track start time for uptime reporting
     let start_time = Instant::now();
 
     ctrlc::set_handler(move || {
         info!("Shutdown signal received, cleaning up...");
+        // Clean up kill switch rules (sync version for signal handler)
+        killswitch::cleanup_stale_rules();
         release_instance_lock();
         // Clean up CLI socket
         let socket_path = cli::server::get_socket_path();

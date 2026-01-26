@@ -1,214 +1,1514 @@
 #!/bin/bash
-# setup.sh - Native Arch Linux setup/update script for Shroud VPN Manager
 #
-# This script:
-# 1. Installs system dependencies via pacman
-# 2. Builds the Rust binary in release mode
-# 3. Installs the binary to ~/.local/bin
-# 4. Sets up systemd user service
-# 5. Configures XDG autostart
+# setup.sh - Installation script for Shroud VPN Manager
 #
-# Usage: ./setup.sh
+# Usage:
+#   ./setup.sh [OPTIONS] [COMMAND]
+#
+# Commands:
+#   install     Install Shroud (default)
+#   update      Update existing installation
+#   uninstall   Remove Shroud
+#   check       Check dependencies only
+#   repair      Reinstall without rebuilding
+#   status      Show installation status
+#
+# Options:
+#   -h, --help      Show this help
+#   -f, --force     Don't prompt for confirmation
+#   -n, --dry-run   Show what would be done
+#   -v, --verbose   Show detailed output
+#   -q, --quiet     Minimal output
+#
+# Examples:
+#   ./setup.sh                  # Install
+#   ./setup.sh uninstall        # Uninstall
+#   ./setup.sh --force update   # Update without prompts
+#
+# For more information: https://github.com/loujr/shroud
 
-set -e
+set -euo pipefail
+
+# ============================================================================
+# Configuration
+# ============================================================================
 
 BINARY_NAME="shroud"
 INSTALL_DIR="$HOME/.local/bin"
+CONFIG_DIR="$HOME/.config/shroud"
+DATA_DIR="$HOME/.local/share/shroud"
 SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
 SERVICE_NAME="shroud.service"
 AUTOSTART_DIR="$HOME/.config/autostart"
+APPLICATIONS_DIR="$HOME/.local/share/applications"
+BASH_COMPLETIONS_DIR="$HOME/.local/share/bash-completion/completions"
+ZSH_COMPLETIONS_DIR="$HOME/.local/share/zsh/site-functions"
+FISH_COMPLETIONS_DIR="$HOME/.config/fish/completions"
+POLKIT_ACTIONS_DIR="/usr/share/polkit-1/actions"
+POLKIT_RULES_DIR="/usr/share/polkit-1/rules.d"
 
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+# Script state
+FORCE=false
+DRY_RUN=false
+VERBOSE=false
+QUIET=false
+COMMAND="install"
+LOG_FILE=""
+DISTRO=""
+DESKTOP=""
+PKG_MANAGER=""
+PKG_INSTALL=""
 
-# Check if running on Arch Linux
-check_arch() {
-    if [ ! -f /etc/arch-release ]; then
-        echo -e "${YELLOW}Warning: This script is designed for Arch Linux.${NC}"
-        echo -e "${YELLOW}You may need to adapt package names for your distribution.${NC}"
-        read -p "Continue anyway? [y/N] " -n 1 -r
-        echo
-        if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-            exit 1
-        fi
-    fi
+# ============================================================================
+# Colors
+# ============================================================================
+
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+    RED='\033[0;31m'
+    GREEN='\033[0;32m'
+    YELLOW='\033[1;33m'
+    BLUE='\033[0;34m'
+    CYAN='\033[0;36m'
+    BOLD='\033[1m'
+    DIM='\033[2m'
+    NC='\033[0m'
+else
+    RED=''
+    GREEN=''
+    YELLOW=''
+    BLUE=''
+    CYAN=''
+    BOLD=''
+    DIM=''
+    NC=''
+fi
+
+# ============================================================================
+# Logging Functions
+# ============================================================================
+
+init_logging() {
+    LOG_FILE="/tmp/shroud-setup-$(date +%Y%m%d-%H%M%S).log"
+    : > "$LOG_FILE"
+    log "Shroud setup started"
+    log "Command: $COMMAND"
+    log "Date: $(date)"
+    log "User: $(whoami)"
+    log "PWD: $(pwd)"
 }
 
-# Print colored status
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG_FILE"
+}
+
 info() {
-    echo -e "${BLUE}[INFO]${NC} $1"
+    if [ "$QUIET" != "true" ]; then
+        echo -e "${BLUE}[INFO]${NC} $1"
+    fi
+    log "INFO: $1"
 }
 
 success() {
-    echo -e "${GREEN}[OK]${NC} $1"
+    if [ "$QUIET" != "true" ]; then
+        echo -e "${GREEN}[OK]${NC} $1"
+    fi
+    log "SUCCESS: $1"
+}
+
+warn() {
+    echo -e "${YELLOW}[WARN]${NC} $1" >&2
+    log "WARN: $1"
 }
 
 error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    echo -e "${RED}[ERROR]${NC} $1" >&2
+    log "ERROR: $1"
 }
 
-# Check for required commands
-check_command() {
-    if ! command -v "$1" &> /dev/null; then
-        return 1
+verbose() {
+    if [ "$VERBOSE" = "true" ]; then
+        echo -e "${DIM}$1${NC}"
     fi
-    return 0
+    log "VERBOSE: $1"
 }
 
-# Check for a dependency, install if missing
-check_dependency() {
-    local cmd="$1"
-    local pkg="$2"
-    local install_cmd="$3"
-    
-    if check_command "$cmd"; then
-        success "$cmd is installed"
+die() {
+    error "$1"
+    echo -e "${DIM}Check log file: $LOG_FILE${NC}" >&2
+    exit 1
+}
+
+# Run a command and log output
+run() {
+    log "Running: $*"
+    if [ "$DRY_RUN" = "true" ]; then
+        echo -e "${DIM}[DRY-RUN] Would run: $*${NC}"
         return 0
+    fi
+    
+    if [ "$VERBOSE" = "true" ]; then
+        "$@" 2>&1 | tee -a "$LOG_FILE"
+        return "${PIPESTATUS[0]}"
     else
-        info "$cmd not found, installing $pkg..."
-        eval "$install_cmd"
+        "$@" >> "$LOG_FILE" 2>&1
+    fi
+}
+
+# ============================================================================
+# User Interaction
+# ============================================================================
+
+confirm() {
+    local prompt="$1"
+    local default="${2:-n}"
+    
+    if [ "$FORCE" = "true" ]; then
+        return 0
+    fi
+    
+    if [ "$default" = "y" ]; then
+        read -rp "$prompt [Y/n] " reply
+        reply=${reply:-y}
+    else
+        read -rp "$prompt [y/N] " reply
+        reply=${reply:-n}
+    fi
+    
+    case "$reply" in
+        [Yy]*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+spinner() {
+    local pid=$1
+    local delay=0.1
+    local spinstr='|/-\'
+    while ps -p "$pid" &>/dev/null; do
+        local temp=${spinstr#?}
+        printf " [%c]  " "$spinstr"
+        local spinstr=$temp${spinstr%"$temp"}
+        sleep $delay
+        printf "\b\b\b\b\b\b"
+    done
+    printf "      \b\b\b\b\b\b"
+}
+
+# ============================================================================
+# System Detection
+# ============================================================================
+
+detect_distro() {
+    if [ -f /etc/arch-release ]; then
+        DISTRO="arch"
+        PKG_MANAGER="pacman"
+        PKG_INSTALL="sudo pacman -S --noconfirm --needed"
+    elif [ -f /etc/debian_version ]; then
+        DISTRO="debian"
+        PKG_MANAGER="apt"
+        PKG_INSTALL="sudo apt-get install -y"
+    elif [ -f /etc/fedora-release ]; then
+        DISTRO="fedora"
+        PKG_MANAGER="dnf"
+        PKG_INSTALL="sudo dnf install -y"
+    else
+        DISTRO="unknown"
+        PKG_MANAGER=""
+        PKG_INSTALL=""
+    fi
+    log "Detected distro: $DISTRO"
+}
+
+detect_desktop() {
+    DESKTOP="${XDG_CURRENT_DESKTOP:-unknown}"
+    log "Detected desktop: $DESKTOP, Session: ${XDG_SESSION_TYPE:-unknown}"
+}
+
+get_package_name() {
+    local generic_name="$1"
+    case "$DISTRO" in
+        arch)
+            case "$generic_name" in
+                networkmanager) echo "networkmanager" ;;
+                networkmanager-openvpn) echo "networkmanager-openvpn" ;;
+                openvpn) echo "openvpn" ;;
+                nftables) echo "nftables" ;;
+                polkit) echo "polkit" ;;
+                libappindicator) echo "libappindicator-gtk3" ;;
+                rust) echo "rust" ;;
+                dbus) echo "dbus" ;;
+            esac
+            ;;
+        debian)
+            case "$generic_name" in
+                networkmanager) echo "network-manager" ;;
+                networkmanager-openvpn) echo "network-manager-openvpn" ;;
+                openvpn) echo "openvpn" ;;
+                nftables) echo "nftables" ;;
+                polkit) echo "policykit-1" ;;
+                libappindicator) echo "libayatana-appindicator3-1" ;;
+                rust) echo "rustc cargo" ;;
+                dbus) echo "dbus" ;;
+            esac
+            ;;
+        fedora)
+            case "$generic_name" in
+                networkmanager) echo "NetworkManager" ;;
+                networkmanager-openvpn) echo "NetworkManager-openvpn" ;;
+                openvpn) echo "openvpn" ;;
+                nftables) echo "nftables" ;;
+                polkit) echo "polkit" ;;
+                libappindicator) echo "libappindicator-gtk3" ;;
+                rust) echo "rust cargo" ;;
+                dbus) echo "dbus" ;;
+            esac
+            ;;
+        *)
+            echo "$generic_name"
+            ;;
+    esac
+}
+
+# ============================================================================
+# Dependency Checking
+# ============================================================================
+
+check_command() {
+    command -v "$1" &>/dev/null
+}
+
+check_package_installed() {
+    local pkg="$1"
+    case "$DISTRO" in
+        arch)
+            pacman -Q "$pkg" &>/dev/null
+            ;;
+        debian)
+            dpkg -l "$pkg" 2>/dev/null | grep -q "^ii"
+            ;;
+        fedora)
+            rpm -q "$pkg" &>/dev/null
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+check_dependency() {
+    local name="$1"
+    local cmd="${2:-}"
+    local pkg
+    pkg=$(get_package_name "$name")
+    
+    if [ -n "$cmd" ]; then
         if check_command "$cmd"; then
-            success "$pkg installed successfully"
+            echo -e "  ${GREEN}✓${NC} $name ($cmd)"
             return 0
         else
-            error "Failed to install $pkg"
+            echo -e "  ${RED}✗${NC} $name ($cmd not found)"
+            return 1
+        fi
+    else
+        if check_package_installed "$pkg"; then
+            echo -e "  ${GREEN}✓${NC} $name"
+            return 0
+        else
+            echo -e "  ${RED}✗${NC} $name (package: $pkg)"
             return 1
         fi
     fi
 }
 
-# Main setup
-main() {
-    echo -e "${BLUE}╔═══════════════════════════════════════════╗${NC}"
-    echo -e "${BLUE}║       Shroud VPN Manager Setup            ║${NC}"
-    echo -e "${BLUE}╚═══════════════════════════════════════════╝${NC}"
+check_all_dependencies() {
+    local missing=()
+    
+    echo -e "${BOLD}Required dependencies:${NC}"
+    
+    check_command "cargo" || missing+=("rust")
+    check_dependency "networkmanager" "nmcli" || missing+=("networkmanager")
+    check_dependency "networkmanager-openvpn" || missing+=("networkmanager-openvpn")
+    check_dependency "openvpn" "openvpn" || missing+=("openvpn")
+    check_dependency "nftables" "nft" || missing+=("nftables")
+    check_dependency "polkit" "pkexec" || missing+=("polkit")
+    check_dependency "dbus" "dbus-daemon" || missing+=("dbus")
+    
     echo
-
-    check_arch
-
-    info "Checking dependencies..."
-
-    # Check for pacman
-    if ! check_command "pacman"; then
-        error "pacman not found. This script requires Arch Linux."
-        exit 1
-    fi
-
-    # Check and install dependencies
-    if ! check_dependency "cargo" "rust" "sudo pacman -S --noconfirm rust"; then
-        error "Rust installation failed"
-        exit 1
-    fi
-
-    if ! check_dependency "nmcli" "networkmanager" "sudo pacman -S --noconfirm networkmanager"; then
-        error "NetworkManager installation failed"
-        exit 1
-    fi
-
-    # OpenVPN is optional but recommended
-    if ! check_command "openvpn"; then
-        info "Installing openvpn (required for OpenVPN connections)..."
-        sudo pacman -S --noconfirm openvpn networkmanager-openvpn || true
+    echo -e "${BOLD}Recommended dependencies:${NC}"
+    
+    local rec_missing=()
+    if ! check_dependency "libappindicator" 2>/dev/null; then
+        rec_missing+=("libappindicator")
+        echo -e "  ${YELLOW}○${NC} libappindicator (for system tray on GNOME)"
+    else
+        echo -e "  ${GREEN}✓${NC} libappindicator"
     fi
     
-    # nftables for kill switch
-    if ! check_dependency "nft" "nftables" "sudo pacman -S --noconfirm nftables"; then
-        error "nftables installation failed"
-        exit 1
-    fi
-
     echo
-    info "Building Shroud in release mode..."
-    cargo build --release
-
-    if [ ! -f "target/release/$BINARY_NAME" ]; then
-        error "Build failed - binary not found"
-        exit 1
+    
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo -e "${YELLOW}Missing required packages: ${missing[*]}${NC}"
+        return 1
     fi
-    success "Build completed"
+    
+    if [ ${#rec_missing[@]} -gt 0 ]; then
+        warn "Some recommended packages are missing: ${rec_missing[*]}"
+    fi
+    
+    return 0
+}
 
-    # Create install directory
+# ============================================================================
+# Pre-flight Checks
+# ============================================================================
+
+preflight_checks() {
+    info "Running pre-flight checks..."
+    
+    # Check not running as root
+    if [ "$(id -u)" -eq 0 ]; then
+        die "Do not run this script as root. It will use sudo when needed."
+    fi
+    
+    # Check sudo is available
+    if ! check_command sudo; then
+        die "sudo is required but not installed"
+    fi
+    
+    # Check distro
+    detect_distro
+    if [ "$DISTRO" = "unknown" ]; then
+        warn "Unknown distribution detected"
+        if ! confirm "Continue anyway?"; then
+            exit 1
+        fi
+    else
+        success "Detected distribution: $DISTRO"
+    fi
+    
+    # Check display
+    if [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+        warn "No display detected (DISPLAY and WAYLAND_DISPLAY are empty)"
+        warn "Shroud requires a graphical environment for the system tray"
+    fi
+    
+    # Check NetworkManager is running
+    if ! systemctl is-active --quiet NetworkManager; then
+        warn "NetworkManager is not running"
+        warn "Shroud requires NetworkManager to manage VPN connections"
+    else
+        success "NetworkManager is running"
+    fi
+    
+    # Check for nftables kernel support
+    if ! lsmod | grep -q nf_tables; then
+        verbose "nf_tables kernel module not loaded (may be built-in)"
+    fi
+    
+    # Detect desktop environment
+    detect_desktop
+    case "$DESKTOP" in
+        *GNOME*)
+            if ! gnome-extensions list 2>/dev/null | grep -q "appindicator"; then
+                warn "GNOME detected but AppIndicator extension not found"
+                warn "Install 'gnome-shell-extension-appindicator' for tray icon support"
+            fi
+            ;;
+        *KDE*|*Plasma*)
+            success "KDE Plasma detected (native tray support)"
+            ;;
+        *sway*|*Hyprland*|*wlroots*)
+            warn "Wayland compositor detected"
+            warn "Ensure you have a StatusNotifierItem-compatible tray (e.g., waybar with tray)"
+            ;;
+    esac
+}
+
+# ============================================================================
+# Installation Functions
+# ============================================================================
+
+install_dependencies() {
+    info "Checking dependencies..."
+    
+    if check_all_dependencies; then
+        success "All dependencies satisfied"
+        return 0
+    fi
+    
+    if [ -z "$PKG_INSTALL" ]; then
+        die "Cannot install packages on unknown distribution. Please install dependencies manually."
+    fi
+    
+    if ! confirm "Install missing dependencies?"; then
+        die "Cannot continue without dependencies"
+    fi
+    
+    info "Installing dependencies..."
+    
+    local packages=()
+    for dep in rust networkmanager networkmanager-openvpn openvpn nftables polkit dbus libappindicator; do
+        local pkg
+        pkg=$(get_package_name "$dep")
+        if [ -n "$pkg" ]; then
+            packages+=($pkg)
+        fi
+    done
+    
+    if [ "$DRY_RUN" = "true" ]; then
+        echo -e "${DIM}[DRY-RUN] Would run: $PKG_INSTALL ${packages[*]}${NC}"
+    else
+        run $PKG_INSTALL "${packages[@]}" || die "Failed to install dependencies"
+    fi
+    
+    success "Dependencies installed"
+}
+
+build_binary() {
+    info "Building Shroud..."
+    
+    if [ ! -f "Cargo.toml" ]; then
+        die "Cargo.toml not found. Run this script from the project directory."
+    fi
+    
+    if [ "$DRY_RUN" = "true" ]; then
+        echo -e "${DIM}[DRY-RUN] Would run: cargo build --release${NC}"
+        return 0
+    fi
+    
+    # Build in release mode
+    if [ "$VERBOSE" = "true" ]; then
+        cargo build --release 2>&1 | tee -a "$LOG_FILE"
+    else
+        cargo build --release >> "$LOG_FILE" 2>&1 &
+        local pid=$!
+        printf "  Building..."
+        spinner $pid
+        wait $pid || die "Build failed. Check log: $LOG_FILE"
+    fi
+    
+    # Verify binary was created
+    if [ ! -f "target/release/$BINARY_NAME" ]; then
+        die "Binary not found after build: target/release/$BINARY_NAME"
+    fi
+    
+    # Smoke test
+    if ! "./target/release/$BINARY_NAME" --version &>/dev/null; then
+        die "Built binary failed smoke test (--version)"
+    fi
+    
+    local version
+    version=$("./target/release/$BINARY_NAME" --version 2>/dev/null || echo "unknown")
+    success "Built: $version"
+}
+
+stop_existing() {
+    info "Stopping existing Shroud instance..."
+    
+    # Try graceful shutdown via CLI
+    if [ -S "${XDG_RUNTIME_DIR:-/tmp}/shroud.sock" ]; then
+        if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
+            "$INSTALL_DIR/$BINARY_NAME" quit &>/dev/null || true
+            sleep 1
+        fi
+    fi
+    
+    # Stop systemd service
+    if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+        run systemctl --user stop "$SERVICE_NAME" || true
+    fi
+    
+    # Kill any remaining processes
+    pkill -u "$(id -u)" -x "$BINARY_NAME" 2>/dev/null || true
+    
+    # Clean up stale socket
+    rm -f "${XDG_RUNTIME_DIR:-/tmp}/shroud.sock"
+    
+    # Clean up stale nftables rules
+    if nft list table inet shroud_killswitch &>/dev/null; then
+        warn "Found stale kill switch rules, cleaning up..."
+        sudo nft delete table inet shroud_killswitch 2>/dev/null || true
+    fi
+    
+    success "Stopped existing instance"
+}
+
+install_binary() {
+    info "Installing binary..."
+    
     mkdir -p "$INSTALL_DIR"
     
-    # Stop existing service if running
-    if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-        info "Stopping existing service..."
-        systemctl --user stop "$SERVICE_NAME" || true
+    # Backup existing binary
+    if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
+        cp "$INSTALL_DIR/$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME.backup"
+        verbose "Backed up existing binary"
     fi
+    
+    if [ "$DRY_RUN" = "true" ]; then
+        echo -e "${DIM}[DRY-RUN] Would copy: target/release/$BINARY_NAME -> $INSTALL_DIR/$BINARY_NAME${NC}"
+        return 0
+    fi
+    
+    # Install new binary
+    if ! cp "target/release/$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME"; then
+        # Rollback
+        if [ -f "$INSTALL_DIR/$BINARY_NAME.backup" ]; then
+            mv "$INSTALL_DIR/$BINARY_NAME.backup" "$INSTALL_DIR/$BINARY_NAME"
+        fi
+        die "Failed to install binary"
+    fi
+    
+    chmod 755 "$INSTALL_DIR/$BINARY_NAME"
+    
+    # Verify installation
+    if ! "$INSTALL_DIR/$BINARY_NAME" --version &>/dev/null; then
+        # Rollback
+        if [ -f "$INSTALL_DIR/$BINARY_NAME.backup" ]; then
+            mv "$INSTALL_DIR/$BINARY_NAME.backup" "$INSTALL_DIR/$BINARY_NAME"
+            die "New binary failed verification, rolled back to previous version"
+        fi
+        die "Installed binary failed verification"
+    fi
+    
+    # Remove backup on success
+    rm -f "$INSTALL_DIR/$BINARY_NAME.backup"
+    
+    success "Installed: $INSTALL_DIR/$BINARY_NAME"
+}
 
-    # Kill any running instance
-    pkill -f "$BINARY_NAME" 2>/dev/null || true
-    sleep 1
+create_directories() {
+    info "Creating directories..."
+    
+    if [ "$DRY_RUN" = "true" ]; then
+        echo -e "${DIM}[DRY-RUN] Would create: $CONFIG_DIR (0700), $DATA_DIR (0700)${NC}"
+        return 0
+    fi
+    
+    mkdir -p "$CONFIG_DIR"
+    chmod 700 "$CONFIG_DIR"
+    
+    mkdir -p "$DATA_DIR"
+    chmod 700 "$DATA_DIR"
+    
+    success "Created config and data directories"
+}
 
-    # Install binary
-    info "Installing binary to $INSTALL_DIR..."
-    cp "target/release/$BINARY_NAME" "$INSTALL_DIR/"
-    chmod +x "$INSTALL_DIR/$BINARY_NAME"
-    success "Binary installed to $INSTALL_DIR/$BINARY_NAME"
+create_default_config() {
+    local config_file="$CONFIG_DIR/config.toml"
+    
+    if [ -f "$config_file" ]; then
+        verbose "Config file already exists, not overwriting"
+        return 0
+    fi
+    
+    info "Creating default configuration..."
+    
+    if [ "$DRY_RUN" = "true" ]; then
+        echo -e "${DIM}[DRY-RUN] Would create: $config_file${NC}"
+        return 0
+    fi
+    
+    cat > "$config_file" << 'EOF'
+# Shroud VPN Manager Configuration
+# https://github.com/loujr/shroud
 
-    # Setup systemd user service
-    echo
-    info "Setting up systemd user service..."
+# Config file version (do not modify)
+version = 1
+
+# Automatically reconnect if VPN connection drops
+auto_reconnect = true
+
+# Maximum number of reconnection attempts before giving up
+# Set to 0 for unlimited attempts
+max_reconnect_attempts = 10
+
+# Enable kill switch by default when connecting
+# The kill switch blocks all non-VPN traffic to prevent leaks
+kill_switch_enabled = false
+
+# DNS leak protection mode:
+#   "tunnel"    - DNS only through VPN tunnel (most secure, default)
+#   "localhost" - DNS only to localhost (for local resolvers like systemd-resolved)
+#   "any"       - DNS to any destination (least secure, may leak)
+dns_mode = "tunnel"
+
+# IPv6 leak protection mode:
+#   "block"  - Block all IPv6 traffic (most secure, default)
+#   "tunnel" - Allow IPv6 only through VPN tunnel
+#   "off"    - No IPv6 protection (may leak)
+ipv6_mode = "block"
+
+# Health check interval in seconds
+# Shroud periodically checks if the VPN connection is working
+health_check_interval_secs = 30
+
+# Latency threshold in milliseconds for marking connection as "degraded"
+health_degraded_threshold_ms = 2000
+
+# Last connected server (managed automatically)
+# last_server = ""
+EOF
+
+    chmod 600 "$config_file"
+    success "Created default configuration"
+}
+
+install_systemd_service() {
+    info "Installing systemd user service..."
+    
     mkdir -p "$SYSTEMD_USER_DIR"
-    cp "systemd/$SERVICE_NAME" "$SYSTEMD_USER_DIR/"
     
+    if [ "$DRY_RUN" = "true" ]; then
+        echo -e "${DIM}[DRY-RUN] Would create: $SYSTEMD_USER_DIR/$SERVICE_NAME${NC}"
+        return 0
+    fi
+    
+    cat > "$SYSTEMD_USER_DIR/$SERVICE_NAME" << EOF
+[Unit]
+Description=Shroud VPN Manager
+Documentation=https://github.com/loujr/shroud
+After=graphical-session.target
+Wants=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=$INSTALL_DIR/$BINARY_NAME
+ExecStop=$INSTALL_DIR/$BINARY_NAME quit
+Restart=on-failure
+RestartSec=5
+Environment=DISPLAY=%I
+Environment=WAYLAND_DISPLAY=%I
+
+# Cleanup kill switch on service stop
+ExecStopPost=-/bin/sh -c 'sudo nft delete table inet shroud_killswitch 2>/dev/null || true'
+
+[Install]
+WantedBy=graphical-session.target
+EOF
+
     # Reload systemd
-    systemctl --user daemon-reload
-    success "Systemd service installed"
-
-    # Enable and start service
-    info "Enabling and starting service..."
-    systemctl --user enable "$SERVICE_NAME"
-    systemctl --user start "$SERVICE_NAME"
+    run systemctl --user daemon-reload
     
-    if systemctl --user is-active --quiet "$SERVICE_NAME"; then
-        success "Service is running"
+    success "Installed systemd service"
+}
+
+enable_service() {
+    info "Enabling systemd service..."
+    
+    if [ "$DRY_RUN" = "true" ]; then
+        echo -e "${DIM}[DRY-RUN] Would enable: $SERVICE_NAME${NC}"
+        return 0
+    fi
+    
+    run systemctl --user enable "$SERVICE_NAME"
+    success "Service enabled"
+}
+
+start_service() {
+    info "Starting Shroud..."
+    
+    if [ "$DRY_RUN" = "true" ]; then
+        echo -e "${DIM}[DRY-RUN] Would start: $SERVICE_NAME${NC}"
+        return 0
+    fi
+    
+    run systemctl --user start "$SERVICE_NAME"
+    
+    # Wait for socket to appear
+    local attempts=0
+    local socket_path="${XDG_RUNTIME_DIR:-/tmp}/shroud.sock"
+    while [ ! -S "$socket_path" ] && [ $attempts -lt 10 ]; do
+        sleep 0.5
+        ((attempts++))
+    done
+    
+    if [ -S "$socket_path" ]; then
+        success "Shroud started successfully"
     else
-        error "Service failed to start. Check: journalctl --user -u $SERVICE_NAME"
+        warn "Shroud started but socket not detected (may take a moment)"
     fi
+}
 
-    # Setup XDG autostart
-    echo
-    info "Setting up XDG autostart..."
+create_desktop_files() {
+    info "Creating desktop entries..."
+    
+    mkdir -p "$APPLICATIONS_DIR"
     mkdir -p "$AUTOSTART_DIR"
-    cp "autostart/shroud.desktop" "$AUTOSTART_DIR/"
-    success "Autostart entry installed to $AUTOSTART_DIR/shroud.desktop"
-
-    # Migrate old config if present
-    OLD_CONFIG_DIR="$HOME/.config/openvpn-tray"
-    NEW_CONFIG_DIR="$HOME/.config/shroud"
-    if [ -d "$OLD_CONFIG_DIR" ] && [ ! -d "$NEW_CONFIG_DIR" ]; then
-        info "Migrating config from $OLD_CONFIG_DIR to $NEW_CONFIG_DIR..."
-        mkdir -p "$NEW_CONFIG_DIR"
-        cp "$OLD_CONFIG_DIR/config.toml" "$NEW_CONFIG_DIR/" 2>/dev/null || true
-        chmod 700 "$NEW_CONFIG_DIR"
-        chmod 600 "$NEW_CONFIG_DIR/config.toml" 2>/dev/null || true
-        success "Config migrated"
+    
+    if [ "$DRY_RUN" = "true" ]; then
+        echo -e "${DIM}[DRY-RUN] Would create desktop files${NC}"
+        return 0
     fi
+    
+    # Application menu entry
+    cat > "$APPLICATIONS_DIR/shroud.desktop" << EOF
+[Desktop Entry]
+Name=Shroud
+Comment=VPN Connection Manager
+GenericName=VPN Manager
+Exec=$INSTALL_DIR/shroud
+Icon=network-vpn
+Terminal=false
+Type=Application
+Categories=Network;Security;
+Keywords=vpn;openvpn;networkmanager;privacy;
+StartupNotify=false
+StartupWMClass=shroud
+EOF
 
-    # Summary
+    # Autostart entry (alternative to systemd)
+    cat > "$AUTOSTART_DIR/shroud.desktop" << EOF
+[Desktop Entry]
+Name=Shroud
+Comment=VPN Connection Manager
+Exec=$INSTALL_DIR/shroud
+Icon=network-vpn
+Terminal=false
+Type=Application
+Categories=Network;Security;
+X-GNOME-Autostart-enabled=false
+X-KDE-autostart-after=panel
+StartupNotify=false
+Hidden=true
+EOF
+
+    # Update desktop database
+    if check_command update-desktop-database; then
+        run update-desktop-database "$APPLICATIONS_DIR" || true
+    fi
+    
+    success "Desktop entries created"
+}
+
+install_completions() {
+    info "Installing shell completions..."
+    
+    if [ "$DRY_RUN" = "true" ]; then
+        echo -e "${DIM}[DRY-RUN] Would install shell completions${NC}"
+        return 0
+    fi
+    
+    # Bash completions
+    mkdir -p "$BASH_COMPLETIONS_DIR"
+    cat > "$BASH_COMPLETIONS_DIR/shroud" << 'EOF'
+_shroud() {
+    local cur prev opts commands
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    
+    commands="connect disconnect reconnect switch status list killswitch auto-reconnect debug ping refresh quit restart help"
+    
+    case "$prev" in
+        shroud)
+            COMPREPLY=( $(compgen -W "$commands --help --version --verbose --json --quiet" -- "$cur") )
+            return 0
+            ;;
+        connect|switch)
+            local connections=$(nmcli -t -f NAME,TYPE connection show 2>/dev/null | grep ':vpn$' | cut -d: -f1)
+            COMPREPLY=( $(compgen -W "$connections" -- "$cur") )
+            return 0
+            ;;
+        killswitch|ks|auto-reconnect|ar)
+            COMPREPLY=( $(compgen -W "on off toggle status" -- "$cur") )
+            return 0
+            ;;
+        debug)
+            COMPREPLY=( $(compgen -W "on off log-path tail dump" -- "$cur") )
+            return 0
+            ;;
+        help)
+            COMPREPLY=( $(compgen -W "$commands" -- "$cur") )
+            return 0
+            ;;
+    esac
+    
+    if [[ "$cur" == -* ]]; then
+        opts="--help --version --verbose --json --quiet --timeout --log-level --log-file"
+        COMPREPLY=( $(compgen -W "$opts" -- "$cur") )
+        return 0
+    fi
+}
+complete -F _shroud shroud
+EOF
+
+    # Zsh completions
+    mkdir -p "$ZSH_COMPLETIONS_DIR"
+    cat > "$ZSH_COMPLETIONS_DIR/_shroud" << 'EOF'
+#compdef shroud
+
+_shroud_vpn_connections() {
+    local connections
+    connections=(${(f)"$(nmcli -t -f NAME,TYPE connection show 2>/dev/null | grep ':vpn$' | cut -d: -f1)"})
+    _describe 'VPN connections' connections
+}
+
+_shroud() {
+    local -a commands
+    commands=(
+        'connect:Connect to a VPN'
+        'disconnect:Disconnect from current VPN'
+        'reconnect:Reconnect to current VPN'
+        'switch:Switch to a different VPN'
+        'status:Show current status'
+        'list:List available VPN connections'
+        'killswitch:Manage kill switch'
+        'auto-reconnect:Manage auto-reconnect'
+        'debug:Manage debug logging'
+        'ping:Check if daemon is running'
+        'refresh:Refresh VPN connection list'
+        'quit:Stop the daemon'
+        'restart:Restart the daemon'
+        'help:Show help'
+    )
+    
+    _arguments -C \
+        '(-h --help)'{-h,--help}'[Show help]' \
+        '(-V --version)'{-V,--version}'[Show version]' \
+        '(-v --verbose)'{-v,--verbose}'[Increase verbosity]' \
+        '--json[Output in JSON format]' \
+        '(-q --quiet)'{-q,--quiet}'[Suppress output]' \
+        '--timeout[Timeout in seconds]:seconds' \
+        '--log-level[Log level]:level:(error warn info debug trace)' \
+        '--log-file[Log to file]:file:_files' \
+        '1:command:->command' \
+        '*::arg:->args'
+    
+    case "$state" in
+        command)
+            _describe 'command' commands
+            ;;
+        args)
+            case "$words[1]" in
+                connect|switch)
+                    _shroud_vpn_connections
+                    ;;
+                killswitch|ks|auto-reconnect|ar)
+                    _describe 'action' '(on off toggle status)'
+                    ;;
+                debug)
+                    _describe 'action' '(on off log-path tail dump)'
+                    ;;
+                help)
+                    _describe 'command' commands
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+_shroud "$@"
+EOF
+
+    # Fish completions
+    mkdir -p "$FISH_COMPLETIONS_DIR"
+    cat > "$FISH_COMPLETIONS_DIR/shroud.fish" << 'EOF'
+# Shroud completions for fish
+
+function __fish_shroud_vpn_connections
+    nmcli -t -f NAME,TYPE connection show 2>/dev/null | grep ':vpn$' | cut -d: -f1
+end
+
+function __fish_shroud_needs_command
+    set -l cmd (commandline -opc)
+    test (count $cmd) -eq 1
+end
+
+function __fish_shroud_using_command
+    set -l cmd (commandline -opc)
+    test (count $cmd) -ge 2 -a "$cmd[2]" = "$argv[1]"
+end
+
+# Commands
+complete -f -c shroud -n __fish_shroud_needs_command -a connect -d 'Connect to a VPN'
+complete -f -c shroud -n __fish_shroud_needs_command -a disconnect -d 'Disconnect from current VPN'
+complete -f -c shroud -n __fish_shroud_needs_command -a reconnect -d 'Reconnect to current VPN'
+complete -f -c shroud -n __fish_shroud_needs_command -a switch -d 'Switch to a different VPN'
+complete -f -c shroud -n __fish_shroud_needs_command -a status -d 'Show current status'
+complete -f -c shroud -n __fish_shroud_needs_command -a list -d 'List available VPN connections'
+complete -f -c shroud -n __fish_shroud_needs_command -a killswitch -d 'Manage kill switch'
+complete -f -c shroud -n __fish_shroud_needs_command -a auto-reconnect -d 'Manage auto-reconnect'
+complete -f -c shroud -n __fish_shroud_needs_command -a debug -d 'Manage debug logging'
+complete -f -c shroud -n __fish_shroud_needs_command -a ping -d 'Check if daemon is running'
+complete -f -c shroud -n __fish_shroud_needs_command -a refresh -d 'Refresh VPN connection list'
+complete -f -c shroud -n __fish_shroud_needs_command -a quit -d 'Stop the daemon'
+complete -f -c shroud -n __fish_shroud_needs_command -a restart -d 'Restart the daemon'
+complete -f -c shroud -n __fish_shroud_needs_command -a help -d 'Show help'
+
+# VPN connection completion for connect/switch
+complete -f -c shroud -n '__fish_shroud_using_command connect' -a '(__fish_shroud_vpn_connections)'
+complete -f -c shroud -n '__fish_shroud_using_command switch' -a '(__fish_shroud_vpn_connections)'
+
+# Subcommand options
+complete -f -c shroud -n '__fish_shroud_using_command killswitch' -a 'on off toggle status'
+complete -f -c shroud -n '__fish_shroud_using_command ks' -a 'on off toggle status'
+complete -f -c shroud -n '__fish_shroud_using_command auto-reconnect' -a 'on off toggle status'
+complete -f -c shroud -n '__fish_shroud_using_command ar' -a 'on off toggle status'
+complete -f -c shroud -n '__fish_shroud_using_command debug' -a 'on off log-path tail dump'
+
+# Global options
+complete -f -c shroud -s h -l help -d 'Show help'
+complete -f -c shroud -s V -l version -d 'Show version'
+complete -f -c shroud -s v -l verbose -d 'Increase verbosity'
+complete -f -c shroud -l json -d 'Output in JSON format'
+complete -f -c shroud -s q -l quiet -d 'Suppress output'
+complete -f -c shroud -l timeout -d 'Timeout in seconds'
+complete -f -c shroud -l log-level -a 'error warn info debug trace' -d 'Log level'
+complete -c shroud -l log-file -d 'Log to file'
+EOF
+
+    success "Shell completions installed"
+}
+
+install_polkit_policy() {
     echo
-    echo -e "${GREEN}╔═══════════════════════════════════════════╗${NC}"
-    echo -e "${GREEN}║       Installation Complete!              ║${NC}"
-    echo -e "${GREEN}╚═══════════════════════════════════════════╝${NC}"
+    info "The kill switch requires elevated privileges to modify firewall rules."
+    info "You can install a polkit policy to avoid password prompts."
     echo
-    echo -e "Binary:    ${YELLOW}$INSTALL_DIR/$BINARY_NAME${NC}"
-    echo -e "Service:   ${YELLOW}$SYSTEMD_USER_DIR/$SERVICE_NAME${NC}"
-    echo -e "Config:    ${YELLOW}$HOME/.config/shroud/config.toml${NC}"
+    warn "This will allow your user to run 'nft' commands without a password."
+    warn "Only do this if you understand the security implications."
     echo
-    echo -e "${BLUE}Useful commands:${NC}"
-    echo -e "  Check status:  ${YELLOW}systemctl --user status $SERVICE_NAME${NC}"
-    echo -e "  View logs:     ${YELLOW}journalctl --user -u $SERVICE_NAME -f${NC}"
-    echo -e "  Restart:       ${YELLOW}systemctl --user restart $SERVICE_NAME${NC}"
-    echo -e "  Stop:          ${YELLOW}systemctl --user stop $SERVICE_NAME${NC}"
+    
+    if ! confirm "Install polkit policy for passwordless nft?"; then
+        info "Skipping polkit policy installation"
+        return 0
+    fi
+    
+    if [ "$DRY_RUN" = "true" ]; then
+        echo -e "${DIM}[DRY-RUN] Would install polkit policy${NC}"
+        return 0
+    fi
+    
+    local policy_file="$POLKIT_ACTIONS_DIR/org.shroud.nft.policy"
+    local rules_file="$POLKIT_RULES_DIR/50-shroud-nft.rules"
+    
+    # Create policy
+    sudo tee "$policy_file" > /dev/null << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Shroud VPN Manager</vendor>
+  <vendor_url>https://github.com/loujr/shroud</vendor_url>
+  
+  <action id="org.shroud.nft">
+    <description>Run nft for Shroud VPN kill switch</description>
+    <message>Authentication is required to modify firewall rules for Shroud VPN Manager</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/bin/nft</annotate>
+  </action>
+</policyconfig>
+EOF
+
+    # Create rules for automatic authorization
+    sudo tee "$rules_file" > /dev/null << 'EOF'
+// Allow members of wheel group to run nft without password for Shroud
+polkit.addRule(function(action, subject) {
+    if (action.id == "org.shroud.nft" &&
+        subject.isInGroup("wheel")) {
+        return polkit.Result.YES;
+    }
+});
+EOF
+
+    success "Polkit policy installed"
+    info "You may need to log out and back in for changes to take effect"
+}
+
+verify_installation() {
+    info "Verifying installation..."
+    
+    local errors=0
+    
+    # Check binary
+    if [ -x "$INSTALL_DIR/$BINARY_NAME" ]; then
+        success "Binary: $INSTALL_DIR/$BINARY_NAME"
+    else
+        error "Binary not found or not executable"
+        ((errors++))
+    fi
+    
+    # Check version
+    local version
+    if version=$("$INSTALL_DIR/$BINARY_NAME" --version 2>/dev/null); then
+        success "Version: $version"
+    else
+        error "Binary --version failed"
+        ((errors++))
+    fi
+    
+    # Check service
+    if systemctl --user is-enabled "$SERVICE_NAME" &>/dev/null; then
+        success "Service: enabled"
+    else
+        warn "Service not enabled"
+    fi
+    
+    # Check socket
+    local socket_path="${XDG_RUNTIME_DIR:-/tmp}/shroud.sock"
+    if [ -S "$socket_path" ]; then
+        success "Socket: $socket_path"
+        
+        # Test ping
+        if "$INSTALL_DIR/$BINARY_NAME" ping &>/dev/null; then
+            success "Daemon: responding"
+        else
+            warn "Daemon not responding to ping"
+        fi
+    else
+        warn "Socket not found (daemon may not be running)"
+    fi
+    
+    return $errors
+}
+
+show_summary() {
     echo
-    echo -e "${BLUE}To import VPN configs:${NC}"
-    echo -e "  ${YELLOW}nmcli connection import type openvpn file your-config.ovpn${NC}"
+    echo -e "${BOLD}${GREEN}════════════════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}${GREEN}            Shroud installation complete!               ${NC}"
+    echo -e "${BOLD}${GREEN}════════════════════════════════════════════════════════${NC}"
     echo
+    echo -e "${BOLD}Installed files:${NC}"
+    echo "  Binary:     $INSTALL_DIR/$BINARY_NAME"
+    echo "  Config:     $CONFIG_DIR/config.toml"
+    echo "  Service:    $SYSTEMD_USER_DIR/$SERVICE_NAME"
+    echo "  Logs:       $DATA_DIR/"
+    echo
+    echo -e "${BOLD}Quick start:${NC}"
+    echo "  shroud status          # Check status"
+    echo "  shroud list            # List VPN connections"
+    echo "  shroud connect <name>  # Connect to VPN"
+    echo "  shroud --help          # Show all commands"
+    echo
+    echo -e "${BOLD}Service control:${NC}"
+    echo "  systemctl --user status shroud   # Check service"
+    echo "  systemctl --user restart shroud  # Restart service"
+    echo "  journalctl --user -u shroud -f   # View logs"
+    echo
+    
+    # Check for VPN connections
+    local vpns
+    vpns=$(nmcli -t -f NAME,TYPE connection show 2>/dev/null | grep ':vpn$' | cut -d: -f1)
+    if [ -n "$vpns" ]; then
+        echo -e "${BOLD}Available VPN connections:${NC}"
+        echo "$vpns" | while read -r vpn; do
+            echo "  - $vpn"
+        done
+    else
+        echo -e "${YELLOW}No VPN connections found.${NC}"
+        echo "Import with: nmcli connection import type openvpn file <config.ovpn>"
+    fi
+    echo
+    echo -e "${DIM}Log file: $LOG_FILE${NC}"
+}
+
+# ============================================================================
+# Uninstall Functions
+# ============================================================================
+
+remove_polkit_policy() {
+    local policy_file="$POLKIT_ACTIONS_DIR/org.shroud.nft.policy"
+    local rules_file="$POLKIT_RULES_DIR/50-shroud-nft.rules"
+    
+    if [ -f "$policy_file" ] || [ -f "$rules_file" ]; then
+        info "Removing polkit policy..."
+        sudo rm -f "$policy_file" "$rules_file" 2>/dev/null || true
+        success "Polkit policy removed"
+    fi
+}
+
+do_uninstall() {
+    echo -e "${BOLD}${RED}═══════════════════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}${RED}                  Shroud Uninstallation                     ${NC}"
+    echo -e "${BOLD}${RED}═══════════════════════════════════════════════════════════${NC}"
+    echo
+    
+    if ! confirm "Are you sure you want to uninstall Shroud?"; then
+        info "Uninstall cancelled"
+        exit 0
+    fi
+    
+    # Stop service
+    info "Stopping service..."
+    stop_existing
+    
+    # Disable service
+    if systemctl --user is-enabled "$SERVICE_NAME" &>/dev/null; then
+        run systemctl --user disable "$SERVICE_NAME" || true
+    fi
+    
+    # Remove binary
+    if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
+        info "Removing binary..."
+        rm -f "$INSTALL_DIR/$BINARY_NAME"
+        success "Binary removed"
+    fi
+    
+    # Remove service file
+    if [ -f "$SYSTEMD_USER_DIR/$SERVICE_NAME" ]; then
+        info "Removing service file..."
+        rm -f "$SYSTEMD_USER_DIR/$SERVICE_NAME"
+        run systemctl --user daemon-reload
+        success "Service file removed"
+    fi
+    
+    # Remove autostart
+    if [ -f "$AUTOSTART_DIR/shroud.desktop" ]; then
+        rm -f "$AUTOSTART_DIR/shroud.desktop"
+        success "Autostart entry removed"
+    fi
+    
+    # Remove desktop file
+    if [ -f "$APPLICATIONS_DIR/shroud.desktop" ]; then
+        rm -f "$APPLICATIONS_DIR/shroud.desktop"
+        if check_command update-desktop-database; then
+            run update-desktop-database "$APPLICATIONS_DIR" || true
+        fi
+        success "Desktop entry removed"
+    fi
+    
+    # Remove completions
+    rm -f "$BASH_COMPLETIONS_DIR/shroud"
+    rm -f "$ZSH_COMPLETIONS_DIR/_shroud"
+    rm -f "$FISH_COMPLETIONS_DIR/shroud.fish"
+    success "Shell completions removed"
+    
+    # Remove polkit policy
+    remove_polkit_policy
+    
+    # Ask about config
+    if [ -d "$CONFIG_DIR" ]; then
+        echo
+        if confirm "Remove configuration ($CONFIG_DIR)?"; then
+            rm -rf "$CONFIG_DIR"
+            success "Configuration removed"
+        else
+            info "Configuration preserved"
+        fi
+    fi
+    
+    # Ask about logs
+    if [ -d "$DATA_DIR" ]; then
+        if confirm "Remove logs and data ($DATA_DIR)?"; then
+            rm -rf "$DATA_DIR"
+            success "Logs and data removed"
+        else
+            info "Logs and data preserved"
+        fi
+    fi
+    
+    # Clean up socket
+    rm -f "${XDG_RUNTIME_DIR:-/tmp}/shroud.sock"
+    
+    # Clean up any remaining nftables rules
+    if sudo nft list table inet shroud_killswitch &>/dev/null 2>&1; then
+        sudo nft delete table inet shroud_killswitch 2>/dev/null || true
+    fi
+    
+    echo
+    echo -e "${GREEN}Shroud has been uninstalled.${NC}"
+}
+
+# ============================================================================
+# Command Implementations
+# ============================================================================
+
+do_install() {
+    echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}${BLUE}                  Shroud Installation                       ${NC}"
+    echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════════${NC}"
+    echo
+    
+    preflight_checks
+    install_dependencies
+    build_binary
+    stop_existing
+    install_binary
+    create_directories
+    create_default_config
+    install_systemd_service
+    enable_service
+    start_service
+    create_desktop_files
+    install_completions
+    
+    # Offer polkit policy
+    install_polkit_policy
+    
+    # Verify
+    verify_installation
+    show_summary
+}
+
+do_update() {
+    echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}${BLUE}                    Shroud Update                           ${NC}"
+    echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════════${NC}"
+    echo
+    
+    preflight_checks
+    build_binary
+    stop_existing
+    install_binary
+    install_systemd_service
+    start_service
+    install_completions
+    verify_installation
+    
+    echo
+    success "Update complete!"
+}
+
+do_check() {
+    echo -e "${BOLD}Checking Shroud dependencies...${NC}"
+    echo
+    
+    detect_distro
+    echo "Distribution: $DISTRO"
+    echo
+    
+    if check_all_dependencies; then
+        echo
+        success "All dependencies are satisfied"
+        exit 0
+    else
+        echo
+        error "Some dependencies are missing"
+        exit 1
+    fi
+}
+
+do_repair() {
+    echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════════${NC}"
+    echo -e "${BOLD}${BLUE}                    Shroud Repair                           ${NC}"
+    echo -e "${BOLD}${BLUE}═══════════════════════════════════════════════════════════${NC}"
+    echo
+    
+    if [ ! -f "target/release/$BINARY_NAME" ]; then
+        die "No built binary found. Run './setup.sh install' instead."
+    fi
+    
+    stop_existing
+    install_binary
+    create_directories
+    install_systemd_service
+    enable_service
+    start_service
+    create_desktop_files
+    install_completions
+    verify_installation
+    
+    echo
+    success "Repair complete!"
+}
+
+show_status() {
+    echo -e "${BLUE}╔═══════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║         Shroud Installation Status        ║${NC}"
+    echo -e "${BLUE}╚═══════════════════════════════════════════╝${NC}"
+    echo
+    
+    # Binary
+    if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
+        local version
+        version=$("$INSTALL_DIR/$BINARY_NAME" --version 2>/dev/null || echo "unknown")
+        echo -e "${GREEN}✓${NC} Binary: $INSTALL_DIR/$BINARY_NAME ($version)"
+    else
+        echo -e "${RED}✗${NC} Binary: not installed"
+    fi
+    
+    # Service
+    if systemctl --user is-enabled "$SERVICE_NAME" &>/dev/null; then
+        if systemctl --user is-active "$SERVICE_NAME" &>/dev/null; then
+            echo -e "${GREEN}✓${NC} Service: enabled and running"
+        else
+            echo -e "${YELLOW}○${NC} Service: enabled but not running"
+        fi
+    else
+        echo -e "${RED}✗${NC} Service: not enabled"
+    fi
+    
+    # Socket
+    local socket_path="${XDG_RUNTIME_DIR:-/tmp}/shroud.sock"
+    if [ -S "$socket_path" ]; then
+        echo -e "${GREEN}✓${NC} Socket: $socket_path (active)"
+    else
+        echo -e "${YELLOW}○${NC} Socket: not found"
+    fi
+    
+    # Config
+    local config_file="$CONFIG_DIR/config.toml"
+    if [ -f "$config_file" ]; then
+        echo -e "${GREEN}✓${NC} Config: $config_file"
+    else
+        echo -e "${YELLOW}○${NC} Config: not found"
+    fi
+    
+    # nftables rules
+    if sudo nft list table inet shroud_killswitch &>/dev/null 2>&1; then
+        echo -e "${YELLOW}○${NC} Kill switch: rules active"
+    else
+        echo -e "${DIM}○${NC} Kill switch: not active"
+    fi
+    
+    # Dependencies
+    echo
+    echo -e "${BOLD}Dependencies:${NC}"
+    check_dependency "networkmanager" "nmcli"
+    check_dependency "openvpn" "openvpn"
+    check_dependency "nftables" "nft"
+    check_dependency "polkit" "pkexec"
+    
+    # Desktop environment
+    echo
+    echo -e "${BOLD}Environment:${NC}"
+    echo "  Desktop: ${XDG_CURRENT_DESKTOP:-unknown}"
+    echo "  Session: ${XDG_SESSION_TYPE:-unknown}"
+    
+    # VPN connections
+    echo
+    echo -e "${BOLD}Available VPN connections:${NC}"
+    local vpns
+    vpns=$(nmcli -t -f NAME,TYPE connection show 2>/dev/null | grep ':vpn$' | cut -d: -f1)
+    if [ -n "$vpns" ]; then
+        echo "$vpns" | while read -r vpn; do
+            echo "  - $vpn"
+        done
+    else
+        echo "  (none found)"
+    fi
+}
+
+show_help() {
+    cat << 'EOF'
+Shroud Installation Script
+
+Usage: ./setup.sh [OPTIONS] [COMMAND]
+
+Commands:
+  install     Install Shroud (default)
+  update      Update existing installation (preserves config)
+  uninstall   Remove Shroud completely
+  check       Check dependencies without installing
+  repair      Reinstall without rebuilding
+  status      Show installation status
+
+Options:
+  -h, --help      Show this help message
+  -f, --force     Don't prompt for confirmation
+  -n, --dry-run   Show what would be done without doing it
+  -v, --verbose   Show detailed output
+  -q, --quiet     Minimal output (errors only)
+
+Examples:
+  ./setup.sh                    # Full installation
+  ./setup.sh status             # Check installation status
+  ./setup.sh update             # Update to latest build
+  ./setup.sh --dry-run install  # See what would be installed
+  ./setup.sh --force uninstall  # Uninstall without prompts
+
+For more information: https://github.com/loujr/shroud
+EOF
+}
+
+# ============================================================================
+# Argument Parsing
+# ============================================================================
+
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            -f|--force)
+                FORCE=true
+                shift
+                ;;
+            -n|--dry-run)
+                DRY_RUN=true
+                shift
+                ;;
+            -v|--verbose)
+                VERBOSE=true
+                shift
+                ;;
+            -q|--quiet)
+                QUIET=true
+                shift
+                ;;
+            install|update|uninstall|check|repair|status)
+                COMMAND="$1"
+                shift
+                ;;
+            *)
+                error "Unknown option: $1"
+                echo "Run './setup.sh --help' for usage"
+                exit 1
+                ;;
+        esac
+    done
+}
+
+# ============================================================================
+# Signal Handling
+# ============================================================================
+
+cleanup_on_exit() {
+    local exit_code=$?
+    if [ $exit_code -ne 0 ] && [ -n "$LOG_FILE" ]; then
+        echo
+        error "Installation failed!"
+        echo -e "${DIM}Check log file for details: $LOG_FILE${NC}"
+    fi
+}
+
+trap cleanup_on_exit EXIT
+
+# ============================================================================
+# Main Entry Point
+# ============================================================================
+
+main() {
+    parse_args "$@"
+    init_logging
+    
+    log "Command: $COMMAND"
+    log "Force: $FORCE, DryRun: $DRY_RUN, Verbose: $VERBOSE, Quiet: $QUIET"
+    
+    case "$COMMAND" in
+        install)
+            do_install
+            ;;
+        update)
+            do_update
+            ;;
+        uninstall)
+            do_uninstall
+            ;;
+        check)
+            do_check
+            ;;
+        repair)
+            do_repair
+            ;;
+        status)
+            show_status
+            ;;
+        *)
+            error "Unknown command: $COMMAND"
+            exit 1
+            ;;
+    esac
+    
+    log "Setup completed successfully"
 }
 
 main "$@"

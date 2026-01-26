@@ -602,6 +602,51 @@ table inet {table} {{
     }
 }
 
+
+/// Synchronously clean up any stale kill switch rules
+/// 
+/// This is a standalone function that can be called from:
+/// - Signal handlers (which are synchronous)
+/// - Startup cleanup (before async runtime is available)
+/// - Emergency cleanup
+///
+/// Uses blocking std::process::Command instead of tokio::process::Command
+pub fn cleanup_stale_rules() {
+    use std::process::{Command, Stdio};
+    
+    // Try to delete the kill switch table
+    let result = Command::new("pkexec")
+        .args(["nft", "delete", "table", "inet", NFT_TABLE])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    
+    match result {
+        Ok(status) if status.success() => {
+            info!("Cleaned up stale kill switch rules");
+        }
+        Ok(_) => {
+            // Table doesn't exist, or permission denied - that's fine
+        }
+        Err(e) => {
+            warn!("Failed to clean up kill switch rules: {}", e);
+        }
+    }
+}
+
+/// Check if kill switch rules exist (synchronous, for startup check)
+pub fn rules_exist() -> bool {
+    use std::process::{Command, Stdio};
+    
+    let result = Command::new("nft")
+        .args(["list", "table", "inet", NFT_TABLE])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    
+    matches!(result, Ok(status) if status.success())
+}
+
 impl Default for KillSwitch {
     fn default() -> Self {
         Self::new()
