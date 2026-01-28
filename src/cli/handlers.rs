@@ -408,17 +408,13 @@ async fn handle_cleanup_command(args: &Args) -> i32 {
         let lock = runtime.join("shroud.lock");
 
         if !is_daemon_running().await {
-            if socket.exists() {
-                if std::fs::remove_file(&socket).is_ok() {
-                    println!("✓ Removed stale socket: {}", socket.display());
-                    cleaned = true;
-                }
+            if socket.exists() && std::fs::remove_file(&socket).is_ok() {
+                println!("✓ Removed stale socket: {}", socket.display());
+                cleaned = true;
             }
-            if lock.exists() {
-                if std::fs::remove_file(&lock).is_ok() {
-                    println!("✓ Removed stale lock: {}", lock.display());
-                    cleaned = true;
-                }
+            if lock.exists() && std::fs::remove_file(&lock).is_ok() {
+                println!("✓ Removed stale lock: {}", lock.display());
+                cleaned = true;
             }
         }
     }
@@ -435,7 +431,7 @@ async fn handle_cleanup_command(args: &Args) -> i32 {
 }
 
 async fn is_daemon_running() -> bool {
-    matches!(send_command(IpcCommand::Ping).await, Ok(_))
+    send_command(IpcCommand::Ping).await.is_ok()
 }
 
 async fn handle_update_command(skip_confirm: bool, debug_mode: bool) -> i32 {

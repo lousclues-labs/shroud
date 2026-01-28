@@ -172,7 +172,7 @@ X-KDE-autostart-after=panel
 
 /// Check if a file is executable
 #[cfg(unix)]
-fn is_executable(path: &PathBuf) -> bool {
+fn is_executable(path: &std::path::Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     path.metadata()
         .map(|m| m.permissions().mode() & 0o111 != 0)
@@ -180,7 +180,7 @@ fn is_executable(path: &PathBuf) -> bool {
 }
 
 #[cfg(not(unix))]
-fn is_executable(path: &PathBuf) -> bool {
+fn is_executable(path: &std::path::Path) -> bool {
     path.exists()
 }
 
