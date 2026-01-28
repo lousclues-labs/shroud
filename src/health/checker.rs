@@ -168,23 +168,7 @@ impl HealthChecker {
         }
     }
 
-    /// Quick connectivity check using ping
-    ///
-    /// This is a lightweight check that can be used more frequently.
-    #[allow(dead_code)]
-    pub async fn quick_check(&self) -> bool {
-        let result = timeout(
-            Duration::from_secs(5),
-            Command::new("ping")
-                .args(["-c", "1", "-W", "3", "1.1.1.1"])
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status(),
-        )
-        .await;
 
-        matches!(result, Ok(Ok(status)) if status.success())
-    }
 }
 
 impl Default for HealthChecker {
@@ -212,5 +196,19 @@ mod tests {
         checker.consecutive_failures = 5;
         checker.reset();
         assert_eq!(checker.consecutive_failures, 0);
+    }
+
+    #[test]
+    fn test_health_config_custom() {
+        let config = HealthConfig {
+            endpoints: vec!["https://example.com".to_string()],
+            timeout_secs: 5,
+            degraded_threshold_ms: 1000,
+            failure_threshold: 5,
+        };
+        let checker = HealthChecker::with_config(config.clone());
+        assert_eq!(checker.config.timeout_secs, 5);
+        assert_eq!(checker.config.endpoints.len(), 1);
+        assert_eq!(checker.config.failure_threshold, 5);
     }
 }

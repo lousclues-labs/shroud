@@ -22,6 +22,7 @@ pub enum NmEvent {
     /// A VPN connection failed to activate
     VpnFailed { name: String, reason: String },
     /// NetworkManager connectivity changed
+    #[allow(dead_code)]
     ConnectivityChanged { connected: bool },
 }
 

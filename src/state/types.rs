@@ -49,6 +49,7 @@ impl VpnState {
     }
 
     /// Check if this state represents an active or pending connection
+    #[allow(dead_code)]
     pub fn is_active(&self) -> bool {
         matches!(
             self,

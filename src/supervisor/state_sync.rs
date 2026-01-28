@@ -38,40 +38,7 @@ impl super::VpnSupervisor {
         reason
     }
 
-    /// Update kill switch based on current VPN state (call after state transitions)
-    #[allow(dead_code)]
-    pub(crate) async fn update_kill_switch_for_state(&mut self) {
-        use log::info;
 
-        // Only act if kill switch is enabled in config
-        if !self.app_config.kill_switch_enabled {
-            return;
-        }
-
-        match &self.machine.state {
-            VpnState::Connected { .. } | VpnState::Degraded { .. } => {
-                // Enable/update kill switch when connected
-                if !self.kill_switch.is_enabled() {
-                    info!("VPN connected - enabling kill switch");
-                    if let Err(e) = self.kill_switch.enable().await {
-                        warn!("Failed to enable kill switch: {}", e);
-                    }
-                } else if let Err(e) = self.kill_switch.update().await {
-                    warn!("Failed to update kill switch: {}", e);
-                }
-            }
-            VpnState::Disconnected => {
-                // Keep kill switch enabled when disconnected (blocks all traffic)
-                // This is the core kill switch behavior - prevent leaks when VPN drops
-                if self.kill_switch.is_enabled() {
-                    debug!("Kill switch active: blocking non-VPN traffic until VPN reconnects");
-                }
-            }
-            _ => {
-                // Connecting/Reconnecting/Failed - keep current rules
-            }
-        }
-    }
 
     /// Sync the shared state with current machine state (for async contexts)
     pub(crate) async fn sync_shared_state(&self) {
