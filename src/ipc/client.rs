@@ -94,10 +94,7 @@ pub async fn send_command_on_stream(
         .write_all(command_json.as_bytes())
         .await
         .map_err(ClientError::Send)?;
-    writer
-        .write_all(b"\n")
-        .await
-        .map_err(ClientError::Send)?;
+    writer.write_all(b"\n").await.map_err(ClientError::Send)?;
     writer.flush().await.map_err(ClientError::Send)?;
 
     // Read response
