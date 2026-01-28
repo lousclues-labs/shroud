@@ -5,11 +5,11 @@
 
 use log::{error, info};
 
+use super::args::{Args, DebugAction, ParsedCommand, ToggleAction};
+use super::help;
 use crate::ipc::client::{send_command, ClientError};
 use crate::ipc::protocol::{IpcCommand, IpcResponse};
 use crate::logging;
-use super::args::{Args, ParsedCommand, ToggleAction, DebugAction};
-use super::help;
 
 /// Run the CLI in client mode.
 ///
@@ -94,21 +94,21 @@ fn args_to_command(cmd: &ParsedCommand) -> Option<IpcCommand> {
         ParsedCommand::Switch { name } => Some(IpcCommand::Switch { name: name.clone() }),
         ParsedCommand::Status => Some(IpcCommand::Status),
         ParsedCommand::List => Some(IpcCommand::List),
-        
+
         ParsedCommand::KillSwitch { action } => match action {
             ToggleAction::On => Some(IpcCommand::KillSwitch { enable: true }),
             ToggleAction::Off => Some(IpcCommand::KillSwitch { enable: false }),
             ToggleAction::Toggle => Some(IpcCommand::KillSwitchToggle),
             ToggleAction::Status => Some(IpcCommand::KillSwitchStatus),
         },
-        
+
         ParsedCommand::AutoReconnect { action } => match action {
             ToggleAction::On => Some(IpcCommand::AutoReconnect { enable: true }),
             ToggleAction::Off => Some(IpcCommand::AutoReconnect { enable: false }),
             ToggleAction::Toggle => Some(IpcCommand::AutoReconnectToggle),
             ToggleAction::Status => Some(IpcCommand::AutoReconnectStatus),
         },
-        
+
         ParsedCommand::Debug { action } => match action {
             DebugAction::On => Some(IpcCommand::Debug { enable: true }),
             DebugAction::Off => Some(IpcCommand::Debug { enable: false }),
@@ -121,7 +121,7 @@ fn args_to_command(cmd: &ParsedCommand) -> Option<IpcCommand> {
         ParsedCommand::Refresh => Some(IpcCommand::Refresh),
         ParsedCommand::Quit => Some(IpcCommand::Quit),
         ParsedCommand::Restart => Some(IpcCommand::Restart),
-        
+
         ParsedCommand::Help { .. } => None, // Handled locally
     }
 }
@@ -155,14 +155,29 @@ fn handle_response(response: IpcResponse, args: &Args) -> i32 {
             eprintln!("Error: {}", message);
             1
         }
-        IpcResponse::Status { connected, vpn_name, state, kill_switch_enabled } => {
+        IpcResponse::Status {
+            connected,
+            vpn_name,
+            state,
+            kill_switch_enabled,
+        } => {
             println!("Status: {}", state);
             if connected {
-                println!("Connected to: {}", vpn_name.unwrap_or_else(|| "unknown".to_string()));
+                println!(
+                    "Connected to: {}",
+                    vpn_name.unwrap_or_else(|| "unknown".to_string())
+                );
             } else {
                 println!("Not connected");
             }
-            println!("Kill switch: {}", if kill_switch_enabled { "enabled" } else { "disabled" });
+            println!(
+                "Kill switch: {}",
+                if kill_switch_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            );
             0
         }
         IpcResponse::Connections { names } => {
@@ -176,10 +191,10 @@ fn handle_response(response: IpcResponse, args: &Args) -> i32 {
             // Generic fallback
             if let Some(obj) = v.as_object() {
                 if let Some(msg) = obj.get("message") {
-                     if let Some(s) = msg.as_str() {
-                         println!("{}", s);
-                         return 0;
-                     }
+                    if let Some(s) = msg.as_str() {
+                        println!("{}", s);
+                        return 0;
+                    }
                 }
             }
             // Fallback print

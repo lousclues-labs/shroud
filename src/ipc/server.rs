@@ -7,7 +7,6 @@
 //! The server runs in a dedicated tokio task and forwards received commands
 //! to the supervisor via a channel. Responses are sent back through the socket.
 
-use std::path::Path;
 use log::{debug, error, info, warn};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
@@ -37,7 +36,7 @@ impl IpcServer {
     /// This method runs indefinitely until an error occurs.
     pub async fn run(self) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let path = socket_path();
-        
+
         // Remove stale socket file if it exists
         if path.exists() {
             std::fs::remove_file(&path)?;
@@ -49,7 +48,7 @@ impl IpcServer {
         }
 
         let listener = UnixListener::bind(&path)?;
-        
+
         // Set secure permissions (600)
         #[cfg(unix)]
         {
@@ -100,7 +99,7 @@ impl IpcServer {
                 Ok(cmd) => {
                     // Create a one-shot channel for the response
                     let (resp_tx, mut resp_rx) = mpsc::channel(1);
-                    
+
                     // Send command to supervisor
                     if command_tx.send((cmd, resp_tx)).await.is_err() {
                         IpcResponse::Error {
@@ -109,14 +108,19 @@ impl IpcServer {
                     } else {
                         // Wait for response from supervisor
                         // We use a timeout to prevent hanging forever if supervisor is busy/deadlocked
-                        match tokio::time::timeout(std::time::Duration::from_secs(5), resp_rx.recv()).await {
+                        match tokio::time::timeout(
+                            std::time::Duration::from_secs(5),
+                            resp_rx.recv(),
+                        )
+                        .await
+                        {
                             Ok(Some(resp)) => resp,
                             Ok(None) => IpcResponse::Error {
                                 message: "Supervisor dropped the response channel".to_string(),
                             },
                             Err(_) => IpcResponse::Error {
                                 message: "Timeout waiting for supervisor response".to_string(),
-                            }
+                            },
                         }
                     }
                 }

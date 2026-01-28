@@ -86,10 +86,6 @@ impl super::VpnSupervisor {
                         VpnCommand::Restart => {
                             self.handle_restart().await;
                         }
-                        VpnCommand::Quit => {
-                            self.handle_quit().await;
-                            return; // Exit the loop
-                        }
                     }
                 }
 

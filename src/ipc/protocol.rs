@@ -24,6 +24,7 @@ pub fn socket_path() -> PathBuf {
 }
 
 /// Legacy constant for compatibility - prefer socket_path() function
+#[allow(dead_code)]
 pub const SOCKET_PATH: &str = "/tmp/shroud.sock";
 
 /// Commands sent from CLI client to daemon.
@@ -114,7 +115,7 @@ pub enum IpcResponse {
         /// Names of available VPN connections
         names: Vec<String>,
     },
-    
+
     // Generic value response for things I haven't strictly typed yet
     // or for simple json returns
     Value(serde_json::Value),
@@ -122,6 +123,7 @@ pub enum IpcResponse {
 
 impl IpcCommand {
     /// Returns a human-readable description of the command.
+    #[allow(dead_code)]
     pub fn description(&self) -> &'static str {
         match self {
             IpcCommand::Connect { .. } => "connect to VPN",
@@ -153,13 +155,11 @@ impl IpcCommand {
 impl IpcResponse {
     /// Returns true if this is a success response.
     pub fn is_ok(&self) -> bool {
-        match self {
-            IpcResponse::Error { .. } => false,
-            _ => true,
-        }
+        !matches!(self, IpcResponse::Error { .. })
     }
 
     /// Returns the error message if this is an error response.
+    #[allow(dead_code)]
     pub fn error_message(&self) -> Option<&str> {
         match self {
             IpcResponse::Error { message } => Some(message),
@@ -174,7 +174,9 @@ mod tests {
 
     #[test]
     fn test_command_serialize_connect() {
-        let cmd = IpcCommand::Connect { name: "my-vpn".to_string() };
+        let cmd = IpcCommand::Connect {
+            name: "my-vpn".to_string(),
+        };
         let json = serde_json::to_string(&cmd).unwrap();
         assert!(json.contains("Connect"));
         assert!(json.contains("my-vpn"));
@@ -196,7 +198,9 @@ mod tests {
 
     #[test]
     fn test_response_serialize_error() {
-        let resp = IpcResponse::Error { message: "something failed".to_string() };
+        let resp = IpcResponse::Error {
+            message: "something failed".to_string(),
+        };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("Error"));
         assert!(json.contains("something failed"));

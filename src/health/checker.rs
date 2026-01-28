@@ -167,8 +167,6 @@ impl HealthChecker {
             Err(_) => Err("timeout".to_string()),
         }
     }
-
-
 }
 
 impl Default for HealthChecker {

@@ -9,7 +9,7 @@
 fn test_cli_help() {
     // Test --help works
     let status = std::process::Command::new("cargo")
-        .args(&["run", "--", "--help"])
+        .args(["run", "--", "--help"])
         .status()
         .expect("failed to execute process");
 
@@ -21,7 +21,7 @@ fn test_cli_help() {
 fn test_cli_version() {
     // Test --version works
     let status = std::process::Command::new("cargo")
-        .args(&["run", "--", "--version"])
+        .args(["run", "--", "--version"])
         .status()
         .expect("failed to execute process");
 

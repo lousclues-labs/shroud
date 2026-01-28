@@ -38,8 +38,6 @@ impl super::VpnSupervisor {
         reason
     }
 
-
-
     /// Sync the shared state with current machine state (for async contexts)
     pub(crate) async fn sync_shared_state(&self) {
         let mut state = self.shared_state.write().await;

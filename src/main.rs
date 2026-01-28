@@ -43,7 +43,6 @@ mod tray;
 
 use log::{error, info, warn};
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::sync::{mpsc, RwLock};
 
 use crate::config::ConfigManager;
@@ -92,7 +91,7 @@ async fn run_daemon_mode(args: cli::Args) {
         // Clean up CLI socket
         let socket_path = ipc::protocol::socket_path();
         if socket_path.exists() {
-             let _ = std::fs::remove_file(&socket_path);
+            let _ = std::fs::remove_file(&socket_path);
         }
         std::process::exit(0);
     })
@@ -101,7 +100,7 @@ async fn run_daemon_mode(args: cli::Args) {
     info!("Starting Shroud VPN Manager");
 
     let shared_state = Arc::new(RwLock::new(SharedState::default()));
-    
+
     // Channels
     let (tx, rx) = mpsc::channel(16); // Tray commands
     let (dbus_tx, dbus_rx) = mpsc::channel(32); // NM events
@@ -130,11 +129,11 @@ async fn run_daemon_mode(args: cli::Args) {
     });
 
     let supervisor = VpnSupervisor::new(
-        shared_state.clone(), 
-        rx, 
-        ipc_rx, 
-        dbus_rx, 
-        tray_handle.clone()
+        shared_state.clone(),
+        rx,
+        ipc_rx,
+        dbus_rx,
+        tray_handle.clone(),
     );
     tokio::spawn(supervisor.run());
 

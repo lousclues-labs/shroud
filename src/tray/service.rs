@@ -28,8 +28,6 @@ pub enum VpnCommand {
     RefreshConnections,
     /// Restart the application
     Restart,
-    /// Quit the application gracefully
-    Quit,
 }
 
 /// Shared state between the tray and the VPN supervisor

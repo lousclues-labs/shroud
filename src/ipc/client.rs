@@ -12,8 +12,8 @@
 //! println!("Status: {:?}", response);
 //! ```
 
-use std::io;
 use log::debug;
+use std::io;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::UnixStream;
 
@@ -53,20 +53,18 @@ impl std::error::Error for ClientError {}
 /// Returns a connected Unix stream, or an error if the daemon is not running.
 pub async fn connect_to_daemon() -> Result<UnixStream, ClientError> {
     let path = socket_path();
-    
+
     if !path.exists() {
         return Err(ClientError::DaemonNotRunning);
     }
 
-    UnixStream::connect(&path)
-        .await
-        .map_err(|e| {
-            if e.kind() == io::ErrorKind::ConnectionRefused {
-                ClientError::DaemonNotRunning
-            } else {
-                ClientError::ConnectionFailed(e)
-            }
-        })
+    UnixStream::connect(&path).await.map_err(|e| {
+        if e.kind() == io::ErrorKind::ConnectionRefused {
+            ClientError::DaemonNotRunning
+        } else {
+            ClientError::ConnectionFailed(e)
+        }
+    })
 }
 
 /// Send a command to the daemon and receive the response.
@@ -94,11 +92,10 @@ pub async fn send_command_on_stream(
     let mut reader = BufReader::new(reader);
 
     // Serialize and send command
-    let command_json = serde_json::to_string(&command)
-        .map_err(ClientError::ParseError)?;
-    
+    let command_json = serde_json::to_string(&command).map_err(ClientError::ParseError)?;
+
     debug!("Sending command: {}", command_json);
-    
+
     writer
         .write_all(command_json.as_bytes())
         .await
@@ -107,10 +104,7 @@ pub async fn send_command_on_stream(
         .write_all(b"\n")
         .await
         .map_err(ClientError::SendFailed)?;
-    writer
-        .flush()
-        .await
-        .map_err(ClientError::SendFailed)?;
+    writer.flush().await.map_err(ClientError::SendFailed)?;
 
     // Read response
     let mut response_line = String::new();
@@ -122,17 +116,20 @@ pub async fn send_command_on_stream(
     debug!("Received response: {}", response_line.trim());
 
     if response_line.trim().is_empty() {
-        return Err(ClientError::ReceiveFailed(io::Error::new(io::ErrorKind::UnexpectedEof, "Empty response from daemon")));
+        return Err(ClientError::ReceiveFailed(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "Empty response from daemon",
+        )));
     }
 
     // Parse response
-    serde_json::from_str(response_line.trim())
-        .map_err(ClientError::ParseError)
+    serde_json::from_str(response_line.trim()).map_err(ClientError::ParseError)
 }
 
 /// Check if the daemon is running.
 ///
 /// Returns `true` if the daemon socket exists and is connectable.
+#[allow(dead_code)]
 pub async fn is_daemon_running() -> bool {
     connect_to_daemon().await.is_ok()
 }

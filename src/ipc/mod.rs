@@ -18,10 +18,9 @@
 //! - [`server`]: Unix socket server for the daemon
 //! - [`client`]: Connection logic for CLI clients
 
+pub mod client;
 pub mod protocol;
 pub mod server;
-pub mod client;
 
-pub use protocol::{IpcCommand, IpcResponse, SOCKET_PATH};
+pub use protocol::{IpcCommand, IpcResponse};
 pub use server::IpcServer;
-pub use client::{send_command, connect_to_daemon};
