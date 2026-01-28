@@ -28,6 +28,35 @@
 use log::{debug, info, warn};
 use std::net::IpAddr;
 use std::process::Stdio;
+use thiserror::Error;
+
+/// Errors that can occur during kill switch operations.
+#[derive(Error, Debug)]
+pub enum KillSwitchError {
+    /// nftables is not installed or not in PATH
+    #[error("nftables (nft) is not available. Install with: sudo apt install nftables")]
+    NftablesNotFound,
+
+    /// Permission denied - need elevated privileges
+    #[error("Permission denied. Kill switch requires root privileges via pkexec.")]
+    PermissionDenied,
+
+    /// Failed to spawn nft/pkexec process
+    #[error("Failed to spawn nft process: {0}")]
+    SpawnFailed(#[source] std::io::Error),
+
+    /// nft command returned error
+    #[error("nft command failed: {0}")]
+    CommandFailed(String),
+
+    /// Failed to write to nft stdin
+    #[error("Failed to write rules to nft: {0}")]
+    WriteFailed(#[source] std::io::Error),
+
+    /// Failed waiting for nft process
+    #[error("Failed waiting for nft process: {0}")]
+    WaitFailed(#[source] std::io::Error),
+}
 use tokio::process::Command;
 
 use crate::config::{DnsMode, Ipv6Mode};
@@ -343,7 +372,7 @@ impl KillSwitch {
     /// 3. Allow traffic to VPN server IPs (to establish connection)
     /// 4. Allow traffic through VPN tunnel interface
     /// 5. Drop everything else
-    pub async fn enable(&mut self) -> Result<(), String> {
+    pub async fn enable(&mut self) -> Result<(), KillSwitchError> {
         if self.enabled {
             debug!("Kill switch already enabled");
             return Ok(());
@@ -372,7 +401,7 @@ impl KillSwitch {
     }
 
     /// Disable the kill switch
-    pub async fn disable(&mut self) -> Result<(), String> {
+    pub async fn disable(&mut self) -> Result<(), KillSwitchError> {
         if !self.enabled {
             debug!("Kill switch already disabled");
             return Ok(());
@@ -386,7 +415,7 @@ impl KillSwitch {
     }
 
     /// Update the kill switch rules (e.g., when VPN interface changes)
-    pub async fn update(&mut self) -> Result<(), String> {
+    pub async fn update(&mut self) -> Result<(), KillSwitchError> {
         if !self.enabled {
             return Ok(());
         }
@@ -398,7 +427,7 @@ impl KillSwitch {
     }
 
     /// Create the nftables table and rules with allowed VPN server IPs
-    async fn create_table_with_servers(&self, vpn_server_ips: &[IpAddr]) -> Result<(), String> {
+    async fn create_table_with_servers(&self, vpn_server_ips: &[IpAddr]) -> Result<(), KillSwitchError> {
         // Use wildcard for tun interfaces - nftables uses * for wildcard
         let vpn_iface = self.vpn_interface.as_deref().unwrap_or("tun*");
 
@@ -416,7 +445,7 @@ impl KillSwitch {
     }
 
     /// Remove the kill switch table
-    async fn cleanup_table(&self) -> Result<(), String> {
+    async fn cleanup_table(&self) -> Result<(), KillSwitchError> {
         // Delete the table if it exists (this removes all chains and rules)
         let result = self
             .run_nft(&["delete", "table", "inet", NFT_TABLE], None)
@@ -425,13 +454,13 @@ impl KillSwitch {
         // Ignore "No such file or directory" errors (table doesn't exist)
         match result {
             Ok(_) => Ok(()),
-            Err(e) if e.contains("No such file") || e.contains("does not exist") => Ok(()),
+            Err(KillSwitchError::CommandFailed(msg)) if msg.contains("No such file") || msg.contains("does not exist") => Ok(()),
             Err(e) => Err(e),
         }
     }
 
     /// Run an nft command (via pkexec for GUI privilege escalation)
-    async fn run_nft(&self, args: &[&str], stdin_data: Option<&str>) -> Result<(), String> {
+    async fn run_nft(&self, args: &[&str], stdin_data: Option<&str>) -> Result<(), KillSwitchError> {
         // Use pkexec for GUI password prompt instead of sudo (which blocks on TTY)
         let mut cmd = Command::new("pkexec");
         cmd.arg("nft");
@@ -443,9 +472,7 @@ impl KillSwitch {
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("Failed to spawn pkexec nft: {}", e))?;
+        let mut child = cmd.spawn().map_err(KillSwitchError::SpawnFailed)?;
 
         if let Some(data) = stdin_data {
             use tokio::io::AsyncWriteExt;
@@ -453,20 +480,33 @@ impl KillSwitch {
                 stdin
                     .write_all(data.as_bytes())
                     .await
-                    .map_err(|e| format!("Failed to write to nft stdin: {}", e))?;
+                    .map_err(KillSwitchError::WriteFailed)?;
             }
         }
 
         let output = child
             .wait_with_output()
             .await
-            .map_err(|e| format!("Failed to wait for nft: {}", e))?;
+            .map_err(KillSwitchError::WaitFailed)?;
 
         if output.status.success() {
             Ok(())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(format!("nft command failed: {}", stderr.trim()))
+            // Check for specific error messages map to specific errors if needed
+            if stderr.contains("not found") {
+                // heuristic for nft not found although we called pkexec nft
+                // actually pkexec would fail if nft not found?
+            }
+            if output.status.code() == Some(126) || output.status.code() == Some(127) {
+                 use std::process::Command as StdCommand;
+                 // Check if nft exists in path
+                 if StdCommand::new("which").arg("nft").output().map(|o| !o.status.success()).unwrap_or(true) {
+                     return Err(KillSwitchError::NftablesNotFound);
+                 }
+                 return Err(KillSwitchError::PermissionDenied); // pkexec failed / cancelled
+            }
+            Err(KillSwitchError::CommandFailed(stderr.trim().to_string()))
         }
     }
 
