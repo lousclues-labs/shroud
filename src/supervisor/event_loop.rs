@@ -98,6 +98,11 @@ impl super::VpnSupervisor {
                     self.handle_dbus_event(event).await;
                 }
 
+                // Handle IPC commands
+                Some((cmd, response_tx)) = self.ipc_rx.recv() => {
+                    self.handle_ipc_command(cmd, response_tx).await;
+                }
+
                 // Poll NetworkManager state periodically (fallback/backup)
                 _ = nm_poll_interval.tick() => {
                     let elapsed = self.last_poll_time.elapsed();

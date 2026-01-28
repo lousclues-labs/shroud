@@ -29,6 +29,7 @@ use tokio::sync::{mpsc, RwLock};
 use crate::config::{Config, ConfigManager};
 use crate::dbus::NmEvent;
 use crate::health::HealthChecker;
+use crate::ipc::{IpcCommand, IpcResponse};
 use crate::killswitch::KillSwitch;
 use crate::state::{StateMachine, StateMachineConfig};
 use crate::tray::{SharedState, VpnCommand, VpnTray};
@@ -78,6 +79,8 @@ pub struct VpnSupervisor {
     pub(crate) shared_state: Arc<RwLock<SharedState>>,
     /// Channel receiver for commands from the tray
     pub(crate) rx: mpsc::Receiver<VpnCommand>,
+    /// Channel receiver for IPC commands from CLI
+    pub(crate) ipc_rx: mpsc::Receiver<(IpcCommand, mpsc::Sender<IpcResponse>)>,
     /// Channel receiver for D-Bus events from NetworkManager
     pub(crate) dbus_rx: mpsc::Receiver<NmEvent>,
     /// Tray handle for updating the icon
@@ -111,6 +114,7 @@ impl VpnSupervisor {
     pub fn new(
         shared_state: Arc<RwLock<SharedState>>,
         rx: mpsc::Receiver<VpnCommand>,
+        ipc_rx: mpsc::Receiver<(IpcCommand, mpsc::Sender<IpcResponse>)>,
         dbus_rx: mpsc::Receiver<NmEvent>,
         tray_handle: Arc<std::sync::Mutex<Option<ksni::blocking::Handle<VpnTray>>>>,
     ) -> Self {
@@ -137,6 +141,7 @@ impl VpnSupervisor {
             machine: StateMachine::with_config(sm_config),
             shared_state,
             rx,
+            ipc_rx,
             dbus_rx,
             tray_handle,
             last_disconnect_time: None,

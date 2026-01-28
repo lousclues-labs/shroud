@@ -4,13 +4,14 @@ use log::{debug, error, info, warn};
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
 
-use crate::cli;
+
 use crate::daemon::lock::release_instance_lock;
 use crate::dbus::NmEvent;
 use crate::health::HealthResult;
 use crate::logging;
 use crate::nm::{
-    connect as nm_connect, disconnect as nm_disconnect, get_active_vpn_with_state as nm_get_active_vpn_with_state,
+    connect as nm_connect, disconnect as nm_disconnect,
+    get_active_vpn_with_state as nm_get_active_vpn_with_state,
     get_all_active_vpns as nm_get_all_active_vpns, get_vpn_state as nm_get_vpn_state,
     kill_orphan_openvpn_processes, list_vpn_connections as nm_list_vpn_connections,
 };
@@ -744,7 +745,7 @@ impl super::VpnSupervisor {
         // Clean up resources BEFORE spawning new instance
         // This releases the lock so the new instance can acquire it
         release_instance_lock();
-        let socket_path = cli::server::get_socket_path();
+        let socket_path = crate::ipc::protocol::socket_path();
         let _ = std::fs::remove_file(&socket_path);
 
         // Small delay to ensure cleanup is complete
@@ -790,7 +791,7 @@ impl super::VpnSupervisor {
 
         // Clean up and exit the process
         release_instance_lock();
-        let socket_path = cli::server::get_socket_path();
+        let socket_path = crate::ipc::protocol::socket_path();
         let _ = std::fs::remove_file(&socket_path);
         std::process::exit(0);
     }
@@ -922,5 +923,166 @@ impl super::VpnSupervisor {
             state.connections = connections;
         }
         self.update_tray();
+    }
+
+    /// Handle IPC command
+    pub(crate) async fn handle_ipc_command(
+        &mut self,
+        cmd: crate::ipc::IpcCommand,
+        response_tx: tokio::sync::mpsc::Sender<crate::ipc::IpcResponse>,
+    ) {
+        use crate::ipc::{IpcCommand, IpcResponse};
+
+        let response = match cmd {
+            IpcCommand::Status => {
+                let state = self.shared_state.read().await;
+                IpcResponse::Status {
+                    connected: state.state.server_name().is_some(),
+                    vpn_name: state.state.server_name().map(|s| s.to_string()),
+                    state: state.state.name().to_string(),
+                    kill_switch_enabled: state.kill_switch,
+                }
+            }
+            IpcCommand::List => {
+                let state = self.shared_state.read().await;
+                IpcResponse::Connections {
+                    names: state.connections.clone(),
+                }
+            }
+            IpcCommand::Connect { name } => {
+                self.handle_connect(&name).await;
+                // Since connect is async and we don't wait for completion here (state machine does),
+                // we return OK. The client can poll status.
+                // Ideally we might want to wait, but the architecture seems fire-and-forget for commands
+                IpcResponse::Ok // or maybe return "Connecting to X"
+            }
+            IpcCommand::Disconnect => {
+                self.handle_disconnect().await;
+                IpcResponse::Ok
+            }
+            IpcCommand::Switch { name } => {
+                // Logic closer to handle_connect but ensuring switch logic
+                self.handle_connect(&name).await;
+                IpcResponse::Ok
+            }
+            IpcCommand::Reconnect => {
+                 // Check if we have a last server
+                 let can_reconnect = {
+                     let state = self.shared_state.read().await;
+                     state.state.server_name().is_some()
+                 };
+                 
+                 // If connected, we disconnect then connect (handle_connect does this if we pass same server?)
+                 // Reconnect usually means "reconnect to LAST active server if disconnected" or "restart current".
+                 // Current logic:
+                 if can_reconnect {
+                     // Get current server
+                     let server = self.shared_state.read().await.state.server_name().unwrap().to_string();
+                     self.handle_disconnect().await;
+                     sleep(Duration::from_secs(2)).await;
+                     self.handle_connect(&server).await;
+                     IpcResponse::Ok
+                 } else {
+                     // Check history?
+                     // app_config has last_server
+                     let last_server = self.app_config.last_server.clone();
+                     if let Some(server) = last_server {
+                         self.handle_connect(&server).await;
+                         IpcResponse::Ok
+                     } else {
+                        IpcResponse::Error { message: "No VPN to reconnect to".to_string() }
+                     }
+                 }
+            }
+            IpcCommand::KillSwitch { enable } => {
+                if enable {
+                    if let Err(e) = self.kill_switch.enable().await {
+                        IpcResponse::Error { message: e.to_string() }
+                    } else {
+                        self.sync_shared_state().await;
+                        IpcResponse::Ok
+                    }
+                } else {
+                    if let Err(e) = self.kill_switch.disable().await {
+                         IpcResponse::Error { message: e.to_string() }
+                    } else {
+                        self.sync_shared_state().await;
+                        IpcResponse::Ok
+                    }
+                }
+            }
+            IpcCommand::KillSwitchToggle => {
+                self.toggle_kill_switch().await;
+                // toggle_kill_switch updates state
+                let state = self.shared_state.read().await;
+                IpcResponse::Value(serde_json::json!({
+                    "message": format!("Kill switch {}", if state.kill_switch { "enabled" } else { "disabled" })
+                }))
+            }
+            IpcCommand::KillSwitchStatus => {
+                 let state = self.shared_state.read().await;
+                 IpcResponse::Value(serde_json::json!({
+                     "enabled": state.kill_switch
+                 }))
+            }
+            IpcCommand::AutoReconnect { enable } => {
+                self.app_config.auto_reconnect = enable;
+                self.config_manager.save(&self.app_config.clone());
+                self.sync_shared_state().await;
+                IpcResponse::Ok
+            }
+            IpcCommand::AutoReconnectToggle => {
+                self.toggle_auto_reconnect().await;
+                 let state = self.shared_state.read().await;
+                IpcResponse::Value(serde_json::json!({
+                    "message": format!("Auto-reconnect {}", if state.auto_reconnect { "enabled" } else { "disabled" })
+                }))
+            }
+            IpcCommand::AutoReconnectStatus => {
+                 let state = self.shared_state.read().await;
+                 IpcResponse::Value(serde_json::json!({
+                     "enabled": state.auto_reconnect
+                 }))
+            }
+            IpcCommand::Debug { enable } => {
+                let success = if enable {
+                    match crate::logging::enable_debug_logging() {
+                        Ok(_) => true,
+                        Err(e) => return { let _ = response_tx.send(IpcResponse::Error { message: e }).await; },
+                    }
+                } else {
+                    crate::logging::disable_debug_logging();
+                    true
+                };
+                
+                if success {
+                     let mut state = self.shared_state.write().await;
+                     state.debug_logging = enable;
+                     drop(state);
+                     self.update_tray();
+                }
+                self.sync_shared_state().await;
+                IpcResponse::Ok
+            }
+            IpcCommand::Ping => IpcResponse::Ok,
+            IpcCommand::Refresh => {
+                self.refresh_connections().await;
+                IpcResponse::Ok
+            },
+            IpcCommand::Quit => {
+                // handle_quit exits process, so we won't return...
+                // But we should try to send response first?
+                let _ = response_tx.send(IpcResponse::Ok).await;
+                self.handle_quit().await;
+                return; 
+            },
+            IpcCommand::Restart => {
+                self.handle_restart().await;
+                IpcResponse::Ok
+            }
+            _ => IpcResponse::Error { message: "Command not implemented".to_string() }
+        };
+
+        let _ = response_tx.send(response).await;
     }
 }
