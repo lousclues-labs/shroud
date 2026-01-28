@@ -60,6 +60,7 @@ serde_json = "1"
 
 # Low-level system calls (flock for instance lock)
 libc = "0.2"
+thiserror = "1"
 
 [profile.release]
 lto = "thin"
@@ -70,4 +71,3 @@ panic = "abort"
 
 [dev-dependencies]
 tempfile = "3"
-thiserror = "1"
