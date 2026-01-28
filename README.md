@@ -71,7 +71,7 @@ cd shroud
 ./setup.sh
 ```
 
-That's it! The setup script handles everything: dependencies, building, installation, systemd service, shell completions, and more.
+That's it! The setup script handles everything: dependencies, building, installation, desktop entries, shell completions, and more.
 
 ---
 
@@ -103,8 +103,8 @@ cd shroud
 3. **Build** — Compiles release binary with cargo
 4. **Install** — Places binary in `~/.local/bin/` with backup/rollback
 5. **Configure** — Creates `~/.config/shroud/config.toml` with defaults
-6. **Service** — Installs and enables systemd user service
-7. **Desktop** — Creates application menu entry and autostart
+6. **Desktop** — Creates application menu entry
+7. **Autostart** — Use `shroud autostart on` to enable start on login
 8. **Completions** — Installs shell completions for bash, zsh, fish
 9. **Polkit** — Optionally configures passwordless kill switch (with security warning)
 10. **Verify** — Tests the installation and shows summary
@@ -151,15 +151,6 @@ chmod +x ~/.local/bin/shroud
 shroud --version
 ```
 
-#### Systemd Service (Optional)
-
-```bash
-mkdir -p ~/.config/systemd/user
-cp systemd/shroud.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now shroud.service
-```
-
 ---
 
 ## Importing VPN Configs
@@ -199,8 +190,8 @@ shroud --log-level debug
 # With file logging
 shroud --log-file /tmp/shroud.log
 
-# Via systemd (recommended)
-systemctl --user start shroud
+# Start on login (recommended)
+shroud autostart on
 ```
 
 ### CLI Commands
@@ -234,6 +225,7 @@ shroud autostart on             # Enable autostart on login
 shroud autostart off            # Disable autostart
 shroud autostart status         # Show autostart status
 shroud autostart toggle         # Toggle autostart
+shroud cleanup                  # Remove old systemd service and stale files
 
 # Debug and diagnostics
 shroud debug on                 # Enable debug logging to file
@@ -422,7 +414,6 @@ shroud debug tail
 
 This removes:
 - Binary from `~/.local/bin/`
-- Systemd service
 - Desktop entries and autostart
 - Shell completions
 - Polkit policy (if installed)

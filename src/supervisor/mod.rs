@@ -107,6 +107,8 @@ pub struct VpnSupervisor {
     pub(crate) switch_completed_time: Option<Instant>,
     /// Flag to cancel ongoing reconnection attempts
     pub(crate) reconnect_cancelled: bool,
+    /// Whether this is the first run (config file did not exist)
+    pub(crate) is_first_run: bool,
     /// Flag to indicate daemon should exit after responding
     pub(crate) should_exit: bool,
     /// Reason for exit (restart/shutdown)
@@ -126,6 +128,7 @@ impl VpnSupervisor {
 
         // Load persistent configuration
         let config_manager = ConfigManager::new();
+        let is_first_run = !config_manager.config_path().exists();
         let app_config = config_manager.load();
         info!(
             "Loaded config: auto_reconnect={}, last_server={:?}",
@@ -165,6 +168,7 @@ impl VpnSupervisor {
             switching_from: None,
             switch_completed_time: None,
             reconnect_cancelled: false,
+            is_first_run,
             should_exit: false,
             exit_reason: None,
         }

@@ -29,7 +29,10 @@ pub async fn run_client_mode(args: &Args) -> i32 {
     // Handle local commands that don't need the daemon
     match command {
         ParsedCommand::Autostart { action } => {
-            return handle_autostart_command(*action);
+            return handle_autostart_command(*action, args);
+        }
+        ParsedCommand::Cleanup => {
+            return handle_cleanup_command(args).await;
         }
         ParsedCommand::Update { yes, debug } => {
             return handle_update_command(*yes, *debug).await;
@@ -155,6 +158,7 @@ fn args_to_command(cmd: &ParsedCommand) -> Option<IpcCommand> {
         },
 
         ParsedCommand::Autostart { .. } => None,
+        ParsedCommand::Cleanup => None,
 
         ParsedCommand::Debug { action } => match action {
             DebugAction::On => Some(IpcCommand::Debug { enable: true }),
@@ -272,24 +276,37 @@ fn handle_response(response: IpcResponse, args: &Args) -> i32 {
     }
 }
 
-fn handle_autostart_command(action: ToggleAction) -> i32 {
+fn handle_autostart_command(action: ToggleAction, args: &Args) -> i32 {
     use crate::autostart::Autostart;
 
     match action {
-        ToggleAction::On => match Autostart::enable() {
-            Ok(()) => {
-                println!("Autostart enabled");
-                println!("Shroud will start automatically on login");
-                0
+        ToggleAction::On => {
+            if let Ok(Some(path)) = Autostart::cleanup_old_systemd() {
+                println!("Cleaned up old systemd service: {}", path);
             }
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                1
+
+            match Autostart::enable() {
+                Ok(()) => {
+                    let status = Autostart::status();
+                    println!("✓ Autostart enabled");
+                    if let Some(ref path) = status.binary_path {
+                        println!("  Binary: {}", path.display());
+                    }
+                    if let Some(ref path) = status.desktop_file {
+                        println!("  Desktop file: {}", path.display());
+                    }
+                    println!("\nShroud will start automatically on next login.");
+                    0
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    1
+                }
             }
-        },
+        }
         ToggleAction::Off => match Autostart::disable() {
             Ok(()) => {
-                println!("Autostart disabled");
+                println!("✓ Autostart disabled");
                 0
             }
             Err(e) => {
@@ -299,11 +316,11 @@ fn handle_autostart_command(action: ToggleAction) -> i32 {
         },
         ToggleAction::Toggle => match Autostart::toggle() {
             Ok(true) => {
-                println!("Autostart enabled");
+                println!("✓ Autostart enabled");
                 0
             }
             Ok(false) => {
-                println!("Autostart disabled");
+                println!("✓ Autostart disabled");
                 0
             }
             Err(e) => {
@@ -312,20 +329,113 @@ fn handle_autostart_command(action: ToggleAction) -> i32 {
             }
         },
         ToggleAction::Status => {
-            let enabled = Autostart::is_enabled();
+            let status = Autostart::status();
+
+            if args.json_output {
+                println!(
+                    r#"{{"enabled": {}, "binary_exists": {}, "has_old_systemd": {}}}"#,
+                    status.enabled, status.binary_exists, status.has_old_systemd
+                );
+                return 0;
+            }
+
             println!(
                 "Autostart: {}",
-                if enabled { "enabled" } else { "disabled" }
+                if status.enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
             );
 
-            if enabled {
-                if let Some(path) = dirs::config_dir().map(|c| c.join("autostart/shroud.desktop")) {
+            if let Some(ref path) = status.binary_path {
+                println!(
+                    "Binary: {} {}",
+                    path.display(),
+                    if status.binary_exists {
+                        "✓"
+                    } else {
+                        "✗ NOT FOUND"
+                    }
+                );
+            }
+
+            if status.enabled {
+                if let Some(ref path) = status.desktop_file {
                     println!("Desktop file: {}", path.display());
                 }
+            }
+
+            if status.has_old_systemd {
+                println!();
+                println!("⚠ Warning: Old systemd service found");
+                if let Some(ref path) = status.systemd_service_path {
+                    println!("  {}", path.display());
+                }
+                println!("  Run 'shroud cleanup' to remove it");
             }
             0
         }
     }
+}
+
+async fn handle_cleanup_command(args: &Args) -> i32 {
+    use crate::autostart::Autostart;
+
+    if !args.quiet {
+        println!("Cleaning up old configurations...\n");
+    }
+
+    let mut cleaned = false;
+
+    match Autostart::cleanup_old_systemd() {
+        Ok(Some(path)) => {
+            println!("✓ Removed old systemd service: {}", path);
+            cleaned = true;
+        }
+        Ok(None) => {
+            if !args.quiet {
+                println!("  No old systemd service found");
+            }
+        }
+        Err(e) => {
+            eprintln!("✗ Failed to clean systemd service: {}", e);
+        }
+    }
+
+    if let Some(runtime) = dirs::runtime_dir() {
+        let socket = runtime.join("shroud.sock");
+        let lock = runtime.join("shroud.lock");
+
+        if !is_daemon_running().await {
+            if socket.exists() {
+                if std::fs::remove_file(&socket).is_ok() {
+                    println!("✓ Removed stale socket: {}", socket.display());
+                    cleaned = true;
+                }
+            }
+            if lock.exists() {
+                if std::fs::remove_file(&lock).is_ok() {
+                    println!("✓ Removed stale lock: {}", lock.display());
+                    cleaned = true;
+                }
+            }
+        }
+    }
+
+    if !cleaned {
+        if !args.quiet {
+            println!("\nNothing to clean up.");
+        }
+    } else if !args.quiet {
+        println!("\n✓ Cleanup complete");
+    }
+
+    0
+}
+
+async fn is_daemon_running() -> bool {
+    matches!(send_command(IpcCommand::Ping).await, Ok(_))
 }
 
 async fn handle_update_command(skip_confirm: bool, debug_mode: bool) -> i32 {

@@ -313,8 +313,7 @@ Chain SHROUD_KILLSWITCH (policy DROP)
 |------|------|---------|
 | Config | `~/.config/shroud/config.toml` | User preferences |
 | Lock | `$XDG_RUNTIME_DIR/shroud.lock` | Single instance lock |
-| Logs | `journalctl --user -u shroud` | Systemd journal |
-| Service | `~/.config/systemd/user/shroud.service` | Systemd user service |
+| Logs | `~/.local/share/shroud/` | Log files (when enabled) |
 | Autostart | `~/.config/autostart/shroud.desktop` | XDG autostart |
 
 ---

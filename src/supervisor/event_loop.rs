@@ -42,6 +42,14 @@ impl super::VpnSupervisor {
             }
         }
 
+        if self.is_first_run && !crate::autostart::Autostart::is_enabled() {
+            info!("First run detected and autostart not enabled");
+            self.show_notification(
+                "Shroud",
+                "Tip: Run 'shroud autostart on' to start automatically on login",
+            );
+        }
+
         // Use health check interval from config
         let health_interval = if self.app_config.health_check_interval_secs > 0 {
             self.app_config.health_check_interval_secs

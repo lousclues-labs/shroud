@@ -25,8 +25,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.5.0] - 2026-02-12
 
 ### Added
-- **Autostart**: XDG autostart support with `shroud autostart on/off/toggle/status`.
+- **Autostart**: XDG autostart with absolute binary path (no PATH dependency).
+- **CLI**: `shroud autostart on/off/toggle/status` and `shroud cleanup` for legacy cleanup.
 - **Tray**: “Start on Login” checkbox in the tray menu.
+
+### Changed
+- **Startup**: Removed systemd user service support in favor of XDG autostart.
 
 ## [1.4.0] - 2026-02-12
 

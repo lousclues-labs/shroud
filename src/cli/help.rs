@@ -29,6 +29,7 @@ COMMANDS:
     killswitch           Manage kill switch (on/off/toggle/status)
     auto-reconnect       Manage auto-reconnect (on/off/toggle/status)
     autostart            Manage autostart on login (on/off/toggle/status)
+    cleanup              Remove old configurations and stale files
     debug                Manage debug logging (on/off/log-path/tail/dump)
     ping                 Check if daemon is running
     refresh              Refresh VPN connection list
@@ -49,6 +50,7 @@ EXAMPLES:
     shroud debug tail               Follow the debug log file
     shroud autostart on             Enable autostart on login
     shroud autostart status         Check autostart status
+    shroud cleanup                  Remove old systemd service and stale files
     shroud reload                   Reload configuration from disk
     shroud update                   Build, install, and restart
     shroud version --check          Check if rebuild is needed
@@ -218,8 +220,29 @@ EXAMPLES:
     shroud autostart on
     shroud autostart status
 
-This uses the XDG autostart specification. The desktop file
-is created at ~/.config/autostart/shroud.desktop"#
+NOTES:
+    This uses XDG autostart (~/.config/autostart/shroud.desktop).
+    The desktop file contains an absolute path to the shroud binary.
+
+If you previously used systemd user services, run 'shroud cleanup'
+to remove the old configuration.
+
+ALIAS:
+    'startup' is an alias for 'autostart'"#
+        ),
+
+        "cleanup" => println!(
+            r#"Clean up old configurations and stale files
+
+USAGE:
+    shroud cleanup
+
+This command removes:
+    - Old systemd user service (deprecated)
+    - Stale socket files (if daemon not running)
+    - Stale lock files (if daemon not running)
+
+This is safe to run at any time."#
         ),
 
         "debug" => println!(

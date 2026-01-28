@@ -37,8 +37,6 @@ BINARY_NAME="shroud"
 INSTALL_DIR="$HOME/.local/bin"
 CONFIG_DIR="$HOME/.config/shroud"
 DATA_DIR="$HOME/.local/share/shroud"
-SYSTEMD_USER_DIR="$HOME/.config/systemd/user"
-SERVICE_NAME="shroud.service"
 AUTOSTART_DIR="$HOME/.config/autostart"
 APPLICATIONS_DIR="$HOME/.local/share/applications"
 BASH_COMPLETIONS_DIR="$HOME/.local/share/bash-completion/completions"
@@ -513,11 +511,6 @@ stop_existing() {
         fi
     fi
     
-    # Stop systemd service
-    if systemctl --user is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-        run systemctl --user stop "$SERVICE_NAME" || true
-    fi
-    
     # Kill any remaining processes
     pkill -u "$(id -u)" -x "$BINARY_NAME" 2>/dev/null || true
     
@@ -655,80 +648,19 @@ EOF
     success "Created default configuration"
 }
 
-install_systemd_service() {
-    info "Installing systemd user service..."
-    
-    mkdir -p "$SYSTEMD_USER_DIR"
-    
-    if [ "$DRY_RUN" = "true" ]; then
-        echo -e "${DIM}[DRY-RUN] Would create: $SYSTEMD_USER_DIR/$SERVICE_NAME${NC}"
-        return 0
-    fi
-    
-    cat > "$SYSTEMD_USER_DIR/$SERVICE_NAME" << EOF
-[Unit]
-Description=Shroud VPN Manager
-Documentation=https://github.com/loujr/shroud
-After=graphical-session.target
-Wants=graphical-session.target
-PartOf=graphical-session.target
+cleanup_deprecated_systemd() {
+    local service_file="$HOME/.config/systemd/user/shroud.service"
 
-[Service]
-Type=simple
-ExecStart=$INSTALL_DIR/$BINARY_NAME
-ExecStop=$INSTALL_DIR/$BINARY_NAME quit
-Restart=on-failure
-RestartSec=5
-Environment=DISPLAY=%I
-Environment=WAYLAND_DISPLAY=%I
-
-# Cleanup kill switch on service stop
-ExecStopPost=-/bin/sh -c 'sudo iptables -D OUTPUT -j SHROUD_KILLSWITCH 2>/dev/null || true; sudo iptables -F SHROUD_KILLSWITCH 2>/dev/null || true; sudo iptables -X SHROUD_KILLSWITCH 2>/dev/null || true'
-
-[Install]
-WantedBy=graphical-session.target
-EOF
-
-    # Reload systemd
-    run systemctl --user daemon-reload
-    
-    success "Installed systemd service"
-}
-
-enable_service() {
-    info "Enabling systemd service..."
-    
-    if [ "$DRY_RUN" = "true" ]; then
-        echo -e "${DIM}[DRY-RUN] Would enable: $SERVICE_NAME${NC}"
-        return 0
-    fi
-    
-    run systemctl --user enable "$SERVICE_NAME"
-    success "Service enabled"
-}
-
-start_service() {
-    info "Starting Shroud..."
-    
-    if [ "$DRY_RUN" = "true" ]; then
-        echo -e "${DIM}[DRY-RUN] Would start: $SERVICE_NAME${NC}"
-        return 0
-    fi
-    
-    run systemctl --user start "$SERVICE_NAME"
-    
-    # Wait for socket to appear
-    local attempts=0
-    local socket_path="${XDG_RUNTIME_DIR:-/tmp}/shroud.sock"
-    while [ ! -S "$socket_path" ] && [ $attempts -lt 10 ]; do
-        sleep 0.5
-        ((attempts++))
-    done
-    
-    if [ -S "$socket_path" ]; then
-        success "Shroud started successfully"
-    else
-        warn "Shroud started but socket not detected (may take a moment)"
+    if [[ -f "$service_file" ]]; then
+        echo ""
+        echo "Cleaning up deprecated systemd service..."
+        systemctl --user stop shroud 2>/dev/null || true
+        systemctl --user disable shroud 2>/dev/null || true
+        rm -f "$service_file"
+        systemctl --user daemon-reload 2>/dev/null || true
+        echo "✓ Removed old systemd service"
+        echo "  Shroud now uses XDG autostart instead."
+        echo "  Run 'shroud autostart on' to enable."
     fi
 }
 
@@ -759,22 +691,6 @@ StartupNotify=false
 StartupWMClass=shroud
 EOF
 
-    # Autostart entry (alternative to systemd)
-    cat > "$AUTOSTART_DIR/shroud.desktop" << EOF
-[Desktop Entry]
-Name=Shroud
-Comment=VPN Connection Manager
-Exec=$INSTALL_DIR/shroud
-Icon=network-vpn
-Terminal=false
-Type=Application
-Categories=Network;Security;
-X-GNOME-Autostart-enabled=false
-X-KDE-autostart-after=panel
-StartupNotify=false
-Hidden=true
-EOF
-
     # Update desktop database
     if check_command update-desktop-database; then
         run update-desktop-database "$APPLICATIONS_DIR" || true
@@ -800,7 +716,7 @@ _shroud() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
     
-    commands="connect disconnect reconnect switch status list killswitch auto-reconnect debug ping refresh quit restart help"
+    commands="connect disconnect reconnect switch status list killswitch auto-reconnect autostart cleanup debug ping refresh quit restart reload update version help"
     
     case "$prev" in
         shroud)
@@ -812,7 +728,7 @@ _shroud() {
             COMPREPLY=( $(compgen -W "$connections" -- "$cur") )
             return 0
             ;;
-        killswitch|ks|auto-reconnect|ar)
+        killswitch|ks|auto-reconnect|ar|autostart|startup)
             COMPREPLY=( $(compgen -W "on off toggle status" -- "$cur") )
             return 0
             ;;
@@ -857,11 +773,16 @@ _shroud() {
         'list:List available VPN connections'
         'killswitch:Manage kill switch'
         'auto-reconnect:Manage auto-reconnect'
+        'autostart:Manage autostart on login'
+        'cleanup:Clean old configurations'
         'debug:Manage debug logging'
         'ping:Check if daemon is running'
         'refresh:Refresh VPN connection list'
         'quit:Stop the daemon'
         'restart:Restart the daemon'
+        'reload:Reload configuration'
+        'update:Build, install, restart'
+        'version:Show version information'
         'help:Show help'
     )
     
@@ -886,7 +807,7 @@ _shroud() {
                 connect|switch)
                     _shroud_vpn_connections
                     ;;
-                killswitch|ks|auto-reconnect|ar)
+                killswitch|ks|auto-reconnect|ar|autostart|startup)
                     _describe 'action' '(on off toggle status)'
                     ;;
                 debug)
@@ -931,11 +852,16 @@ complete -f -c shroud -n __fish_shroud_needs_command -a status -d 'Show current 
 complete -f -c shroud -n __fish_shroud_needs_command -a list -d 'List available VPN connections'
 complete -f -c shroud -n __fish_shroud_needs_command -a killswitch -d 'Manage kill switch'
 complete -f -c shroud -n __fish_shroud_needs_command -a auto-reconnect -d 'Manage auto-reconnect'
+complete -f -c shroud -n __fish_shroud_needs_command -a autostart -d 'Manage autostart on login'
+complete -f -c shroud -n __fish_shroud_needs_command -a cleanup -d 'Clean old configurations'
 complete -f -c shroud -n __fish_shroud_needs_command -a debug -d 'Manage debug logging'
 complete -f -c shroud -n __fish_shroud_needs_command -a ping -d 'Check if daemon is running'
 complete -f -c shroud -n __fish_shroud_needs_command -a refresh -d 'Refresh VPN connection list'
 complete -f -c shroud -n __fish_shroud_needs_command -a quit -d 'Stop the daemon'
 complete -f -c shroud -n __fish_shroud_needs_command -a restart -d 'Restart the daemon'
+complete -f -c shroud -n __fish_shroud_needs_command -a reload -d 'Reload configuration'
+complete -f -c shroud -n __fish_shroud_needs_command -a update -d 'Build, install, restart'
+complete -f -c shroud -n __fish_shroud_needs_command -a version -d 'Show version information'
 complete -f -c shroud -n __fish_shroud_needs_command -a help -d 'Show help'
 
 # VPN connection completion for connect/switch
@@ -947,6 +873,8 @@ complete -f -c shroud -n '__fish_shroud_using_command killswitch' -a 'on off tog
 complete -f -c shroud -n '__fish_shroud_using_command ks' -a 'on off toggle status'
 complete -f -c shroud -n '__fish_shroud_using_command auto-reconnect' -a 'on off toggle status'
 complete -f -c shroud -n '__fish_shroud_using_command ar' -a 'on off toggle status'
+complete -f -c shroud -n '__fish_shroud_using_command autostart' -a 'on off toggle status'
+complete -f -c shroud -n '__fish_shroud_using_command startup' -a 'on off toggle status'
 complete -f -c shroud -n '__fish_shroud_using_command debug' -a 'on off log-path tail dump'
 
 # Global options
@@ -1045,13 +973,6 @@ verify_installation() {
         ((errors++))
     fi
     
-    # Check service
-    if systemctl --user is-enabled "$SERVICE_NAME" &>/dev/null; then
-        success "Service: enabled"
-    else
-        warn "Service not enabled"
-    fi
-    
     # Check socket
     local socket_path="${XDG_RUNTIME_DIR:-/tmp}/shroud.sock"
     if [ -S "$socket_path" ]; then
@@ -1079,7 +1000,6 @@ show_summary() {
     echo -e "${BOLD}Installed files:${NC}"
     echo "  Binary:     $INSTALL_DIR/$BINARY_NAME"
     echo "  Config:     $CONFIG_DIR/config.toml"
-    echo "  Service:    $SYSTEMD_USER_DIR/$SERVICE_NAME"
     echo "  Logs:       $DATA_DIR/"
     echo
     echo -e "${BOLD}Quick start:${NC}"
@@ -1088,10 +1008,9 @@ show_summary() {
     echo "  shroud connect <name>  # Connect to VPN"
     echo "  shroud --help          # Show all commands"
     echo
-    echo -e "${BOLD}Service control:${NC}"
-    echo "  systemctl --user status shroud   # Check service"
-    echo "  systemctl --user restart shroud  # Restart service"
-    echo "  journalctl --user -u shroud -f   # View logs"
+    echo -e "${BOLD}Autostart:${NC}"
+    echo "  shroud autostart on    # Enable start on login"
+    echo "  shroud autostart off   # Disable start on login"
     echo
     
     # Check for VPN connections
@@ -1140,11 +1059,6 @@ do_uninstall() {
     info "Stopping service..."
     stop_existing
     
-    # Disable service
-    if systemctl --user is-enabled "$SERVICE_NAME" &>/dev/null; then
-        run systemctl --user disable "$SERVICE_NAME" || true
-    fi
-    
     # Remove binary
     if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
         info "Removing binary..."
@@ -1152,13 +1066,8 @@ do_uninstall() {
         success "Binary removed"
     fi
     
-    # Remove service file
-    if [ -f "$SYSTEMD_USER_DIR/$SERVICE_NAME" ]; then
-        info "Removing service file..."
-        rm -f "$SYSTEMD_USER_DIR/$SERVICE_NAME"
-        run systemctl --user daemon-reload
-        success "Service file removed"
-    fi
+    # Remove deprecated systemd service (if present)
+    cleanup_deprecated_systemd
     
     # Remove autostart
     if [ -f "$AUTOSTART_DIR/shroud.desktop" ]; then
@@ -1230,15 +1139,13 @@ do_install() {
     echo
     
     preflight_checks
+    cleanup_deprecated_systemd
     install_dependencies
     build_binary
     stop_existing
     install_binary
     create_directories
     create_default_config
-    install_systemd_service
-    enable_service
-    start_service
     create_desktop_files
     install_completions
     
@@ -1257,11 +1164,10 @@ do_update() {
     echo
     
     preflight_checks
+    cleanup_deprecated_systemd
     build_binary
     stop_existing
     install_binary
-    install_systemd_service
-    start_service
     install_completions
     verify_installation
     
@@ -1301,9 +1207,6 @@ do_repair() {
     stop_existing
     install_binary
     create_directories
-    install_systemd_service
-    enable_service
-    start_service
     create_desktop_files
     install_completions
     verify_installation
@@ -1325,17 +1228,6 @@ show_status() {
         echo -e "${GREEN}✓${NC} Binary: $INSTALL_DIR/$BINARY_NAME ($version)"
     else
         echo -e "${RED}✗${NC} Binary: not installed"
-    fi
-    
-    # Service
-    if systemctl --user is-enabled "$SERVICE_NAME" &>/dev/null; then
-        if systemctl --user is-active "$SERVICE_NAME" &>/dev/null; then
-            echo -e "${GREEN}✓${NC} Service: enabled and running"
-        else
-            echo -e "${YELLOW}○${NC} Service: enabled but not running"
-        fi
-    else
-        echo -e "${RED}✗${NC} Service: not enabled"
     fi
     
     # Socket

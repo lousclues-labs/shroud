@@ -62,6 +62,9 @@ pub enum ParsedCommand {
     // Autostart
     Autostart { action: ToggleAction },
 
+    // Cleanup
+    Cleanup,
+
     // Debug
     Debug { action: DebugAction },
 
@@ -218,6 +221,7 @@ fn parse_command(argv: &[String]) -> Result<ParsedCommand, String> {
             let action = parse_toggle_action(argv.get(1).map(|s| s.as_str()))?;
             Ok(ParsedCommand::Autostart { action })
         }
+        "cleanup" => Ok(ParsedCommand::Cleanup),
         "ping" => Ok(ParsedCommand::Ping),
         "refresh" => Ok(ParsedCommand::Refresh),
         "quit" | "stop" | "exit" => Ok(ParsedCommand::Quit),
