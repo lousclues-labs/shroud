@@ -5,10 +5,39 @@
 
 use log::{debug, error, info, warn};
 use std::process::Stdio;
+use thiserror::Error;
 use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 
 use crate::state::{ActiveVpnInfo, NmVpnState};
+
+/// Errors that can occur during NetworkManager operations.
+#[derive(Error, Debug)]
+pub enum NmError {
+    /// nmcli command failed with error message
+    #[error("nmcli failed: {0}")]
+    CommandFailed(String),
+
+    /// nmcli command timed out
+    #[error("nmcli timed out after {0} seconds")]
+    Timeout(u64),
+
+    /// Failed to execute nmcli
+    #[error("Failed to execute nmcli: {0}")]
+    ExecutionFailed(#[source] std::io::Error),
+
+    /// VPN connection not found
+    #[error("VPN connection '{0}' not found in NetworkManager")]
+    ConnectionNotFound(String),
+
+    /// No active VPN connection
+    #[error("No active VPN connection")]
+    NoActiveConnection,
+
+    /// All disconnect methods failed
+    #[error("Failed to disconnect: all methods exhausted")]
+    DisconnectFailed,
+}
 
 /// Timeout for nmcli commands in seconds
 const NMCLI_TIMEOUT_SECS: u64 = 30;
@@ -170,7 +199,7 @@ pub async fn get_vpn_uuid(connection_name: &str) -> Option<String> {
 }
 
 /// Connect to a VPN via NetworkManager
-pub async fn connect(connection_name: &str) -> Result<(), String> {
+pub async fn connect(connection_name: &str) -> Result<(), NmError> {
     info!("Activating VPN connection: {}", connection_name);
 
     let output = match timeout(
@@ -185,14 +214,12 @@ pub async fn connect(connection_name: &str) -> Result<(), String> {
     {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => {
-            let msg = format!("Failed to execute nmcli: {}", e);
-            error!("{}", msg);
-            return Err(msg);
+            error!("Failed to execute nmcli: {}", e);
+            return Err(NmError::ExecutionFailed(e));
         }
         Err(_) => {
-            let msg = format!("nmcli timed out after {} seconds", NMCLI_TIMEOUT_SECS);
-            error!("{}", msg);
-            return Err(msg);
+            error!("nmcli timed out after {} seconds", NMCLI_TIMEOUT_SECS);
+            return Err(NmError::Timeout(NMCLI_TIMEOUT_SECS));
         }
     };
 
@@ -201,14 +228,14 @@ pub async fn connect(connection_name: &str) -> Result<(), String> {
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let msg = format!("nmcli failed: {}", stderr.trim());
-        error!("{}", msg);
-        Err(msg)
+        let msg = stderr.trim().to_string();
+        error!("nmcli failed: {}", msg);
+        Err(NmError::CommandFailed(msg))
     }
 }
 
 /// Disconnect a VPN via NetworkManager
-pub async fn disconnect(connection_name: &str) -> Result<(), String> {
+pub async fn disconnect(connection_name: &str) -> Result<(), NmError> {
     info!("Deactivating VPN connection: {}", connection_name);
 
     // First, try to get UUID for more reliable disconnection
@@ -266,14 +293,13 @@ pub async fn disconnect(connection_name: &str) -> Result<(), String> {
     {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => {
-            let msg = format!("Failed to execute nmcli: {}", e);
-            error!("{}", msg);
-            return Err(msg);
+            error!("Failed to execute nmcli: {}", e);
+            return Err(NmError::ExecutionFailed(e));
         }
         Err(_) => {
             let msg = format!("nmcli timed out after {} seconds", NMCLI_TIMEOUT_SECS);
             error!("{}", msg);
-            return Err(msg);
+            return Err(NmError::Timeout(NMCLI_TIMEOUT_SECS));
         }
     };
 
@@ -282,6 +308,12 @@ pub async fn disconnect(connection_name: &str) -> Result<(), String> {
         Ok(())
     } else {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        // Sometimes nmcli says "Connection '...' is not active" - we consider that a success
+        if stderr.contains("not active") {
+            warn!("VPN was not active");
+            return Ok(());
+        }
+
         warn!("Disconnect by name also failed: {}", stderr.trim());
 
         // Last resort: Try device-level disconnect
@@ -291,7 +323,7 @@ pub async fn disconnect(connection_name: &str) -> Result<(), String> {
 }
 
 /// Disconnect VPN by finding and disconnecting the tun device
-async fn disconnect_vpn_device() -> Result<(), String> {
+async fn disconnect_vpn_device() -> Result<(), NmError> {
     let dev_output = match timeout(
         Duration::from_secs(NMCLI_TIMEOUT_SECS),
         Command::new("nmcli")
@@ -304,14 +336,12 @@ async fn disconnect_vpn_device() -> Result<(), String> {
     {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => {
-            let msg = format!("Failed to list devices: {}", e);
-            error!("{}", msg);
-            return Err(msg);
+            error!("Failed to list devices: {}", e);
+            return Err(NmError::ExecutionFailed(e));
         }
         Err(_) => {
-            let msg = "Device list timed out".to_string();
-            error!("{}", msg);
-            return Err(msg);
+            error!("Device list timed out");
+            return Err(NmError::Timeout(NMCLI_TIMEOUT_SECS));
         }
     };
 
@@ -352,9 +382,8 @@ async fn disconnect_vpn_device() -> Result<(), String> {
         }
     }
 
-    let msg = "All disconnect methods failed".to_string();
-    error!("{}", msg);
-    Err(msg)
+    error!("All disconnect methods failed");
+    Err(NmError::DisconnectFailed)
 }
 
 /// Kill orphan OpenVPN processes that may be blocking new connections

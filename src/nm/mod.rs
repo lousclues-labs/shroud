@@ -7,5 +7,5 @@ pub mod client;
 
 pub use client::{
     connect, disconnect, get_active_vpn, get_active_vpn_with_state, get_all_active_vpns,
-    get_vpn_state, kill_orphan_openvpn_processes, list_vpn_connections,
+    get_vpn_state, kill_orphan_openvpn_processes, list_vpn_connections, NmError,
 };
