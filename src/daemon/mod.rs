@@ -5,4 +5,4 @@
 
 pub mod lock;
 
-pub use lock::{acquire_instance_lock, get_lock_file_path, release_instance_lock};
+pub use lock::{acquire_instance_lock, release_instance_lock};
