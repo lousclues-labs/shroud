@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Error Handling**: Migrated to structured error handling using `thiserror` (Phase 2 complete).
   - Replaced `Result<T, String>` with specific error types: `ConfigError`, `ClientError`, `ServerError`, `NmError`, `KillSwitchError`.
   - Standardized error variants (Short naming convention).
+  - Removed unused re-exports from module files.
+  - Removed dead code error variants.
+  - Added `#[allow(clippy::enum_variant_names)]` to error enums.
   - Improved error context and display.
 - **CI/CD**: Fixed GitHub Actions workflow `toolchain` configuration.
 - **Code Quality**: Applied `clippy` suggestions and strict formatting.
