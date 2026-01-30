@@ -223,16 +223,16 @@ mod tests {
         file
     }
 
-        fn make_nmcli_stub(output: &str) -> tempfile::NamedTempFile {
-            let base_dir = std::env::current_dir()
-                .unwrap()
-                .join("target")
-                .join("test-bin");
-            std::fs::create_dir_all(&base_dir).unwrap();
-            let mut file = tempfile::Builder::new()
-                .prefix("nmcli-mock-")
-                .tempfile_in(base_dir)
-                .unwrap();
+    fn make_nmcli_stub(output: &str) -> tempfile::NamedTempFile {
+        let base_dir = std::env::current_dir()
+            .unwrap()
+            .join("target")
+            .join("test-bin");
+        std::fs::create_dir_all(&base_dir).unwrap();
+        let mut file = tempfile::Builder::new()
+            .prefix("nmcli-mock-")
+            .tempfile_in(base_dir)
+            .unwrap();
         writeln!(file, "#!/bin/sh").unwrap();
         writeln!(file, "echo \"{}\"", output.replace('"', "\\\"")).unwrap();
         #[cfg(unix)]
