@@ -121,7 +121,7 @@ impl NmMonitor {
             )
             .await?;
 
-        let body: zbus::zvariant::Value = reply.body()?;
+        let body: zbus::zvariant::Value = reply.body::<zbus::zvariant::Value>()?;
         if let zbus::zvariant::Value::Array(arr) = body {
             for path_val in arr.iter() {
                 if let zbus::zvariant::Value::ObjectPath(path) = path_val {
@@ -152,7 +152,7 @@ impl NmMonitor {
             )
             .await?;
 
-        let body: zbus::zvariant::Value = reply.body()?;
+        let body: zbus::zvariant::Value = reply.body::<zbus::zvariant::Value>()?;
         if let zbus::zvariant::Value::Str(s) = body {
             return Ok(s.to_string());
         }
@@ -176,7 +176,7 @@ impl NmMonitor {
             )
             .await?;
 
-        let body: zbus::zvariant::Value = reply.body()?;
+        let body: zbus::zvariant::Value = reply.body::<zbus::zvariant::Value>()?;
         if let zbus::zvariant::Value::Str(s) = body {
             return Ok(s.as_str() == "vpn");
         }
@@ -222,7 +222,7 @@ impl NmMonitor {
         let path = path.ok_or("No path in message")?;
 
         // VpnStateChanged sends (state: u32, reason: u32)
-        let (state, reason): (u32, u32) = msg.body()?;
+        let (state, reason): (u32, u32) = msg.body::<(u32, u32)>()?;
 
         // Get connection name
         let name = if let Some(cached) = cache.get(path) {
@@ -291,7 +291,7 @@ impl NmMonitor {
         }
 
         // StateChanged sends (state: u32, reason: u32)
-        let (state, _reason): (u32, u32) = msg.body()?;
+        let (state, _reason): (u32, u32) = msg.body::<(u32, u32)>()?;
 
         // Get connection name
         let name = if let Some(cached) = cache.get(path) {
