@@ -7,7 +7,19 @@
 //! - Must have at least one VPN configured in NetworkManager
 //! - Should be run on a test machine, not production
 //!
-//! Run with: sudo -E cargo test --test leak_test -- --ignored --nocapture
+//! ## Running These Tests
+//! Most tests in this file require root privileges and are marked with `#[ignore]`.
+//! To run them:
+//!
+//! ```bash
+//! sudo -E cargo test --test leak_test -- --ignored --nocapture
+//! ```
+//!
+//! ## Requirements
+//! - Root/sudo access
+//! - NetworkManager running
+//! - D-Bus session available
+//! - iptables/nftables installed
 
 use std::net::TcpStream;
 use std::process::{Command, Stdio};
@@ -142,7 +154,7 @@ fn get_available_vpns() -> Vec<String> {
 // ============================================================================
 
 #[test]
-#[ignore] // Run with: sudo -E cargo test --test leak_test -- --ignored
+#[ignore = "requires root privileges for iptables"]
 fn test_leak_killswitch_blocks_after_vpn_crash() {
     println!("\n=== LEAK TEST: Kill switch blocks after VPN crash ===\n");
 
@@ -295,7 +307,7 @@ fn test_leak_killswitch_blocks_after_vpn_crash() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires root privileges for iptables"]
 fn test_leak_killswitch_blocks_before_vpn_connects() {
     println!("\n=== LEAK TEST: Kill switch blocks before VPN connects ===\n");
 
@@ -354,7 +366,7 @@ fn test_leak_killswitch_blocks_before_vpn_connects() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires VPN connection and root privileges"]
 fn test_leak_no_dns_leak() {
     println!("\n=== LEAK TEST: No DNS leak ===\n");
 
@@ -416,7 +428,6 @@ fn test_leak_no_dns_leak() {
 }
 
 #[test]
-#[ignore]
 fn test_leak_ipv6_blocked() {
     println!("\n=== LEAK TEST: IPv6 blocked ===\n");
 
@@ -460,7 +471,6 @@ fn test_leak_ipv6_blocked() {
 }
 
 #[test]
-#[ignore]
 fn test_leak_webrtc_blocked() {
     println!("\n=== LEAK TEST: WebRTC considerations ===\n");
 
@@ -485,7 +495,7 @@ fn test_leak_webrtc_blocked() {
 // ============================================================================
 
 #[test]
-#[ignore]
+#[ignore = "requires VPN connection and root privileges"]
 fn test_leak_rapid_reconnect() {
     println!("\n=== LEAK TEST: Rapid reconnect ===\n");
 
@@ -552,7 +562,6 @@ fn test_leak_rapid_reconnect() {
 // ============================================================================
 
 #[test]
-#[ignore] // Requires sudo only
 fn test_killswitch_rules_complete() {
     println!("\n=== Verifying kill switch rules completeness ===\n");
 

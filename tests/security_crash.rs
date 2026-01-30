@@ -6,7 +6,19 @@
 //! - Stale state files
 //! - Partial writes
 //!
-//! Run with: sudo -E cargo test --test security_crash -- --ignored --nocapture
+//! ## Running These Tests
+//! Most tests in this file require root privileges and are marked with `#[ignore]`.
+//! To run them:
+//!
+//! ```bash
+//! sudo -E cargo test --test security_crash -- --ignored --nocapture
+//! ```
+//!
+//! ## Requirements
+//! - Root/sudo access
+//! - NetworkManager running
+//! - D-Bus session available
+//! - iptables/nftables installed
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -126,7 +138,7 @@ fn lock_path() -> PathBuf {
 // ============================================================================
 
 #[test]
-#[ignore] // Requires sudo, destructive
+#[ignore = "requires root privileges and daemon access"]
 fn test_crash_with_killswitch_cleans_up_on_restart() {
     println!("\n=== TEST: Crash with kill switch active ===\n");
 
@@ -198,7 +210,7 @@ fn test_crash_with_killswitch_cleans_up_on_restart() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires root privileges and daemon access"]
 fn test_stale_lock_file_handled() {
     println!("\n=== TEST: Stale lock file handling ===\n");
 
@@ -237,7 +249,7 @@ fn test_stale_lock_file_handled() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires root privileges and daemon access"]
 fn test_stale_socket_handled() {
     println!("\n=== TEST: Stale socket file handling ===\n");
 
@@ -270,7 +282,7 @@ fn test_stale_socket_handled() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires root privileges and daemon access"]
 fn test_partial_config_write_recovery() {
     println!("\n=== TEST: Partial config write recovery ===\n");
 
@@ -317,7 +329,7 @@ fn test_partial_config_write_recovery() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires root privileges and daemon access"]
 fn test_crash_during_vpn_connect() {
     println!("\n=== TEST: Crash during VPN connect ===\n");
 
@@ -391,7 +403,7 @@ fn test_crash_during_vpn_connect() {
 // ============================================================================
 
 #[test]
-#[ignore]
+#[ignore = "requires root privileges and daemon access"]
 fn test_orphaned_iptables_detected_on_startup() {
     println!("\n=== TEST: Orphaned iptables detection ===\n");
 

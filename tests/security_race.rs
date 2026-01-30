@@ -6,7 +6,19 @@
 //! - Multiple CLI clients
 //! - State machine transitions
 //!
-//! Run with: cargo test --test security_race -- --ignored --nocapture
+//! ## Running These Tests
+//! Most tests in this file require a privileged environment and are marked with `#[ignore]`.
+//! To run them:
+//!
+//! ```bash
+//! sudo -E cargo test --test security_race -- --ignored --nocapture
+//! ```
+//!
+//! ## Requirements
+//! - Root/sudo access
+//! - NetworkManager running
+//! - D-Bus session available
+//! - iptables/nftables installed
 
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -51,7 +63,7 @@ fn wait_for_daemon(timeout_secs: u64) -> bool {
 // ============================================================================
 
 #[test]
-#[ignore]
+#[ignore = "requires privileged environment"]
 fn test_concurrent_killswitch_toggles() {
     println!("\n=== TEST: Concurrent kill switch toggles ===\n");
     let mut started_daemon = None;
@@ -125,7 +137,7 @@ fn test_concurrent_killswitch_toggles() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires privileged environment"]
 fn test_concurrent_status_during_connect() {
     println!("\n=== TEST: Concurrent status during connect ===\n");
     let mut started_daemon = None;
@@ -218,7 +230,7 @@ fn test_concurrent_status_during_connect() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires privileged environment"]
 fn test_rapid_connect_disconnect() {
     println!("\n=== TEST: Rapid connect/disconnect cycles ===\n");
     let mut started_daemon = None;
@@ -287,7 +299,7 @@ fn test_rapid_connect_disconnect() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires privileged environment"]
 fn test_config_read_write_race() {
     println!("\n=== TEST: Config read/write race ===\n");
     let mut started_daemon = None;
@@ -361,7 +373,7 @@ fn test_config_read_write_race() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires privileged environment"]
 fn test_reload_during_connect() {
     println!("\n=== TEST: Reload during connect ===\n");
     let mut started_daemon = None;
@@ -429,7 +441,7 @@ fn test_reload_during_connect() {
 // ============================================================================
 
 #[test]
-#[ignore]
+#[ignore = "requires privileged environment"]
 fn test_killswitch_toggle_during_state_transition() {
     println!("\n=== TEST: Kill switch toggle during state transition ===\n");
     let mut started_daemon = None;

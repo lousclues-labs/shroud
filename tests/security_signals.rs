@@ -5,7 +5,19 @@
 //! - SIGHUP reload safety
 //! - Signal during iptables modification
 //!
-//! Run with: sudo -E cargo test --test security_signals -- --ignored --nocapture
+//! ## Running These Tests
+//! Most tests in this file require root privileges and are marked with `#[ignore]`.
+//! To run them:
+//!
+//! ```bash
+//! sudo -E cargo test --test security_signals -- --ignored --nocapture
+//! ```
+//!
+//! ## Requirements
+//! - Root/sudo access
+//! - NetworkManager running
+//! - D-Bus session available
+//! - iptables/nftables installed
 
 use std::process::{Command, Stdio};
 use std::thread;
@@ -92,7 +104,7 @@ fn cleanup_iptables() {
 // ============================================================================
 
 #[test]
-#[ignore]
+#[ignore = "requires root privileges for signal handling"]
 fn test_sigterm_cleans_up_killswitch() {
     println!("\n=== TEST: SIGTERM cleans up kill switch ===\n");
 
@@ -135,7 +147,7 @@ fn test_sigterm_cleans_up_killswitch() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires root privileges for signal handling"]
 fn test_sigint_cleans_up_killswitch() {
     println!("\n=== TEST: SIGINT cleans up kill switch ===\n");
 
@@ -178,7 +190,7 @@ fn test_sigint_cleans_up_killswitch() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires root privileges for signal handling"]
 fn test_sigterm_during_iptables_modification() {
     println!("\n=== TEST: SIGTERM during iptables modification ===\n");
 
@@ -232,7 +244,7 @@ fn test_sigterm_during_iptables_modification() {
 // ============================================================================
 
 #[test]
-#[ignore]
+#[ignore = "requires root privileges for signal handling"]
 fn test_sighup_safe_reload() {
     println!("\n=== TEST: SIGHUP safe reload ===\n");
     let mut started_daemon = None;
@@ -276,7 +288,7 @@ fn test_sighup_safe_reload() {
 }
 
 #[test]
-#[ignore]
+#[ignore = "requires root privileges for signal handling"]
 fn test_rapid_sighup() {
     println!("\n=== TEST: Rapid SIGHUP signals ===\n");
     let mut started_daemon = None;
@@ -321,7 +333,6 @@ fn test_rapid_sighup() {
 // ============================================================================
 
 #[test]
-#[ignore]
 fn test_unexpected_signals_handled() {
     println!("\n=== TEST: Unexpected signals handled ===\n");
     let mut started_daemon = None;
