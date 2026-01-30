@@ -163,12 +163,10 @@ pub async fn import_file(
         VpnConfigType::OpenVpn => "openvpn",
     };
 
-    let output = nmcli_output_with_path(
-        &["connection", "import", "type", nmcli_type, "file"],
-        path,
-    )
-    .await
-    .map_err(|e| ImportError::NmcliError(e.to_string()))?;
+    let output =
+        nmcli_output_with_path(&["connection", "import", "type", nmcli_type, "file"], path)
+            .await
+            .map_err(|e| ImportError::NmcliError(e.to_string()))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -177,14 +175,9 @@ pub async fn import_file(
 
     if let Some(name) = custom_name {
         if name != default_name {
-            let _ = nmcli_output(&[
-                "connection",
-                "modify",
-                &default_name,
-                "connection.id",
-                name,
-            ])
-            .await;
+            let _ =
+                nmcli_output(&["connection", "modify", &default_name, "connection.id", name])
+                    .await;
         }
     }
 
