@@ -93,13 +93,17 @@ pub fn release_instance_lock() {
 mod tests {
     use super::*;
     use std::env;
+    use std::sync::{Mutex, OnceLock};
     use std::time::{Duration, Instant};
     use tempfile::TempDir;
+
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     fn with_temp_runtime_dir<F, R>(f: F) -> R
     where
         F: FnOnce(&std::path::Path) -> R,
     {
+        let _guard = ENV_LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         let temp = TempDir::new().unwrap();
         let prev = env::var("XDG_RUNTIME_DIR").ok();
         env::set_var("XDG_RUNTIME_DIR", temp.path());
