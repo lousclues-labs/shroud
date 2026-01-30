@@ -953,7 +953,7 @@ impl super::VpnSupervisor {
 
     async fn reload_configuration(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         info!("Reloading configuration from disk");
-        let new_config = self.config_manager.load();
+        let new_config = self.config_manager.load_validated();
 
         self.app_config = new_config.clone();
         self.kill_switch

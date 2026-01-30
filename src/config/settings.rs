@@ -27,6 +27,7 @@
 //! ipv6_mode = "block"
 //! ```
 
+use crate::cli::validation::validate_vpn_name;
 use log::{debug, info, warn};
 use thiserror::Error;
 
@@ -134,6 +135,17 @@ impl Default for Config {
     }
 }
 
+impl Config {
+    /// Validate config after loading
+    pub fn validate(&self) -> Result<(), String> {
+        if let Some(ref server) = self.last_server {
+            validate_vpn_name(server)
+                .map_err(|e| format!("Invalid last_server in config: {}", e))?;
+        }
+        Ok(())
+    }
+}
+
 /// Configuration manager for loading and saving config
 pub struct ConfigManager {
     /// Path to the config file
@@ -192,6 +204,17 @@ impl ConfigManager {
                 warn!("Failed to read config file: {}. Using defaults.", e);
                 Config::default()
             }
+        }
+    }
+
+    /// Load configuration with validation, falling back to defaults on validation error.
+    pub fn load_validated(&self) -> Config {
+        let config = self.load();
+        if let Err(e) = config.validate() {
+            warn!("Config validation failed, using defaults: {}", e);
+            Config::default()
+        } else {
+            config
         }
     }
 

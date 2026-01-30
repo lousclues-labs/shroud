@@ -129,7 +129,7 @@ impl VpnSupervisor {
         // Load persistent configuration
         let config_manager = ConfigManager::new();
         let is_first_run = !config_manager.config_path().exists();
-        let app_config = config_manager.load();
+        let app_config = config_manager.load_validated();
         info!(
             "Loaded config: auto_reconnect={}, last_server={:?}",
             app_config.auto_reconnect, app_config.last_server

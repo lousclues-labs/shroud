@@ -119,6 +119,18 @@ impl IpcServer {
         let mut line = String::new();
 
         while reader.read_line(&mut line).await? > 0 {
+            if line.len() > 64 * 1024 {
+                let response = IpcResponse::Error {
+                    message: "Request too large".to_string(),
+                };
+                let response_json = serde_json::to_string(&response)?;
+                writer.write_all(response_json.as_bytes()).await?;
+                writer.write_all(b"\n").await?;
+                writer.flush().await?;
+                line.clear();
+                continue;
+            }
+
             let trimmed = line.trim();
             if trimmed.is_empty() {
                 line.clear();
@@ -127,40 +139,52 @@ impl IpcServer {
 
             debug!("Received command: {}", trimmed);
 
-            let response = match serde_json::from_str::<IpcCommand>(trimmed) {
-                Ok(cmd) => {
-                    // Create a one-shot channel for the response
-                    let (resp_tx, mut resp_rx) = mpsc::channel(1);
-
-                    // Send command to supervisor
-                    if command_tx.send((cmd, resp_tx)).await.is_err() {
-                        IpcResponse::Error {
-                            message: "Supervisor channel closed".to_string(),
-                        }
-                    } else {
-                        // Wait for response from supervisor
-                        // We use a timeout to prevent hanging forever if supervisor is busy/deadlocked
-                        // Increased to 60s for interactive commands (e.g. pkexec)
-                        match tokio::time::timeout(
-                            std::time::Duration::from_secs(60),
-                            resp_rx.recv(),
-                        )
-                        .await
-                        {
-                            Ok(Some(resp)) => resp,
-                            Ok(None) => IpcResponse::Error {
-                                message: "Supervisor dropped the response channel".to_string(),
-                            },
-                            Err(_) => IpcResponse::Error {
-                                message: "Timeout waiting for supervisor response".to_string(),
-                            },
-                        }
-                    }
-                }
+            let command: IpcCommand = match serde_json::from_str(trimmed) {
+                Ok(cmd) => cmd,
                 Err(e) => {
                     warn!("Invalid command: {}", e);
+                    let response = IpcResponse::Error {
+                        message: format!("Invalid JSON: {}", e),
+                    };
+                    let response_json = serde_json::to_string(&response)?;
+                    writer.write_all(response_json.as_bytes()).await?;
+                    writer.write_all(b"\n").await?;
+                    writer.flush().await?;
+                    line.clear();
+                    continue;
+                }
+            };
+
+            if let Err(e) = command.validate() {
+                let response = IpcResponse::Error {
+                    message: format!("Validation error: {}", e),
+                };
+                let response_json = serde_json::to_string(&response)?;
+                writer.write_all(response_json.as_bytes()).await?;
+                writer.write_all(b"\n").await?;
+                writer.flush().await?;
+                line.clear();
+                continue;
+            }
+
+            let response = {
+                let (resp_tx, mut resp_rx) = mpsc::channel(1);
+
+                if command_tx.send((command, resp_tx)).await.is_err() {
                     IpcResponse::Error {
-                        message: format!("Invalid command: {}", e),
+                        message: "Supervisor channel closed".to_string(),
+                    }
+                } else {
+                    match tokio::time::timeout(std::time::Duration::from_secs(60), resp_rx.recv())
+                        .await
+                    {
+                        Ok(Some(resp)) => resp,
+                        Ok(None) => IpcResponse::Error {
+                            message: "Supervisor dropped the response channel".to_string(),
+                        },
+                        Err(_) => IpcResponse::Error {
+                            message: "Timeout waiting for supervisor response".to_string(),
+                        },
                     }
                 }
             };

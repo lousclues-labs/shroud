@@ -111,7 +111,7 @@ async fn run_daemon_mode(args: cli::Args) {
 
     // Load config just to force init or validation if needed
     let config_manager = ConfigManager::new();
-    let _ = config_manager.load();
+    let _ = config_manager.load_validated();
 
     // Start IPC Server
     let ipc_server = ipc::IpcServer::new(ipc_tx);

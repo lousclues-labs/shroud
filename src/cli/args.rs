@@ -5,6 +5,11 @@
 
 use std::path::PathBuf;
 
+use super::validation::{
+    self, validate_log_level, validate_log_path, validate_timeout, validate_verbosity,
+    validate_vpn_name,
+};
+
 /// Parsed command-line arguments
 #[derive(Debug, Clone)]
 pub struct Args {
@@ -34,7 +39,7 @@ impl Default for Args {
             log_file: None,
             json_output: false,
             quiet: false,
-            timeout: 5,
+            timeout: super::validation::DEFAULT_TIMEOUT_SECS,
             command: None,
         }
     }
@@ -113,28 +118,31 @@ pub fn parse_args_from(argv: &[String]) -> Result<Args, String> {
     // Parse global options first
     while i < argv.len() {
         match argv[i].as_str() {
-            "-v" | "--verbose" => args.verbose = args.verbose.saturating_add(1),
-            "-vv" => args.verbose = args.verbose.saturating_add(2),
-            "-vvv" => args.verbose = args.verbose.saturating_add(3),
+            "-v" | "--verbose" => {
+                args.verbose = validate_verbosity(args.verbose.saturating_add(1));
+            }
+            "-vv" => {
+                args.verbose = validate_verbosity(args.verbose.saturating_add(2));
+            }
+            "-vvv" => {
+                args.verbose = validate_verbosity(args.verbose.saturating_add(3));
+            }
             "--log-level" => {
                 i += 1;
-                args.log_level = Some(argv.get(i).ok_or("--log-level requires a value")?.clone());
+                let value = argv.get(i).ok_or("--log-level requires a value")?;
+                args.log_level = Some(validate_log_level(value).map_err(|e| e.to_string())?);
             }
             "--log-file" => {
                 i += 1;
-                args.log_file = Some(PathBuf::from(
-                    argv.get(i).ok_or("--log-file requires a value")?,
-                ));
+                let value = argv.get(i).ok_or("--log-file requires a value")?;
+                args.log_file = Some(validate_log_path(value).map_err(|e| e.to_string())?);
             }
             "--json" => args.json_output = true,
             "-q" | "--quiet" => args.quiet = true,
             "--timeout" => {
                 i += 1;
-                args.timeout = argv
-                    .get(i)
-                    .ok_or("--timeout requires a value")?
-                    .parse()
-                    .map_err(|_| "Invalid timeout value")?;
+                let value = argv.get(i).ok_or("--timeout requires a value")?;
+                args.timeout = validate_timeout(value).map_err(|e| e.to_string())?;
             }
             "-h" | "--help" => {
                 // --help with no command shows main help
@@ -149,7 +157,9 @@ pub fn parse_args_from(argv: &[String]) -> Result<Args, String> {
                 // Handle combined flags like -vvv
                 for c in arg.chars().skip(1) {
                     match c {
-                        'v' => args.verbose = args.verbose.saturating_add(1),
+                        'v' => {
+                            args.verbose = validate_verbosity(args.verbose.saturating_add(1));
+                        }
                         'q' => args.quiet = true,
                         'h' => {
                             args.command = Some(ParsedCommand::Help { command: None });
@@ -195,13 +205,21 @@ fn parse_command(argv: &[String]) -> Result<ParsedCommand, String> {
     match argv[0].as_str() {
         "connect" => {
             let name = argv.get(1).ok_or("connect requires a connection name")?;
-            Ok(ParsedCommand::Connect { name: name.clone() })
+            let validated = validate_vpn_name(name).map_err(|e| e.to_string())?;
+            if validation::looks_like_injection(&validated) {
+                log::debug!(
+                    "VPN name contains unusual characters: {:?}",
+                    validation::sanitize_for_display(&validated, 50)
+                );
+            }
+            Ok(ParsedCommand::Connect { name: validated })
         }
         "disconnect" => Ok(ParsedCommand::Disconnect),
         "reconnect" => Ok(ParsedCommand::Reconnect),
         "switch" => {
             let name = argv.get(1).ok_or("switch requires a connection name")?;
-            Ok(ParsedCommand::Switch { name: name.clone() })
+            let validated = validate_vpn_name(name).map_err(|e| e.to_string())?;
+            Ok(ParsedCommand::Switch { name: validated })
         }
         "status" => Ok(ParsedCommand::Status),
         "list" | "ls" => Ok(ParsedCommand::List),
@@ -436,121 +454,191 @@ mod security_tests {
     use super::*;
 
     #[test]
-    fn test_vpn_name_sanitization() {
-        // Names with shell metacharacters
-        let dangerous_names = vec![
-            "; rm -rf /",
-            "$(whoami)",
-            "`id`",
-            "| cat /etc/passwd",
-            "&& echo pwned",
-            "test\necho injected",
-            "test\x00hidden",
-        ];
-
-        for name in dangerous_names {
-            let args = vec!["connect".to_string(), name.to_string()];
-            let result = parse_args_from(&args);
-
-            // Should either accept or reject, but never crash
-            match result {
-                Ok(args) => {
-                    if let Some(ParsedCommand::Connect { name: parsed }) = args.command {
-                        println!("Accepted name: {:?}", parsed);
-                    }
-                }
-                Err(e) => {
-                    println!("Rejected with error: {}", e);
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn test_timeout_bounds() {
-        // Very large timeout
+    fn test_timeout_zero_rejected() {
         let args = vec![
             "--timeout".to_string(),
-            "999999999999".to_string(),
+            "0".to_string(),
             "status".to_string(),
         ];
         let result = parse_args_from(&args);
-
-        if let Ok(args) = result {
-            if args.timeout > 3600 {
-                println!(
-                    "WARNING: Large timeout accepted without clamping: {}",
-                    args.timeout
-                );
-            }
-        }
+        assert!(result.is_err(), "Timeout of 0 should be rejected");
+        assert!(result.unwrap_err().contains("at least"));
     }
 
     #[test]
-    fn test_negative_timeout_rejected() {
+    fn test_timeout_negative_rejected() {
         let args = vec![
             "--timeout".to_string(),
-            "-1".to_string(),
+            "-5".to_string(),
             "status".to_string(),
         ];
         let result = parse_args_from(&args);
-
-        // Should either error or default to positive value
-        if let Ok(args) = result {
-            assert!(args.timeout > 0);
-        }
+        assert!(result.is_err(), "Negative timeout should be rejected");
     }
 
     #[test]
-    fn test_log_file_path_traversal() {
-        let traversal_paths = vec![
-            "../../../etc/passwd",
-            "/etc/passwd",
-            "..\\..\\..\\windows\\system32\\config\\sam",
-            "/dev/null",
-            "/proc/self/environ",
+    fn test_timeout_too_large_rejected() {
+        let args = vec![
+            "--timeout".to_string(),
+            "9999999".to_string(),
+            "status".to_string(),
         ];
-
-        for path in traversal_paths {
-            let args = vec![
-                "--log-file".to_string(),
-                path.to_string(),
-                "status".to_string(),
-            ];
-            let result = parse_args_from(&args);
-
-            // Should accept (validation elsewhere) or reject
-            match result {
-                Ok(args) => {
-                    if let Some(log_file) = args.log_file {
-                        println!("Accepted log file: {:?}", log_file);
-                    }
-                }
-                Err(e) => println!("Rejected: {}", e),
-            }
-        }
+        let result = parse_args_from(&args);
+        assert!(result.is_err(), "Huge timeout should be rejected");
+        assert!(result.unwrap_err().contains("at most"));
     }
 
     #[test]
-    fn test_log_level_injection() {
-        let injection_levels = vec!["debug; rm -rf /", "$(whoami)", "trace\nmalicious"];
+    fn test_timeout_valid_accepted() {
+        let args = vec![
+            "--timeout".to_string(),
+            "30".to_string(),
+            "status".to_string(),
+        ];
+        let result = parse_args_from(&args);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().timeout, 30);
+    }
 
-        for level in injection_levels {
+    #[test]
+    fn test_timeout_max_accepted() {
+        let args = vec![
+            "--timeout".to_string(),
+            "3600".to_string(),
+            "status".to_string(),
+        ];
+        let result = parse_args_from(&args);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().timeout, 3600);
+    }
+
+    #[test]
+    fn test_log_level_invalid_rejected() {
+        let args = vec![
+            "--log-level".to_string(),
+            "invalid".to_string(),
+            "status".to_string(),
+        ];
+        let result = parse_args_from(&args);
+        assert!(result.is_err(), "Invalid log level should be rejected");
+        assert!(result.unwrap_err().contains("must be one of"));
+    }
+
+    #[test]
+    fn test_log_level_injection_rejected() {
+        let args = vec![
+            "--log-level".to_string(),
+            "debug; rm -rf /".to_string(),
+            "status".to_string(),
+        ];
+        let result = parse_args_from(&args);
+        assert!(result.is_err(), "Injection attempt should be rejected");
+    }
+
+    #[test]
+    fn test_log_level_valid_accepted() {
+        for level in &["error", "warn", "info", "debug", "trace"] {
             let args = vec![
                 "--log-level".to_string(),
                 level.to_string(),
                 "status".to_string(),
             ];
             let result = parse_args_from(&args);
-
-            if let Ok(args) = result {
-                if let Some(log_level) = args.log_level {
-                    let valid = ["error", "warn", "info", "debug", "trace"];
-                    if !valid.contains(&log_level.to_lowercase().as_str()) {
-                        println!("WARNING: Invalid log level accepted: {}", log_level);
-                    }
-                }
-            }
+            assert!(
+                result.is_ok(),
+                "Valid log level '{}' should be accepted",
+                level
+            );
         }
+    }
+
+    #[test]
+    fn test_log_level_case_insensitive() {
+        let args = vec![
+            "--log-level".to_string(),
+            "DEBUG".to_string(),
+            "status".to_string(),
+        ];
+        let result = parse_args_from(&args);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().log_level.unwrap(), "debug");
+    }
+
+    #[test]
+    fn test_vpn_name_empty_rejected() {
+        let args = vec!["connect".to_string(), "".to_string()];
+        let result = parse_args_from(&args);
+        assert!(result.is_err(), "Empty VPN name should be rejected");
+    }
+
+    #[test]
+    fn test_vpn_name_too_long_rejected() {
+        let long_name = "a".repeat(300);
+        let args = vec!["connect".to_string(), long_name];
+        let result = parse_args_from(&args);
+        assert!(result.is_err(), "Very long VPN name should be rejected");
+    }
+
+    #[test]
+    fn test_vpn_name_null_bytes_rejected() {
+        let args = vec!["connect".to_string(), "vpn\x00hidden".to_string()];
+        let result = parse_args_from(&args);
+        assert!(
+            result.is_err(),
+            "VPN name with null bytes should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_vpn_name_newlines_rejected() {
+        let args = vec!["connect".to_string(), "vpn\ninjected".to_string()];
+        let result = parse_args_from(&args);
+        assert!(result.is_err(), "VPN name with newlines should be rejected");
+    }
+
+    #[test]
+    fn test_vpn_name_shell_chars_allowed() {
+        let args = vec!["connect".to_string(), "$(whoami)".to_string()];
+        let result = parse_args_from(&args);
+        assert!(
+            result.is_ok(),
+            "Shell chars should be allowed (handled safely)"
+        );
+    }
+
+    #[test]
+    fn test_log_path_empty_rejected() {
+        let args = vec![
+            "--log-file".to_string(),
+            "".to_string(),
+            "status".to_string(),
+        ];
+        let result = parse_args_from(&args);
+        assert!(result.is_err(), "Empty log path should be rejected");
+    }
+
+    #[test]
+    fn test_log_path_null_bytes_rejected() {
+        let args = vec![
+            "--log-file".to_string(),
+            "/tmp/log\x00.txt".to_string(),
+            "status".to_string(),
+        ];
+        let result = parse_args_from(&args);
+        assert!(
+            result.is_err(),
+            "Log path with null bytes should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_verbosity_clamped() {
+        let args = vec!["-vvvvvvvvvv".to_string(), "status".to_string()];
+        let result = parse_args_from(&args);
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap().verbose <= 3,
+            "Verbosity should be clamped to 3"
+        );
     }
 }

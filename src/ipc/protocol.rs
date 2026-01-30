@@ -11,6 +11,8 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+use crate::cli::validation::validate_vpn_name;
+
 /// Path to the IPC Unix domain socket.
 ///
 /// Uses XDG_RUNTIME_DIR for proper user isolation.
@@ -137,6 +139,21 @@ pub enum IpcResponse {
 }
 
 impl IpcCommand {
+    /// Validate command contents after deserialization
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            IpcCommand::Connect { name } => {
+                validate_vpn_name(name).map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            IpcCommand::Switch { name } => {
+                validate_vpn_name(name).map_err(|e| e.to_string())?;
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Returns a human-readable description of the command.
     #[allow(dead_code)]
     pub fn description(&self) -> &'static str {
