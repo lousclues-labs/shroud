@@ -11,7 +11,7 @@ homepage = "https://github.com/loujr/shroud"
 documentation = "https://github.com/loujr/shroud#readme"
 keywords = ["vpn", "openvpn", "networkmanager", "linux", "tray"]
 categories = ["command-line-utilities", "network-programming"]
-rust-version = "1.75"
+rust-version = "1.85"
 
 [[bin]]
 name = "shroud"
@@ -36,13 +36,13 @@ ksni = { version = "0.3", features = ["blocking"] }
 
 # Structured logging with RUST_LOG environment variable support
 log = "0.4"
-env_logger = "0.11"
+env_logger = "0.10"
 
 # Desktop notifications via D-Bus
 notify-rust = "4"
 
 # D-Bus for NetworkManager event subscription
-zbus = "3.15"
+zbus = "5"
 
 # Async stream utilities for D-Bus message stream
 futures-lite = "2"

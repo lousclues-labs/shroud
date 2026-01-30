@@ -7,8 +7,8 @@ use futures_lite::StreamExt;
 use log::{debug, error, info, warn};
 use std::collections::HashMap;
 use tokio::sync::mpsc;
+use zbus::message::Message;
 use zbus::Connection;
-use zbus::Message;
 
 /// Events emitted by the NetworkManager monitor
 #[derive(Debug, Clone)]
@@ -121,8 +121,8 @@ impl NmMonitor {
             )
             .await?;
 
-        let body: zbus::zvariant::Value = reply.body::<zbus::zvariant::Value>()?;
-        if let zbus::zvariant::Value::Array(arr) = body {
+        let body = reply.body();
+        if let Ok(zbus::zvariant::Value::Array(arr)) = body.deserialize::<zbus::zvariant::Value>() {
             for path_val in arr.iter() {
                 if let zbus::zvariant::Value::ObjectPath(path) = path_val {
                     if let Ok(name) = self.get_connection_name(connection, path.as_str()).await {
@@ -152,8 +152,8 @@ impl NmMonitor {
             )
             .await?;
 
-        let body: zbus::zvariant::Value = reply.body::<zbus::zvariant::Value>()?;
-        if let zbus::zvariant::Value::Str(s) = body {
+        let body = reply.body();
+        if let Ok(zbus::zvariant::Value::Str(s)) = body.deserialize::<zbus::zvariant::Value>() {
             return Ok(s.to_string());
         }
 
@@ -176,8 +176,8 @@ impl NmMonitor {
             )
             .await?;
 
-        let body: zbus::zvariant::Value = reply.body::<zbus::zvariant::Value>()?;
-        if let zbus::zvariant::Value::Str(s) = body {
+        let body = reply.body();
+        if let Ok(zbus::zvariant::Value::Str(s)) = body.deserialize::<zbus::zvariant::Value>() {
             return Ok(s.as_str() == "vpn");
         }
 
@@ -222,7 +222,8 @@ impl NmMonitor {
         let path = path.ok_or("No path in message")?;
 
         // VpnStateChanged sends (state: u32, reason: u32)
-        let (state, reason): (u32, u32) = msg.body::<(u32, u32)>()?;
+        let body = msg.body();
+        let (state, reason): (u32, u32) = body.deserialize()?;
 
         // Get connection name
         let name = if let Some(cached) = cache.get(path) {
@@ -291,7 +292,8 @@ impl NmMonitor {
         }
 
         // StateChanged sends (state: u32, reason: u32)
-        let (state, _reason): (u32, u32) = msg.body::<(u32, u32)>()?;
+        let body = msg.body();
+        let (state, _reason): (u32, u32) = body.deserialize()?;
 
         // Get connection name
         let name = if let Some(cached) = cache.get(path) {
