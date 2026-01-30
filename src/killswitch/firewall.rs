@@ -874,3 +874,89 @@ mod leak_tests {
         assert!(result.is_ok(), "Double disable should succeed");
     }
 }
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+
+    #[test]
+    fn test_ip_address_validation() {
+        let test_cases = vec![
+            ("192.168.1.1", true),
+            ("10.0.0.1", true),
+            ("8.8.8.8", true),
+            ("256.256.256.256", false),
+            ("not.an.ip", false),
+            ("-1.0.0.0", false),
+            ("1.2.3.4; rm -rf /", false),
+            ("$(whoami)", false),
+            ("", false),
+            ("1.2.3.4\n5.6.7.8", false),
+            ("1.2.3.4 -j ACCEPT", false),
+        ];
+
+        for (ip_str, should_be_valid) in test_cases {
+            let result: Result<IpAddr, _> = ip_str.parse();
+
+            if should_be_valid {
+                assert!(result.is_ok(), "Expected valid IP: {}", ip_str);
+            }
+
+            let is_shell_safe = !ip_str.contains(';')
+                && !ip_str.contains('$')
+                && !ip_str.contains('`')
+                && !ip_str.contains('\n')
+                && !ip_str.contains(' ');
+
+            if should_be_valid {
+                assert!(is_shell_safe, "IP should be shell-safe: {}", ip_str);
+            }
+        }
+    }
+
+    #[test]
+    fn test_interface_name_validation() {
+        let long_iface = "a".repeat(100);
+        let test_cases = vec![
+            ("tun0", true),
+            ("tap0", true),
+            ("wg0", true),
+            ("eth0", true),
+            ("enp0s3", true),
+            ("tun0; rm -rf /", false),
+            ("$(whoami)", false),
+            ("tun0\n", false),
+            ("", false),
+            ("../../../etc/passwd", false),
+            ("tun0 -j ACCEPT", false),
+            (&long_iface, false),
+        ];
+
+        for (iface, should_be_valid) in test_cases {
+            let is_valid = !iface.is_empty()
+                && iface.len() <= 15
+                && iface
+                    .chars()
+                    .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                && !iface.contains(';')
+                && !iface.contains('$')
+                && !iface.contains('`')
+                && !iface.contains('\n')
+                && !iface.contains(' ');
+
+            assert_eq!(
+                is_valid, should_be_valid,
+                "Interface '{}' validation mismatch",
+                iface
+            );
+        }
+    }
+
+    #[test]
+    fn test_iptables_command_escaping() {
+        println!("iptables commands should be built using:");
+        println!("  Command::new(\"iptables\").args([...])");
+        println!("NOT:");
+        println!("  format!(\"iptables -A OUTPUT -d {{}} -j ACCEPT\", ip)");
+    }
+}

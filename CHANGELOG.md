@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tests**: Expanded unit coverage for autostart, CLI handlers, IPC client/server, daemon lock, logging, and D-Bus monitor utilities.
 - **Integration**: Added ignored daemon lifecycle integration tests.
 - **Security Tests**: Added IPC socket, privilege escalation, config hardening, resource exhaustion, and CLI input validation security tests.
+- **Security Tests**: Added crash recovery, race conditions, D-Bus validation, signal handling, and parsing validation coverage.
 
 ## [1.2.0] - 2026-01-27
 

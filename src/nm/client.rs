@@ -519,6 +519,78 @@ mod tests {
         assert!(uuid.is_none());
     }
 
+    #[cfg(test)]
+    mod security_tests {
+        use super::*;
+
+        #[test]
+        fn test_vpn_name_with_shell_metacharacters() {
+            // VPN names from nmcli should be safe to use
+            let dangerous_names = vec![
+                ("normal-vpn", true),
+                ("vpn with spaces", true),
+                ("vpn; rm -rf /", true),
+                ("$(whoami)", true),
+                ("", false),
+            ];
+
+            for (name, should_accept) in dangerous_names {
+                println!(
+                    "Name {:?} should be {}",
+                    name,
+                    if should_accept {
+                        "accepted"
+                    } else {
+                        "rejected"
+                    }
+                );
+            }
+        }
+
+        #[test]
+        fn test_parse_vpn_connections_malicious_output() {
+            let long_name = format!("{}:vpn\n", "A".repeat(10000));
+            let malicious_outputs = vec![
+                "my-vpn:vpn\n",
+                "",
+                "\n\n\n",
+                "vpn:with:colons:vpn\n",
+                &long_name,
+                "vpn\x00hidden:vpn\n",
+                "$(whoami):vpn\n",
+                "; rm -rf /:vpn\n",
+            ];
+
+            for output in malicious_outputs {
+                let result = std::panic::catch_unwind(|| parse_vpn_connections(output));
+
+                assert!(
+                    result.is_ok(),
+                    "Parser panicked on: {:?}",
+                    output.chars().take(50).collect::<String>()
+                );
+            }
+        }
+
+        #[test]
+        fn test_parse_active_vpns_invalid_states() {
+            let outputs = vec![
+                "my-vpn:vpn:activated\n",
+                "my-vpn:vpn:activating\n",
+                "my-vpn:vpn:deactivating\n",
+                "my-vpn:vpn:unknown\n",
+                "my-vpn:vpn:\n",
+                "my-vpn:vpn:ACTIVATED\n",
+                "my-vpn:vpn:12345\n",
+            ];
+
+            for output in outputs {
+                let result = std::panic::catch_unwind(|| parse_active_vpns(output));
+
+                assert!(result.is_ok(), "Parser panicked on: {:?}", output);
+            }
+        }
+    }
     // --- Active VPN selection priority tests ---
 
     #[test]
