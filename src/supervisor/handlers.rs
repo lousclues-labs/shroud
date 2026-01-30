@@ -736,10 +736,11 @@ impl super::VpnSupervisor {
             }
         }
 
-        let exe_path = match std::env::current_exe() {
+        let exe_path = match resolve_restart_path() {
             Ok(path) => path,
-            Err(e) => {
-                error!("Failed to get executable path: {}", e);
+            Err(message) => {
+                error!("{}", message);
+                self.show_notification("Restart Failed", &message);
                 return;
             }
         };
@@ -1253,4 +1254,37 @@ impl super::VpnSupervisor {
 
         let _ = response_tx.send(response).await;
     }
+}
+
+fn resolve_restart_path() -> Result<std::path::PathBuf, String> {
+    let exe_path =
+        std::env::current_exe().map_err(|e| format!("Failed to get executable path: {}", e))?;
+
+    if exe_path.exists() {
+        return Ok(exe_path);
+    }
+
+    let mut candidates = Vec::new();
+
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".local/bin/shroud"));
+        candidates.push(home.join(".cargo/bin/shroud"));
+    }
+
+    if let Ok(path_var) = std::env::var("PATH") {
+        for entry in path_var.split(':') {
+            if entry.is_empty() {
+                continue;
+            }
+            candidates.push(std::path::Path::new(entry).join("shroud"));
+        }
+    }
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return Ok(candidate);
+        }
+    }
+
+    Err("Failed to locate shroud executable to restart".to_string())
 }
