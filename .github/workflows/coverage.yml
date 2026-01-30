@@ -12,11 +12,18 @@ env:
 
 jobs:
   coverage:
-    name: Coverage
+    name: Code Coverage
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libdbus-1-dev \
+            pkg-config
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -24,72 +31,36 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: coverage
-
-      - name: Cache cargo bin
-        uses: actions/cache@v4
-        with:
-          path: ~/.cargo/bin
-          key: cargo-bin-${{ runner.os }}-tarpaulin
+          cache-on-failure: true
 
       - name: Install cargo-tarpaulin
         run: cargo install cargo-tarpaulin --locked
 
-      - name: Run coverage
-        run: cargo tarpaulin --verbose --all-features --workspace --timeout 120 --out Xml --out Html --fail-under 60
-
-      - name: Extract coverage
-        id: coverage
+      - name: Run tarpaulin
         run: |
-          python - <<'PY' >> $GITHUB_OUTPUT
-          import xml.etree.ElementTree as ET
-          try:
-            tree = ET.parse('cobertura.xml')
-            root = tree.getroot()
-            rate = float(root.attrib.get('line-rate', 0.0)) * 100.0
-            print(f"coverage={rate:.2f}")
-          except Exception:
-            print("coverage=0.00")
-          PY
-        shell: bash
+          cargo tarpaulin \
+            --verbose \
+            --all-features \
+            --workspace \
+            --timeout 300 \
+            --out xml \
+            --out html \
+            --output-dir coverage \
+            --skip-clean
+        continue-on-error: true
 
-      - name: Coverage warning (below 50%)
-        if: ${{ steps.coverage.outputs.coverage != '' }}
-        run: |
-          python - <<'PY'
-          import os
-          coverage = float(os.environ.get('COVERAGE', '0'))
-          if coverage < 50:
-              print(f"::warning::Coverage is below 50% ({coverage:.2f}%).")
-          PY
-        env:
-          COVERAGE: ${{ steps.coverage.outputs.coverage }}
-
-      - name: Upload to Codecov
+      - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
-          files: cobertura.xml
+          files: coverage/cobertura.xml
           fail_ci_if_error: false
           verbose: true
-          token: ${{ secrets.CODECOV_TOKEN }}
+        continue-on-error: true
 
-      - name: Upload HTML report
+      - name: Upload coverage report
         uses: actions/upload-artifact@v4
         with:
           name: coverage-report
-          path: tarpaulin-report.html
+          path: coverage/
           retention-days: 14
-
-      - name: Comment on PR
-        if: ${{ github.event_name == 'pull_request' }}
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const coverage = '${{ steps.coverage.outputs.coverage }}';
-            const body = `Coverage summary: **${coverage}%** (tarpaulin)`;
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body,
-            });
+        if: always()

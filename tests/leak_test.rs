@@ -1,3 +1,25 @@
+//! # Security Tests - Privileged Environment Required
+//!
+//! These tests require a privileged environment to run:
+//! - Root/sudo access for iptables manipulation
+//! - NetworkManager running with VPN connections configured
+//! - D-Bus session available
+//!
+//! ## Running Locally
+//!
+//! ```bash
+//! # Run all ignored tests (requires sudo)
+//! sudo -E cargo test -- --ignored
+//!
+//! # Run specific test file
+//! sudo -E cargo test --test security_crash -- --ignored
+//! ```
+//!
+//! ## CI Behavior
+//!
+//! These tests are marked with `#[ignore]` and will NOT run in CI.
+//! They are skipped by `cargo test` unless `--ignored` is passed.
+//!
 //! VPN Leak Tests
 //!
 //! These tests verify the kill switch prevents IP leaks when the VPN fails.
