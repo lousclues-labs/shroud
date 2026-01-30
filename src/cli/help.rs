@@ -26,6 +26,7 @@ COMMANDS:
     switch <NAME>        Switch to a different VPN (atomic)
     status               Show current status
     list                 List available VPN connections
+    import               Import VPN config (WireGuard/OpenVPN)
     killswitch           Manage kill switch (on/off/toggle/status)
     auto-reconnect       Manage auto-reconnect (on/off/toggle/status)
     autostart            Manage autostart on login (on/off/toggle/status)
@@ -48,6 +49,7 @@ EXAMPLES:
     shroud status --json            Show status in JSON format
     shroud killswitch on            Enable the kill switch
     shroud list                     List available VPN connections
+    shroud import ~/vpn.conf         Import a VPN config file
     shroud debug tail               Follow the debug log file
     shroud autostart on             Enable autostart on login
     shroud autostart status         Check autostart status
@@ -148,19 +150,48 @@ USAGE:
     shroud list [OPTIONS]
 
 OPTIONS:
-    --json    Output in JSON format
+    --type <TYPE>   Filter by type: wireguard, openvpn, or all
+    --json          Output in JSON format
 
 ALIASES:
     ls
 
 OUTPUT (human-readable):
-    Available VPN connections:
-        ireland-42
-        ireland-15
-      * us-east-1 (current)
+    NAME                 TYPE        STATUS
+    ireland-42            openvpn     available
+    mullvad-us1           wireguard   connected
 
 OUTPUT (JSON):
-    {{"connections":["ireland-42","ireland-15","us-east-1"],"current":"us-east-1"}}"#
+    {{"connections":[{{"name":"ireland-42","vpn_type":"openvpn","status":"available"}}]}}"#
+        ),
+
+        "import" => println!(
+            r#"Import VPN config files
+
+USAGE:
+    shroud import <PATH> [OPTIONS]
+
+ARGS:
+    <PATH>    File or directory path to import
+
+OPTIONS:
+    -n, --name <NAME>     Custom connection name (single file only)
+    -c, --connect         Connect immediately after successful import
+    -f, --force           Overwrite existing connection with same name
+    -r, --recursive       Recurse into subdirectories when importing directory
+    --dry-run             Show what would be imported without importing
+    --type <TYPE>         Force config type: wireguard or openvpn
+    -q, --quiet           Suppress output except errors
+    --json                Output results as JSON
+
+EXAMPLES:
+    shroud import ~/mullvad-us1.conf
+    shroud import ~/corporate.ovpn --name "Work VPN"
+    shroud import ~/vpn.conf --connect
+    shroud import ~/vpn-configs/
+    shroud import ~/configs/ --dry-run
+    shroud import ~/vpn.conf --force
+    shroud import ~/configs/ --json"#
         ),
 
         "killswitch" | "kill-switch" | "ks" => println!(

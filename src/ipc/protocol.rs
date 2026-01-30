@@ -53,7 +53,10 @@ pub enum IpcCommand {
     Status,
 
     /// List available VPN connections.
-    List,
+    List {
+        /// Optional VPN type filter (wireguard/openvpn/all)
+        vpn_type: Option<String>,
+    },
 
     /// Reconnect to the last used VPN.
     Reconnect,
@@ -110,6 +113,8 @@ pub enum IpcResponse {
         connected: bool,
         /// Name of connected VPN (if any)
         vpn_name: Option<String>,
+        /// VPN type (wireguard/openvpn) if connected
+        vpn_type: Option<String>,
         /// Current state description
         state: String,
         /// Kill switch status
@@ -118,8 +123,8 @@ pub enum IpcResponse {
 
     /// List of available VPN connections.
     Connections {
-        /// Names of available VPN connections
-        names: Vec<String>,
+        /// VPN connection entries
+        connections: Vec<VpnConnectionInfo>,
     },
 
     /// Kill switch status
@@ -150,6 +155,15 @@ impl IpcCommand {
                 validate_vpn_name(name).map_err(|e| e.to_string())?;
                 Ok(())
             }
+            IpcCommand::List { vpn_type } => {
+                if let Some(value) = vpn_type {
+                    let normalized = value.to_lowercase();
+                    if normalized != "wireguard" && normalized != "openvpn" {
+                        return Err("Invalid VPN type filter".to_string());
+                    }
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }
@@ -162,7 +176,7 @@ impl IpcCommand {
             IpcCommand::Disconnect => "disconnect from VPN",
             IpcCommand::Switch { .. } => "switch VPN",
             IpcCommand::Status => "query status",
-            IpcCommand::List => "list connections",
+            IpcCommand::List { .. } => "list connections",
             IpcCommand::Reconnect => "reconnect to last VPN",
             IpcCommand::KillSwitch { enable: true } => "enable kill switch",
             IpcCommand::KillSwitch { enable: false } => "disable kill switch",
@@ -199,6 +213,14 @@ impl IpcResponse {
             _ => None,
         }
     }
+}
+
+/// VPN connection info for list responses
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct VpnConnectionInfo {
+    pub name: String,
+    pub vpn_type: String,
+    pub status: String,
 }
 
 #[cfg(test)]

@@ -12,7 +12,9 @@ use crate::nm::{
     connect as nm_connect, disconnect as nm_disconnect,
     get_active_vpn_with_state as nm_get_active_vpn_with_state,
     get_all_active_vpns as nm_get_all_active_vpns, get_vpn_state as nm_get_vpn_state,
-    kill_orphan_openvpn_processes, list_vpn_connections as nm_list_vpn_connections,
+    get_vpn_type as nm_get_vpn_type, kill_orphan_openvpn_processes,
+    list_vpn_connections as nm_list_vpn_connections,
+    list_vpn_connections_with_types as nm_list_vpn_connections_with_types,
 };
 use crate::state::{Event, NmVpnState, TransitionReason, VpnState};
 
@@ -983,17 +985,47 @@ impl super::VpnSupervisor {
         let response = match cmd {
             IpcCommand::Status => {
                 let state = self.shared_state.read().await;
+                let vpn_type = if let Some(name) = state.state.server_name() {
+                    Some(nm_get_vpn_type(name).await.to_string())
+                } else {
+                    None
+                };
                 IpcResponse::Status {
                     connected: state.state.server_name().is_some(),
                     vpn_name: state.state.server_name().map(|s| s.to_string()),
+                    vpn_type,
                     state: state.state.name().to_string(),
                     kill_switch_enabled: state.kill_switch,
                 }
             }
-            IpcCommand::List => {
-                let state = self.shared_state.read().await;
+            IpcCommand::List { vpn_type } => {
+                let active = nm_get_all_active_vpns().await;
+                let connections = nm_list_vpn_connections_with_types().await;
+                let mut entries = Vec::new();
+
+                for conn in connections {
+                    let type_str = conn.vpn_type.to_string();
+                    if let Some(filter) = vpn_type.as_deref() {
+                        if filter != type_str {
+                            continue;
+                        }
+                    }
+
+                    let status = if active.iter().any(|a| a.name == conn.name) {
+                        "connected"
+                    } else {
+                        "available"
+                    };
+
+                    entries.push(crate::ipc::protocol::VpnConnectionInfo {
+                        name: conn.name,
+                        vpn_type: type_str,
+                        status: status.to_string(),
+                    });
+                }
+
                 IpcResponse::Connections {
-                    names: state.connections.clone(),
+                    connections: entries,
                 }
             }
             IpcCommand::Connect { name } => {

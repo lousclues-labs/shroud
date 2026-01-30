@@ -9,6 +9,8 @@ use super::validation::{
     self, validate_log_level, validate_log_path, validate_timeout, validate_verbosity,
     validate_vpn_name,
 };
+use crate::import::ImportOptions;
+use crate::import::VpnConfigType;
 
 /// Parsed command-line arguments
 #[derive(Debug, Clone)]
@@ -49,29 +51,49 @@ impl Default for Args {
 #[derive(Debug, Clone)]
 pub enum ParsedCommand {
     // Connection management
-    Connect { name: String },
+    Connect {
+        name: String,
+    },
     Disconnect,
     Reconnect,
-    Switch { name: String },
+    Switch {
+        name: String,
+    },
 
     // Status and information
     Status,
-    List,
+    List {
+        vpn_type: Option<String>,
+        json: bool,
+    },
+
+    // Import configs
+    Import {
+        options: ImportOptions,
+    },
 
     // Kill switch
-    KillSwitch { action: ToggleAction },
+    KillSwitch {
+        action: ToggleAction,
+    },
 
     // Auto-reconnect
-    AutoReconnect { action: ToggleAction },
+    AutoReconnect {
+        action: ToggleAction,
+    },
 
     // Autostart
-    Autostart { action: ToggleAction },
+    Autostart {
+        action: ToggleAction,
+    },
 
     // Cleanup
     Cleanup,
 
     // Debug
-    Debug { action: DebugAction },
+    Debug {
+        action: DebugAction,
+    },
 
     // Daemon control
     Ping,
@@ -79,14 +101,21 @@ pub enum ParsedCommand {
     Quit,
     Restart,
     Reload,
-    Update { yes: bool, debug: bool },
-    Version { check: bool },
+    Update {
+        yes: bool,
+        debug: bool,
+    },
+    Version {
+        check: bool,
+    },
 
     // Development/maintenance
     Audit,
 
     // Help
-    Help { command: Option<String> },
+    Help {
+        command: Option<String>,
+    },
 }
 
 /// Action for toggle commands (killswitch, auto-reconnect)
@@ -225,7 +254,7 @@ fn parse_command(argv: &[String]) -> Result<ParsedCommand, String> {
             Ok(ParsedCommand::Switch { name: validated })
         }
         "status" => Ok(ParsedCommand::Status),
-        "list" | "ls" => Ok(ParsedCommand::List),
+        "list" | "ls" => parse_list_flags(&argv[1..]),
         "killswitch" | "kill-switch" | "ks" => {
             let action = parse_toggle_action(argv.get(1).map(|s| s.as_str()))?;
             Ok(ParsedCommand::KillSwitch { action })
@@ -248,6 +277,7 @@ fn parse_command(argv: &[String]) -> Result<ParsedCommand, String> {
         "quit" | "stop" | "exit" => Ok(ParsedCommand::Quit),
         "restart" => Ok(ParsedCommand::Restart),
         "reload" => Ok(ParsedCommand::Reload),
+        "import" => parse_import_args(&argv[1..]),
         "audit" => Ok(ParsedCommand::Audit),
         "update" => parse_update_flags(&argv[1..]),
         "version" => parse_version_flags(&argv[1..]),
@@ -319,6 +349,134 @@ fn parse_debug_action(arg: Option<&str>) -> Result<DebugAction, String> {
         None => Err("debug requires an action: on/off/log-path/tail/dump".to_string()),
         Some(other) => Err(format!("Unknown debug action: '{}'", other)),
     }
+}
+
+fn parse_list_flags(argv: &[String]) -> Result<ParsedCommand, String> {
+    let mut vpn_type: Option<String> = None;
+    let mut json = false;
+    let mut i = 0;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "--type" => {
+                i += 1;
+                let value = argv.get(i).ok_or("--type requires a value")?;
+                let normalized = value.to_lowercase();
+                match normalized.as_str() {
+                    "wireguard" | "openvpn" => {
+                        vpn_type = Some(normalized);
+                    }
+                    "all" => {
+                        vpn_type = None;
+                    }
+                    other => {
+                        return Err(format!(
+                            "Unknown VPN type: '{}'. Use wireguard, openvpn, or all",
+                            other
+                        ));
+                    }
+                }
+            }
+            "--json" => {
+                json = true;
+            }
+            other => {
+                return Err(format!(
+                    "Unknown list option: '{}'. Use --type <wireguard|openvpn|all>",
+                    other
+                ));
+            }
+        }
+        i += 1;
+    }
+
+    Ok(ParsedCommand::List { vpn_type, json })
+}
+
+fn parse_import_args(argv: &[String]) -> Result<ParsedCommand, String> {
+    if argv.is_empty() {
+        return Err("import requires a file or directory path".to_string());
+    }
+
+    let mut path: Option<PathBuf> = None;
+    let mut name: Option<String> = None;
+    let mut connect = false;
+    let mut force = false;
+    let mut recursive = false;
+    let mut dry_run = false;
+    let mut config_type: Option<VpnConfigType> = None;
+    let mut quiet = false;
+    let mut json = false;
+
+    let mut i = 0;
+    while i < argv.len() {
+        match argv[i].as_str() {
+            "-n" | "--name" => {
+                i += 1;
+                let value = argv.get(i).ok_or("--name requires a value")?;
+                let validated = validate_vpn_name(value).map_err(|e| e.to_string())?;
+                name = Some(validated);
+            }
+            "-c" | "--connect" => {
+                connect = true;
+            }
+            "-f" | "--force" => {
+                force = true;
+            }
+            "-r" | "--recursive" => {
+                recursive = true;
+            }
+            "--dry-run" => {
+                dry_run = true;
+            }
+            "--type" => {
+                i += 1;
+                let value = argv.get(i).ok_or("--type requires a value")?;
+                let normalized = value.to_lowercase();
+                config_type = match normalized.as_str() {
+                    "wireguard" => Some(VpnConfigType::WireGuard),
+                    "openvpn" => Some(VpnConfigType::OpenVpn),
+                    other => {
+                        return Err(format!(
+                            "Unknown import type: '{}'. Use wireguard or openvpn",
+                            other
+                        ));
+                    }
+                };
+            }
+            "-q" | "--quiet" => {
+                quiet = true;
+            }
+            "--json" => {
+                json = true;
+            }
+            value if !value.starts_with('-') => {
+                if path.is_some() {
+                    return Err("import accepts only one path".to_string());
+                }
+                path = Some(PathBuf::from(value));
+            }
+            other => {
+                return Err(format!("Unknown import option: '{}'", other));
+            }
+        }
+        i += 1;
+    }
+
+    let path = path.ok_or("import requires a file or directory path")?;
+
+    Ok(ParsedCommand::Import {
+        options: ImportOptions {
+            path,
+            name,
+            connect,
+            force,
+            recursive,
+            dry_run,
+            config_type,
+            quiet,
+            json,
+        },
+    })
 }
 
 #[cfg(test)]
@@ -449,7 +607,43 @@ mod tests {
     #[test]
     fn test_list_alias() {
         let result = parse_args_from(&args("ls")).unwrap();
-        assert!(matches!(result.command, Some(ParsedCommand::List)));
+        assert!(matches!(
+            result.command,
+            Some(ParsedCommand::List {
+                vpn_type: None,
+                json: false
+            })
+        ));
+    }
+
+    #[test]
+    fn test_list_with_type_filter() {
+        let result = parse_args_from(&args("list --type wireguard")).unwrap();
+        assert!(matches!(
+            result.command,
+            Some(ParsedCommand::List {
+                vpn_type: Some(t),
+                json: false
+            }) if t == "wireguard"
+        ));
+    }
+
+    #[test]
+    fn test_list_json_flag() {
+        let result = parse_args_from(&args("list --json")).unwrap();
+        assert!(matches!(
+            result.command,
+            Some(ParsedCommand::List {
+                vpn_type: None,
+                json: true
+            })
+        ));
+    }
+
+    #[test]
+    fn test_import_command() {
+        let result = parse_args_from(&args("import /tmp/vpn.conf --dry-run")).unwrap();
+        assert!(matches!(result.command, Some(ParsedCommand::Import { .. })));
     }
 
     #[test]

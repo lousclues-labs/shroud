@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **WireGuard**: NetworkManager-based WireGuard connection support and type detection.
+- **Import Helper**: `shroud import` for WireGuard/OpenVPN config files, including bulk directory import.
+- **Status/List**: VPN type and status shown in list output, with type filtering.
 - **Tests**: Expanded unit coverage for autostart, CLI handlers, IPC client/server, daemon lock, logging, and D-Bus monitor utilities.
 - **Integration**: Added ignored daemon lifecycle integration tests.
 - **Security Tests**: Added IPC socket, privilege escalation, config hardening, resource exhaustion, and CLI input validation security tests.

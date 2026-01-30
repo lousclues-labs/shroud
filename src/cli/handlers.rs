@@ -9,6 +9,7 @@ use std::path::PathBuf;
 
 use super::args::{Args, DebugAction, ParsedCommand, ToggleAction};
 use super::help;
+use super::import as import_command;
 use crate::ipc::client::{send_command, ClientError};
 use crate::ipc::protocol::{IpcCommand, IpcResponse};
 use crate::logging;
@@ -42,6 +43,16 @@ pub async fn run_client_mode(args: &Args) -> i32 {
         }
         ParsedCommand::Audit => {
             return handle_audit_command();
+        }
+        ParsedCommand::Import { options } => {
+            let mut merged = options.clone();
+            if args.json_output {
+                merged.json = true;
+            }
+            if args.quiet {
+                merged.quiet = true;
+            }
+            return import_command::execute(merged).await;
         }
         ParsedCommand::Help { command: Some(cmd) } => {
             help::print_command_help(cmd);
@@ -83,6 +94,11 @@ pub async fn run_client_mode(args: &Args) -> i32 {
 
     info!("Sending command: {:?}", ipc_command);
 
+    let mut args_override = args.clone();
+    if let ParsedCommand::List { json: true, .. } = command {
+        args_override.json_output = true;
+    }
+
     match command {
         ParsedCommand::Restart => match send_command(ipc_command).await {
             Ok(IpcResponse::OkMessage { message }) => {
@@ -117,7 +133,7 @@ pub async fn run_client_mode(args: &Args) -> i32 {
             }
         },
         _ => match send_command(ipc_command).await {
-            Ok(response) => handle_response(response, args),
+            Ok(response) => handle_response(response, &args_override),
             Err(e) => {
                 match e {
                     ClientError::DaemonNotRunning => {
@@ -144,7 +160,9 @@ fn args_to_command(cmd: &ParsedCommand) -> Option<IpcCommand> {
         ParsedCommand::Reconnect => Some(IpcCommand::Reconnect),
         ParsedCommand::Switch { name } => Some(IpcCommand::Switch { name: name.clone() }),
         ParsedCommand::Status => Some(IpcCommand::Status),
-        ParsedCommand::List => Some(IpcCommand::List),
+        ParsedCommand::List { vpn_type, .. } => Some(IpcCommand::List {
+            vpn_type: vpn_type.clone(),
+        }),
 
         ParsedCommand::KillSwitch { action } => match action {
             ToggleAction::On => Some(IpcCommand::KillSwitch { enable: true }),
@@ -179,6 +197,7 @@ fn args_to_command(cmd: &ParsedCommand) -> Option<IpcCommand> {
         ParsedCommand::Update { .. } => None,
         ParsedCommand::Version { .. } => None,
         ParsedCommand::Audit => None,
+        ParsedCommand::Import { .. } => None,
 
         ParsedCommand::Help { .. } => None, // Handled locally
     }
@@ -266,6 +285,7 @@ fn handle_response(response: IpcResponse, args: &Args) -> i32 {
         IpcResponse::Status {
             connected,
             vpn_name,
+            vpn_type,
             state,
             kill_switch_enabled,
         } => {
@@ -275,6 +295,9 @@ fn handle_response(response: IpcResponse, args: &Args) -> i32 {
                     "Connected to: {}",
                     vpn_name.unwrap_or_else(|| "unknown".to_string())
                 );
+                if let Some(vpn_type) = vpn_type {
+                    println!("Type: {}", vpn_type);
+                }
             } else {
                 println!("Not connected");
             }
@@ -288,10 +311,14 @@ fn handle_response(response: IpcResponse, args: &Args) -> i32 {
             );
             0
         }
-        IpcResponse::Connections { names } => {
+        IpcResponse::Connections { connections } => {
             println!("Available VPN connections:");
-            for name in names {
-                println!("  - {}", name);
+            println!("  {:<20} {:<10} {:<10}", "NAME", "TYPE", "STATUS");
+            for entry in connections {
+                println!(
+                    "  {:<20} {:<10} {:<10}",
+                    entry.name, entry.vpn_type, entry.status
+                );
             }
             0
         }

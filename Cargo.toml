@@ -1,6 +1,6 @@
 [package]
 name = "shroud"
-version = "1.5.1"
+version = "1.6.0"
 edition = "2021"
 authors = ["loujr"]
 description = "A provider-agnostic VPN connection manager for Linux with kill switch, auto-reconnect, and system tray integration"

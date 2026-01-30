@@ -34,6 +34,7 @@ mod config;
 mod daemon;
 mod dbus;
 mod health;
+mod import;
 mod ipc;
 mod killswitch;
 mod logging;

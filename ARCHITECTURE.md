@@ -77,6 +77,12 @@ src/
 ├── health/
 │   ├── mod.rs        # Module exports
 │   └── checker.rs    # HealthChecker, HTTP/ping connectivity tests
+├── import/
+│   ├── mod.rs         # Import module exports
+│   ├── detector.rs    # Config type detection (WireGuard/OpenVPN)
+│   ├── validator.rs   # Config validation
+│   ├── importer.rs    # nmcli import wrapper + bulk import
+│   └── types.rs       # Import options and JSON types
 ├── ipc/
 │   ├── mod.rs        # Module exports
 │   ├── protocol.rs   # IPC types (IpcCommand, IpcResponse)
@@ -87,7 +93,8 @@ src/
 │   └── firewall.rs   # KillSwitch, iptables rule generation
 ├── nm/
 │   ├── mod.rs        # Module exports
-│   └── client.rs     # nmcli wrappers (connect, disconnect, list)
+│   ├── client.rs     # nmcli wrappers (connect, disconnect, list)
+│   └── connections.rs # VPN type detection (wireguard/openvpn)
 ├── state/
 │   ├── mod.rs        # Module exports
 │   ├── machine.rs    # StateMachine, event handling, transitions
@@ -139,6 +146,19 @@ Errors are propagated up to the `VpnSupervisor` or CLI handlers, where they are 
                                    ┌──────────────┐
                                    │    nmcli     │
                                    └──────────────┘
+
+### Import Flow (Config → NetworkManager)
+
+```
+┌────────────┐     Config Path      ┌──────────────┐     nmcli import     ┌──────────────┐
+│    CLI     │ ───────────────────► │ Import Module│ ───────────────────► │ NetworkManager│
+│ shroud import│   (file/dir)       │ detector/    │   (wireguard/openvpn)│  connections  │
+└────────────┘                       │ validator    │                      └──────────────┘
+```
+
+- Auto-detects WireGuard vs OpenVPN by extension + content
+- Validates required fields before import
+- Supports bulk directory imports (optional recursion)
 ```
 
 ### Event Flow (NetworkManager → Supervisor)

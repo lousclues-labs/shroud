@@ -76,7 +76,7 @@ fn parse_active_vpns(stdout: &str) -> Vec<ActiveVpnInfo> {
             let conn_type = parts[1];
             let name = parts[2];
 
-            if conn_type == "vpn" {
+            if conn_type == "vpn" || conn_type == "wireguard" {
                 if let Some(state) = match state_str {
                     "activated" => Some(NmVpnState::Activated),
                     "activating" => Some(NmVpnState::Activating),
@@ -100,7 +100,7 @@ fn parse_vpn_connections(stdout: &str) -> Vec<String> {
     let mut connections = Vec::new();
     for line in stdout.lines() {
         let parts: Vec<&str> = line.rsplitn(2, ':').collect();
-        if parts.len() >= 2 && parts[0] == "vpn" {
+        if parts.len() >= 2 && (parts[0] == "vpn" || parts[0] == "wireguard") {
             connections.push(parts[1].to_string());
         }
     }
@@ -112,7 +112,10 @@ fn parse_vpn_uuid(stdout: &str, connection_name: &str) -> Option<String> {
     for line in stdout.lines() {
         // Format: UUID:NAME:TYPE - split from right to handle names with colons
         let parts: Vec<&str> = line.rsplitn(3, ':').collect();
-        if parts.len() >= 3 && parts[0] == "vpn" && parts[1] == connection_name {
+        if parts.len() >= 3
+            && (parts[0] == "vpn" || parts[0] == "wireguard")
+            && parts[1] == connection_name
+        {
             return Some(parts[2].to_string());
         }
     }
@@ -418,9 +421,10 @@ mod tests {
 
     #[test]
     fn test_parse_active_vpns() {
-        let output = "my-vpn:vpn:activated\nwifi:802-11-wireless:activated\n";
+        let output =
+            "my-vpn:vpn:activated\nwg-us:wireguard:activated\nwifi:802-11-wireless:activated\n";
         let vpns = parse_active_vpns(output);
-        assert_eq!(vpns.len(), 1);
+        assert_eq!(vpns.len(), 2);
         assert_eq!(vpns[0].name, "my-vpn");
         assert_eq!(vpns[0].state, NmVpnState::Activated);
     }
@@ -436,7 +440,7 @@ mod tests {
 
     #[test]
     fn test_parse_active_vpns_multiple() {
-        let output = "vpn1:vpn:activated\nvpn2:vpn:deactivating\n";
+        let output = "vpn1:vpn:activated\nwg1:wireguard:deactivating\n";
         let vpns = parse_active_vpns(output);
         assert_eq!(vpns.len(), 2);
     }
@@ -445,16 +449,19 @@ mod tests {
 
     #[test]
     fn test_parse_vpn_connections_basic() {
-        let output = "my-vpn:vpn\nwifi:802-11-wireless\nwork-vpn:vpn\n";
+        let output = "my-vpn:vpn\nwg-us:wireguard\nwifi:802-11-wireless\nwork-vpn:vpn\n";
         let connections = parse_vpn_connections(output);
-        assert_eq!(connections, vec!["my-vpn", "work-vpn"]);
+        assert_eq!(connections, vec!["my-vpn", "wg-us", "work-vpn"]);
     }
 
     #[test]
     fn test_parse_vpn_connections_with_colons_in_name() {
-        let output = "vpn:server:east:vpn\nregular-vpn:vpn\n";
+        let output = "vpn:server:east:vpn\nwg:server:wireguard\nregular-vpn:vpn\n";
         let connections = parse_vpn_connections(output);
-        assert_eq!(connections, vec!["vpn:server:east", "regular-vpn"]);
+        assert_eq!(
+            connections,
+            vec!["vpn:server:east", "wg:server", "regular-vpn"]
+        );
     }
 
     #[test]

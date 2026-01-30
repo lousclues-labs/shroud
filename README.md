@@ -159,6 +159,32 @@ shroud --version
 
 ## Importing VPN Configs
 
+Shroud can import WireGuard and OpenVPN config files directly:
+
+```bash
+# Import a single config
+shroud import ~/mullvad-us1.conf
+
+# Import with custom name
+shroud import ~/vpn.ovpn --name "Work VPN"
+
+# Import all configs from a directory
+shroud import ~/vpn-configs/
+
+# Preview what would be imported
+shroud import ~/configs/ --dry-run
+
+# Import and connect immediately
+shroud import ~/vpn.conf --connect
+```
+
+Supported formats:
+
+- WireGuard: .conf files with [Interface] and [Peer] sections
+- OpenVPN: .ovpn files
+
+You can still import via nmcli if you prefer:
+
 Before using Shroud, import your `.ovpn` files into NetworkManager:
 
 ```bash
@@ -212,6 +238,13 @@ shroud status                   # Show current status
 shroud status --json            # JSON output for scripting
 shroud list                     # List available VPN connections
 shroud ls --json                # List as JSON
+
+# Import configs
+shroud import ~/mullvad-us1.conf           # Import WireGuard config
+shroud import ~/corporate.ovpn --name "Work VPN"  # Import OpenVPN config
+shroud import ~/vpn-configs/               # Import all configs in a directory
+shroud import ~/configs/ --dry-run         # Preview what would be imported
+shroud import ~/vpn.conf --connect         # Import and connect
 
 # Kill switch control
 shroud killswitch on            # Enable kill switch
