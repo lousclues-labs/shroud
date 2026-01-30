@@ -4,7 +4,7 @@
 [![Security Audit](https://github.com/loujr/shroud/actions/workflows/security.yml/badge.svg)](https://github.com/loujr/shroud/actions/workflows/security.yml)
 [![codecov](https://codecov.io/gh/loujr/shroud/graph/badge.svg)](https://codecov.io/gh/loujr/shroud)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-orange.svg)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.74%2B-orange.svg)](https://www.rust-lang.org/)
 
 **A provider-agnostic VPN connection manager for Linux.**
 

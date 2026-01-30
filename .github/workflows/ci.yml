@@ -110,7 +110,7 @@ jobs:
       - name: Install Rust MSRV
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.70"
+          toolchain: "1.74"
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2

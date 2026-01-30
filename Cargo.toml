@@ -11,7 +11,7 @@ homepage = "https://github.com/loujr/shroud"
 documentation = "https://github.com/loujr/shroud#readme"
 keywords = ["vpn", "openvpn", "networkmanager", "linux", "tray"]
 categories = ["command-line-utilities", "network-programming"]
-rust-version = "1.70"
+rust-version = "1.74"
 
 [[bin]]
 name = "shroud"
