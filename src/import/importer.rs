@@ -241,9 +241,10 @@ pub async fn import_directory(
 mod tests {
     use super::*;
     use std::io::Write;
-    use std::sync::Mutex;
+    use std::sync::OnceLock;
+    use tokio::sync::Mutex;
 
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
     fn write_temp(contents: &str, ext: &str) -> tempfile::NamedTempFile {
         let mut file = tempfile::Builder::new().suffix(ext).tempfile().unwrap();
@@ -273,7 +274,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_connection_exists() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let lock = ENV_LOCK.get_or_init(|| Mutex::new(()));
+        let _guard = lock.lock().await;
         let stub = make_nmcli_stub("demo-vpn");
         std::env::set_var("SHROUD_NMCLI", stub.path());
         assert!(connection_exists("demo-vpn").await);
@@ -283,7 +285,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_import_file_with_force() {
-        let _lock = ENV_LOCK.lock().unwrap();
+        let lock = ENV_LOCK.get_or_init(|| Mutex::new(()));
+        let _guard = lock.lock().await;
         let stub = make_nmcli_stub("");
         std::env::set_var("SHROUD_NMCLI", stub.path());
 
