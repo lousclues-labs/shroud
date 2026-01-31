@@ -41,7 +41,7 @@ impl super::VpnSupervisor {
         let max_attempts = self.machine.max_retries();
 
         // NOTE: Kill switch stays enabled - VPN server IPs are already whitelisted
-        // No need to disable/re-enable which would require pkexec prompts
+        // No need to disable/re-enable which would require sudo prompts
 
         let mut reconnect_succeeded = false;
 

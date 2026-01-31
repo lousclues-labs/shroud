@@ -7,15 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Kill Switch**: Replace `pkexec` with `sudo` for privilege escalation to avoid session-type polkit failures.
+
 ## [1.6.5] - 2026-01-31
 
 ### Added
-- **Polkit**: Passwordless kill switch policy for active desktop sessions.
+- **Sudoers**: Passwordless kill switch rule for reliable sudo-based escalation.
 - **Setup**: `--install-polkit` and `--uninstall-polkit` options in `setup.sh`.
 - **Cleanup**: Dedicated kill switch cleanup module with timeout-based cleanup.
 
 ### Changed
-- **Kill Switch**: Execute rule changes via polkit-friendly per-command `pkexec`.
+- **Kill Switch**: Execute rule changes via `sudo` for consistent privilege escalation.
 - **Shutdown**: Non-blocking cleanup with clear user notification on failure.
 - **Startup**: Stale rule detection and cleanup on launch.
 

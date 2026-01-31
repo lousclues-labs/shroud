@@ -25,7 +25,7 @@
 //! Verifies that privileged operations cannot be abused:
 //! - iptables command injection
 //! - VPN server IP validation
-//! - pkexec/sudo command sanitization
+//! - sudo command sanitization
 //!
 //! ## Running These Tests
 //! Most tests in this file require root privileges and are marked with `#[ignore]`.

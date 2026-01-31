@@ -20,7 +20,11 @@
 #   -v, --verbose   Show detailed output
 #   -q, --quiet     Minimal output
 
-Polkit Options:
+Sudoers Options:
+    --install-sudoers    Install sudoers rule for passwordless kill switch
+    --uninstall-sudoers  Remove sudoers rule
+
+Polkit Options (legacy):
     --install-polkit     Install polkit policy for passwordless kill switch
     --uninstall-polkit   Remove polkit policy
 #
@@ -46,6 +50,8 @@ APPLICATIONS_DIR="$HOME/.local/share/applications"
 BASH_COMPLETIONS_DIR="$HOME/.local/share/bash-completion/completions"
 ZSH_COMPLETIONS_DIR="$HOME/.local/share/zsh/site-functions"
 FISH_COMPLETIONS_DIR="$HOME/.config/fish/completions"
+SUDOERS_SRC="assets/sudoers.d/shroud"
+SUDOERS_DEST="/etc/sudoers.d/shroud"
 POLKIT_ACTIONS_DIR="/usr/share/polkit-1/actions"
 POLKIT_POLICY_SRC="assets/com.shroud.killswitch.policy"
 POLKIT_POLICY_DEST="$POLKIT_ACTIONS_DIR/com.shroud.killswitch.policy"
@@ -329,11 +335,11 @@ check_all_dependencies() {
     echo -e "${BOLD}Required dependencies:${NC}"
     
     check_command "cargo" || missing+=("rust")
+    check_command "sudo" || missing+=("sudo")
     check_dependency "networkmanager" "nmcli" || missing+=("networkmanager")
     check_dependency "networkmanager-openvpn" || missing+=("networkmanager-openvpn")
     check_dependency "openvpn" "openvpn" || missing+=("openvpn")
     check_dependency "iptables" "iptables" || missing+=("iptables")
-    check_dependency "polkit" "pkexec" || missing+=("polkit")
     check_dependency "dbus" "dbus-daemon" || missing+=("dbus")
     
     echo
@@ -450,7 +456,7 @@ install_dependencies() {
     info "Installing dependencies..."
     
     local packages=()
-    for dep in rust networkmanager networkmanager-openvpn openvpn iptables polkit dbus libappindicator; do
+    for dep in rust networkmanager networkmanager-openvpn openvpn iptables dbus libappindicator; do
         local pkg
         pkg=$(get_package_name "$dep")
         if [ -n "$pkg" ]; then
@@ -896,46 +902,94 @@ EOF
     success "Shell completions installed"
 }
 
-install_polkit_policy() {
+check_sudoers_installed() {
+    [[ -f "$SUDOERS_DEST" ]]
+}
+
+install_sudoers() {
     echo ""
     echo "┌─────────────────────────────────────────────────────────────────┐"
-    echo "│              POLKIT POLICY FOR KILL SWITCH                      │"
+    echo "│           PASSWORDLESS KILL SWITCH CONFIGURATION                │"
     echo "└─────────────────────────────────────────────────────────────────┘"
     echo ""
     echo "  Shroud's kill switch needs root privileges to manage firewall"
-    echo "  rules. Installing the polkit policy allows passwordless operation"
-    echo "  for active desktop sessions, while still requiring authentication"
-    echo "  for remote/SSH sessions."
+    echo "  rules (iptables/ip6tables). Installing a sudoers rule allows"
+    echo "  passwordless operation in any session type."
     echo ""
-    echo "  POLICY FILE:"
-    echo "    $POLKIT_POLICY_DEST"
+    echo "  FILE LOCATION:"
+    echo "    $SUDOERS_DEST"
+    echo ""
+    echo "  TO REMOVE:"
+    echo "    sudo rm $SUDOERS_DEST"
     echo ""
 
     if [ "$FORCE" != "true" ]; then
-        if ! confirm "Install polkit policy for passwordless kill switch?" "y"; then
-            info "Skipped polkit policy installation"
+        if ! confirm "Install sudoers rule for passwordless kill switch?" "y"; then
+            info "Skipped sudoers installation"
             return 0
         fi
     fi
 
+    do_install_sudoers
+}
+
+do_install_sudoers() {
     if [ "$DRY_RUN" = "true" ]; then
-        echo -e "${DIM}[DRY-RUN] Would install: $POLKIT_POLICY_DEST${NC}"
+        echo -e "${DIM}[DRY-RUN] Would install: $SUDOERS_DEST${NC}"
         return 0
     fi
 
-    if [ ! -f "$POLKIT_POLICY_SRC" ]; then
-        error "Policy file not found: $POLKIT_POLICY_SRC"
+    local sudo_group="wheel"
+    if getent group sudo > /dev/null 2>&1 && ! getent group wheel > /dev/null 2>&1; then
+        sudo_group="sudo"
+    fi
+
+    info "Creating sudoers rule for group: $sudo_group"
+
+    local temp_file
+    temp_file=$(mktemp)
+    cat > "$temp_file" << EOF
+# Shroud VPN Kill Switch - Sudoers Configuration
+# Allows passwordless iptables/ip6tables for kill switch management
+# Remove this file to revoke: sudo rm $SUDOERS_DEST
+
+%${sudo_group} ALL=(ALL) NOPASSWD: /usr/sbin/iptables
+%${sudo_group} ALL=(ALL) NOPASSWD: /usr/sbin/ip6tables
+%${sudo_group} ALL=(ALL) NOPASSWD: /usr/sbin/nft
+EOF
+
+    if ! sudo visudo -c -f "$temp_file" > /dev/null 2>&1; then
+        error "Sudoers syntax validation failed"
+        rm -f "$temp_file"
         return 1
     fi
 
-    sudo cp "$POLKIT_POLICY_SRC" "$POLKIT_POLICY_DEST"
-    sudo chmod 644 "$POLKIT_POLICY_DEST"
-
-    if command -v systemctl &>/dev/null; then
-        sudo systemctl reload polkit 2>/dev/null || true
+    if sudo cp "$temp_file" "$SUDOERS_DEST" && sudo chmod 440 "$SUDOERS_DEST"; then
+        rm -f "$temp_file"
+        success "Sudoers rule installed"
+    else
+        rm -f "$temp_file"
+        error "Failed to install sudoers rule"
+        return 1
     fi
+}
 
-    success "Polkit policy installed"
+uninstall_sudoers() {
+    if [ -f "$SUDOERS_DEST" ]; then
+        info "Removing sudoers rule..."
+        sudo rm -f "$SUDOERS_DEST" 2>/dev/null || true
+        success "Sudoers rule removed"
+    fi
+}
+
+install_polkit_policy() {
+    if [ -f "$POLKIT_POLICY_SRC" ]; then
+        echo ""
+        echo "ℹ Polkit policy available at: $POLKIT_POLICY_SRC"
+        echo "  Install manually if preferred: sudo cp $POLKIT_POLICY_SRC /usr/share/polkit-1/actions/"
+        echo "  Note: Sudoers is more reliable across session types."
+        echo ""
+    fi
 }
 
 verify_installation() {
@@ -1073,18 +1127,24 @@ do_uninstall() {
     rm -f "$ZSH_COMPLETIONS_DIR/_shroud"
     rm -f "$FISH_COMPLETIONS_DIR/shroud.fish"
     success "Shell completions removed"
-    
-    # Remove polkit policy
-    remove_polkit_policy() {
-        if [ -f "$POLKIT_POLICY_DEST" ]; then
-            if confirm "Remove polkit policy?"; then
-                rm -f "$POLKIT_POLICY_DEST"
-                success "Polkit policy removed"
-            else
-                info "Polkit policy preserved"
-            fi
+
+    # Remove sudoers rule
+    if [ -f "$SUDOERS_DEST" ]; then
+        if confirm "Remove sudoers rule?"; then
+            uninstall_sudoers
+        else
+            info "Sudoers rule preserved"
         fi
-    }
+    fi
+
+    # Remove polkit policy (legacy)
+    if [ -f "$POLKIT_POLICY_DEST" ]; then
+        if confirm "Remove polkit policy?"; then
+            remove_polkit_policy
+        else
+            info "Polkit policy preserved"
+        fi
+    fi
     # Ask about logs
     if [ -d "$DATA_DIR" ]; then
         if confirm "Remove logs and data ($DATA_DIR)?"; then
@@ -1130,7 +1190,14 @@ do_install() {
     create_desktop_files
     install_completions
     
-    # Offer polkit policy
+    # Offer sudoers rule (preferred)
+    if ! check_sudoers_installed; then
+        install_sudoers
+    else
+        success "Sudoers rule already installed"
+    fi
+
+    # Legacy polkit note
     install_polkit_policy
     
     # Verify
@@ -1151,6 +1218,10 @@ do_update() {
     install_binary
     install_completions
     verify_installation
+
+    if ! check_sudoers_installed; then
+        install_sudoers
+    fi
     
     echo
     success "Update complete!"
@@ -1240,7 +1311,7 @@ show_status() {
     check_dependency "networkmanager" "nmcli"
     check_dependency "openvpn" "openvpn"
     check_dependency "iptables" "iptables"
-    check_dependency "polkit" "pkexec"
+    check_dependency "sudo" "sudo"
     
     # Desktop environment
     echo
@@ -1283,6 +1354,12 @@ Options:
   -v, --verbose   Show detailed output
   -q, --quiet     Minimal output (errors only)
 
+    --install-sudoers    Install sudoers rule for kill switch
+    --uninstall-sudoers  Remove sudoers rule
+
+    --install-polkit     Install polkit policy (legacy)
+    --uninstall-polkit   Remove polkit policy (legacy)
+
 Examples:
   ./setup.sh                    # Full installation
   ./setup.sh status             # Check installation status
@@ -1319,6 +1396,14 @@ parse_args() {
                 ;;
             -q|--quiet)
                 QUIET=true
+                shift
+                ;;
+            --install-sudoers)
+                COMMAND="install-sudoers"
+                shift
+                ;;
+            --uninstall-sudoers)
+                COMMAND="uninstall-sudoers"
                 shift
                 ;;
             --install-polkit)
@@ -1386,6 +1471,12 @@ main() {
             ;;
         status)
             show_status
+            ;;
+        install-sudoers)
+            install_sudoers
+            ;;
+        uninstall-sudoers)
+            uninstall_sudoers
             ;;
         install-polkit)
             install_polkit_policy

@@ -94,7 +94,7 @@ fn run_cleanup_command() -> Result<(), CleanupError> {
     ];
 
     for command in commands {
-        let _ = Command::new("pkexec")
+        let _ = Command::new("sudo")
             .args(&command)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -102,7 +102,7 @@ fn run_cleanup_command() -> Result<(), CleanupError> {
             .status();
     }
 
-    let _ = Command::new("pkexec")
+    let _ = Command::new("sudo")
         .args([
             "/usr/sbin/nft",
             "delete",
@@ -179,8 +179,8 @@ pub fn cleanup_with_fallback() -> CleanupResult {
             error!("  sudo ip6tables -F SHROUD_KILLSWITCH");
             error!("  sudo ip6tables -X SHROUD_KILLSWITCH");
             error!("");
-            error!("To avoid this in the future, install the polkit policy:");
-            error!("  ./setup.sh --install-polkit");
+            error!("To avoid this in the future, install the sudoers rule:");
+            error!("  ./setup.sh --install-sudoers");
             error!("");
             error!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
 

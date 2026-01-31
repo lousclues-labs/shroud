@@ -1,0 +1,14 @@
+# Shroud VPN Kill Switch - Sudoers Configuration
+#
+# This file allows users in the wheel group to run iptables/ip6tables/nft
+# without a password for Shroud kill switch management.
+#
+# Remove this file to revoke the privilege:
+#   sudo rm /etc/sudoers.d/shroud
+#
+# NOTE: Debian/Ubuntu typically use the "sudo" group instead of "wheel".
+# Adjust the group name as needed.
+
+%wheel ALL=(ALL) NOPASSWD: /usr/sbin/iptables
+%wheel ALL=(ALL) NOPASSWD: /usr/sbin/ip6tables
+%wheel ALL=(ALL) NOPASSWD: /usr/sbin/nft

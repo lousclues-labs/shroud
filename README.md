@@ -466,6 +466,42 @@ Shroud uses cargo-audit to check dependencies against the RustSec Advisory Datab
 # Or via the CLI
 shroud audit
 ```
+
+## Kill Switch Privileges
+
+The kill switch requires root privileges to manage iptables rules. Shroud uses `sudo`
+with a NOPASSWD rule for reliable operation across all session types (desktop, SSH,
+headless).
+
+### Setup (Automatic)
+
+```bash
+./setup.sh  # Will prompt to install sudoers rule
+```
+
+Or install just the sudoers rule:
+
+```bash
+./setup.sh --install-sudoers
+```
+
+### Setup (Manual)
+
+```bash
+# Arch/Fedora/RHEL (wheel group)
+echo '%wheel ALL=(ALL) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ip6tables, /usr/sbin/nft' | sudo tee /etc/sudoers.d/shroud
+sudo chmod 440 /etc/sudoers.d/shroud
+
+# Debian/Ubuntu (sudo group)
+echo '%sudo ALL=(ALL) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ip6tables, /usr/sbin/nft' | sudo tee /etc/sudoers.d/shroud
+sudo chmod 440 /etc/sudoers.d/shroud
+```
+
+### Security Notes
+
+- Only `iptables`, `ip6tables`, and `nft` are granted passwordless access
+- Only users in the wheel/sudo group can use this
+- Remove anytime with: `sudo rm /etc/sudoers.d/shroud`
 ```
 
 ---
@@ -481,8 +517,8 @@ shroud audit
 ### Kill Switch Not Working
 
 1. Verify iptables is installed: `iptables --version`
-2. Check polkit is running: `systemctl status polkit`
-3. Try enabling manually and check for pkexec prompt
+2. Verify sudoers rule: `sudo -n iptables -L -n`
+3. Install the sudoers rule: `./setup.sh --install-sudoers`
 
 ### VPN Connection Fails
 
@@ -531,6 +567,7 @@ This removes:
 - Binary from `~/.local/bin/`
 - Desktop entries and autostart
 - Shell completions
+- Sudoers rule at `/etc/sudoers.d/shroud` (if installed)
 - Polkit policy (if installed)
 - Optionally: config and logs (prompts)
 

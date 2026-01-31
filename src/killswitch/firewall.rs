@@ -28,7 +28,7 @@
 
 #![allow(dead_code)]
 
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
 use std::net::IpAddr;
 use std::process::Stdio;
 use thiserror::Error;
@@ -73,10 +73,12 @@ pub enum KillSwitchError {
     NotFound,
 
     /// Permission denied - need elevated privileges
-    #[error("Permission denied. Kill switch requires root privileges via pkexec.")]
+    #[error(
+        "Permission denied. Kill switch requires sudo access. Run: ./setup.sh --install-sudoers"
+    )]
     Permission,
 
-    /// Failed to spawn iptables/pkexec process
+    /// Failed to spawn iptables/sudo process
     #[error("Failed to spawn iptables process: {0}")]
     Spawn(#[source] std::io::Error),
 
@@ -245,6 +247,10 @@ impl KillSwitch {
 
         info!("Enabling VPN kill switch");
 
+        if !Self::ensure_sudo_access() {
+            return Err(KillSwitchError::Permission);
+        }
+
         // Detect VPN server IPs first
         let vpn_server_ips = Self::detect_all_vpn_server_ips().await;
         if !vpn_server_ips.is_empty() {
@@ -257,12 +263,12 @@ impl KillSwitch {
         // Build ONE script with ALL rules
         let script = self.build_complete_script(&vpn_server_ips);
 
-        // Run with ONE pkexec call
+        // Run with ONE sudo call per command
         self.run_single_script(&script).await?;
 
         // Note: We cannot run verification here because iptables -C
         // requires root or special permissions which the user might not have
-        // without pkexec (which prompts). We trust run_single_script status.
+        // without sudo (which prompts). We trust run_single_script status.
 
         self.enabled = true;
         info!("VPN kill switch enabled");
@@ -427,7 +433,7 @@ impl KillSwitch {
                 continue;
             }
 
-            let status = Command::new("pkexec")
+            let status = Command::new("sudo")
                 .args(&parts)
                 .status()
                 .await
@@ -448,6 +454,46 @@ impl KillSwitch {
         Ok(())
     }
 
+    /// Check if sudo is available and configured for passwordless iptables.
+    pub fn check_sudo_access() -> Result<(), String> {
+        let output = std::process::Command::new("sudo")
+            .args(["-n", "iptables", "-L", "-n"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output();
+
+        match output {
+            Ok(result) if result.status.success() => Ok(()),
+            Ok(result) => {
+                let stderr = String::from_utf8_lossy(&result.stderr);
+                if stderr.contains("password is required") || stderr.contains("sudo:") {
+                    Err("Sudo requires a password for iptables.\n\n\
+To fix this, run:\n\
+  ./setup.sh --install-sudoers\n\n\
+Or manually:\n\
+  sudo cp assets/sudoers.d/shroud /etc/sudoers.d/shroud\n\
+  sudo chmod 440 /etc/sudoers.d/shroud"
+                        .to_string())
+                } else {
+                    Err(format!("Sudo check failed: {}", stderr.trim()))
+                }
+            }
+            Err(e) => Err(format!("Failed to run sudo: {}", e)),
+        }
+    }
+
+    /// Check sudo access and log a helpful error if not configured.
+    pub fn ensure_sudo_access() -> bool {
+        match Self::check_sudo_access() {
+            Ok(()) => true,
+            Err(msg) => {
+                error!("{}", msg);
+                false
+            }
+        }
+    }
+
     /// Verify our rules are actually in place
     async fn verify_rules_exist(&self) -> bool {
         // Check if our chain exists and has the jump rule
@@ -464,6 +510,10 @@ impl KillSwitch {
     /// Disable the kill switch
     pub async fn disable(&mut self) -> Result<(), KillSwitchError> {
         info!("Disabling VPN kill switch");
+
+        if !Self::ensure_sudo_access() {
+            return Err(KillSwitchError::Permission);
+        }
 
         // We run cleanup regardless of enabled status to ensuring we don't leave
         // the user stranded if the internal state is out of sync.
