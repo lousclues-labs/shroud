@@ -326,11 +326,17 @@ fn handle_doctor_command() -> i32 {
     println!();
 
     println!("=== Sudoers File ===");
-    let sudoers_path = std::path::Path::new("/etc/sudoers.d/shroud");
-    if sudoers_path.exists() {
-        println!("  ✓ /etc/sudoers.d/shroud exists");
+    let sudoers_path = "/etc/sudoers.d/shroud";
+    let sudoers_exists = std::process::Command::new("sudo")
+        .args(["-n", "test", "-f", sudoers_path])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if sudoers_exists {
+        println!("  ✓ {} exists", sudoers_path);
     } else {
-        println!("  ✗ /etc/sudoers.d/shroud not found");
+        println!("  ✗ {} not found", sudoers_path);
         println!("    Run: ./setup.sh --install-sudoers");
         issues += 1;
     }

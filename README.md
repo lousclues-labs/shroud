@@ -50,7 +50,7 @@ The name has layers:
 ## Features
 
 - **Provider-agnostic** — Works with `.ovpn` (OpenVPN) and `.conf` (WireGuard) configs (NordVPN, Mullvad, ProtonVPN, self-hosted, corporate VPNs)
-- **Kill switch** — iptables-based traffic blocking with DNS and IPv6 leak protection
+- **Kill switch** — iptables/nftables-based traffic blocking with DNS and IPv6 leak protection
 - **Auto-reconnect** — Health monitoring with exponential backoff retry
 - **Formal state machine** — Disconnected → Connecting → Connected → Degraded → Reconnecting → Failed
 - **Works alongside NetworkManager** — Wraps, doesn't replace (Principle I), with OpenVPN and WireGuard via NM
@@ -93,51 +93,7 @@ cd shroud
 # Full installation (builds, installs, configures everything)
 ./setup.sh
 
-# Or with options
-./setup.sh --help              # Show all options
-./setup.sh --dry-run install   # Preview what would be done
-./setup.sh --verbose install   # Detailed output
-./setup.sh --force install     # Skip confirmations
-```
-
-#### What setup.sh Does
-
-1. **Pre-flight checks** — Verifies distro, display server, NetworkManager
-2. **Dependencies** — Installs required packages via your package manager
-3. **Build** — Compiles release binary with cargo
-4. **Install** — Places binary in `~/.local/bin/` with backup/rollback
-5. **Configure** — Creates `~/.config/shroud/config.toml` with defaults
-6. **Desktop** — Creates application menu entry
-7. **Autostart** — Use `shroud autostart on` to enable start on login
-8. **Completions** — Installs shell completions for bash, zsh, fish
-9. **Polkit** — Optionally configures passwordless kill switch (with security warning)
-10. **Verify** — Tests the installation and shows summary
-
-#### Other Commands
-
-```bash
-./setup.sh status      # Check installation status
-./setup.sh update      # Update to latest (preserves config)
-./setup.sh repair      # Reinstall without rebuilding
-./setup.sh check       # Check dependencies only
-./setup.sh uninstall   # Complete removal (prompts for config/logs)
-```
-
-### Manual Installation
-
-If you prefer manual control:
-
-#### Dependencies
-
-```bash
-# Arch Linux
-sudo pacman -S rust networkmanager networkmanager-openvpn networkmanager-wireguard openvpn wireguard-tools iptables polkit libappindicator-gtk3
-
-# Debian/Ubuntu
-sudo apt install rustc cargo network-manager network-manager-openvpn network-manager-wireguard openvpn wireguard-tools iptables policykit-1 libayatana-appindicator3-1
-
-# Fedora
-sudo dnf install rust cargo NetworkManager NetworkManager-openvpn NetworkManager-wireguard openvpn wireguard-tools iptables polkit libappindicator-gtk3
+sudo dnf install rust cargo NetworkManager NetworkManager-openvpn NetworkManager-wireguard openvpn wireguard-tools iptables nftables sudo libappindicator-gtk3
 ```
 
 #### Build and Install
@@ -368,7 +324,7 @@ See [SECURITY.md](SECURITY.md) for vulnerability reporting guidance.
 
 ### Kill Switch
 
-When enabled, the kill switch creates iptables rules that:
+When enabled, the kill switch creates firewall rules (iptables/nftables) that:
 
 1. **Allow** loopback traffic
 2. **Allow** established/related connections
@@ -380,44 +336,59 @@ When enabled, the kill switch creates iptables rules that:
 
 ## Kill Switch Privileges
 
-The kill switch requires root privileges to manage firewall rules. Shroud supports a polkit policy that enables passwordless operation for active desktop sessions.
+The kill switch requires root privileges to manage firewall rules. Shroud uses `sudo`
+with a NOPASSWD rule for reliable operation across desktop, SSH, and headless sessions.
 
-### Option 1: Polkit Policy (Recommended)
-
-Install during setup or standalone:
-
-```bash
-./setup.sh                # Will prompt to install polkit policy
-./setup.sh --install-polkit
-```
-
-What this grants:
-
-- Run iptables/ip6tables without password
-- Only for active local desktop sessions
-- SSH/remote sessions still require authentication
-
-Policy location:
-
-```
-/usr/share/polkit-1/actions/com.shroud.killswitch.policy
-```
-
-Remove policy:
+### Setup (Automatic)
 
 ```bash
-./setup.sh --uninstall-polkit
-# or
-sudo rm /usr/share/polkit-1/actions/com.shroud.killswitch.policy
+./setup.sh  # Will prompt to install sudoers rule
 ```
 
-### Option 2: Password Prompts
+Or install just the sudoers rule:
 
-If you skip the polkit policy, you will be prompted when enabling/disabling the kill switch and during shutdown cleanup.
+```bash
+./setup.sh --install-sudoers
+```
+
+### Setup (Manual)
+
+Shroud detects firewall binaries in `/usr/bin` and `/usr/sbin`, so the sudoers rule
+should include both paths and legacy alternatives where available:
+
+```bash
+# Arch/Fedora/RHEL (wheel group)
+echo '%wheel ALL=(ALL) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ip6tables, /usr/sbin/iptables-legacy, /usr/sbin/ip6tables-legacy, /usr/sbin/nft, /usr/bin/iptables, /usr/bin/ip6tables, /usr/bin/iptables-legacy, /usr/bin/ip6tables-legacy, /usr/bin/nft' | sudo tee /etc/sudoers.d/shroud
+sudo chmod 440 /etc/sudoers.d/shroud
+
+# Debian/Ubuntu (sudo group)
+echo '%sudo ALL=(ALL) NOPASSWD: /usr/sbin/iptables, /usr/sbin/ip6tables, /usr/sbin/iptables-legacy, /usr/sbin/ip6tables-legacy, /usr/sbin/nft, /usr/bin/iptables, /usr/bin/ip6tables, /usr/bin/iptables-legacy, /usr/bin/ip6tables-legacy, /usr/bin/nft' | sudo tee /etc/sudoers.d/shroud
+sudo chmod 440 /etc/sudoers.d/shroud
+```
+
+Validate with:
+
+```bash
+shroud doctor
+```
+
+### Security Notes
+
+- Only `iptables`, `ip6tables`, `iptables-legacy`, `ip6tables-legacy`, and `nft` are granted passwordless access
+- Only users in the wheel/sudo group can use this
+- Remove anytime with: `sudo rm /etc/sudoers.d/shroud`
+
+### Backend Fallback (iptables ↔ nftables)
+
+Shroud prefers iptables, but will automatically fall back to nftables when the
+iptables kernel modules are unavailable. The nftables rules mirror the same
+DNS/DoH/DoT protections to avoid leak regressions. If the iptables-nft backend
+returns netlink/cache errors, Shroud retries with `iptables-legacy`.
 
 ### Stale Rule Cleanup
 
-If Shroud crashes, it will detect and clean stale rules on startup. If automatic cleanup fails, run:
+If Shroud crashes, it will detect and clean stale rules on startup. If automatic
+cleanup fails, run:
 
 ```bash
 sudo iptables -D OUTPUT -j SHROUD_KILLSWITCH
@@ -426,6 +397,9 @@ sudo iptables -X SHROUD_KILLSWITCH
 sudo ip6tables -D OUTPUT -j SHROUD_KILLSWITCH
 sudo ip6tables -F SHROUD_KILLSWITCH
 sudo ip6tables -X SHROUD_KILLSWITCH
+
+# If the nftables backend was used
+sudo nft delete table inet shroud_killswitch
 ```
 
 ### DNS Leak Protection
@@ -455,6 +429,10 @@ sudo iptables -S SHROUD_KILLSWITCH
 
 # View OUTPUT rules (jump into kill switch chain)
 sudo iptables -S OUTPUT
+
+# If the nftables backend was used
+sudo nft list table inet shroud_killswitch
+```
 
 ### Dependency Audits
 
@@ -522,9 +500,12 @@ DNS/DoH/DoT protections to avoid leak regressions.
 
 ### Kill Switch Not Working
 
-1. Verify iptables is installed: `iptables --version`
-2. Verify sudoers rule: `sudo -n iptables -L -n`
-3. Install the sudoers rule: `./setup.sh --install-sudoers`
+1. Run diagnostics: `shroud doctor`
+2. Verify iptables/nftables are installed: `iptables --version` and `nft --version`
+3. Verify sudoers rule: `sudo -n iptables -L -n`
+4. Install the sudoers rule: `./setup.sh --install-sudoers`
+5. Load kernel modules if missing:
+	- `sudo modprobe ip_tables ip6_tables nf_tables`
 
 ### VPN Connection Fails
 
@@ -544,6 +525,9 @@ shroud
 sudo iptables -D OUTPUT -j SHROUD_KILLSWITCH
 sudo iptables -F SHROUD_KILLSWITCH
 sudo iptables -X SHROUD_KILLSWITCH
+
+# If the nftables backend was used
+sudo nft delete table inet shroud_killswitch
 ```
 
 ### Debug Logging
@@ -574,7 +558,6 @@ This removes:
 - Desktop entries and autostart
 - Shell completions
 - Sudoers rule at `/etc/sudoers.d/shroud` (if installed)
-- Polkit policy (if installed)
 - Optionally: config and logs (prompts)
 
 ---

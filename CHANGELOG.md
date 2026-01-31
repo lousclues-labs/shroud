@@ -7,9 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-03-01
+
+### Added
+- **CLI**: `shroud doctor` command to diagnose sudoers access, firewall paths, and backend selection.
+- **Kill Switch**: Dynamic firewall binary detection across `/usr/bin` and `/usr/sbin`.
+- **Setup**: Sudoers installation now generates multi-path rules and validates with `visudo`.
+
 ### Changed
 - **Kill Switch**: Replace `pkexec` with `sudo` for privilege escalation to avoid session-type polkit failures.
 - **Kill Switch**: Automatically fall back to nftables when iptables kernel modules are unavailable.
+- **Kill Switch**: Retry with `iptables-legacy` when nft-style iptables backends report netlink/cache errors.
+- **Cleanup**: Use detected firewall paths for cleanup commands and user guidance.
+
+### Fixed
+- **Kill Switch**: Log prefix format compatible with iptables/nftables logging.
+- **IPC**: Treat empty restart/quit responses as success to avoid false failures.
 
 ## [1.6.5] - 2026-01-31
 

@@ -1,6 +1,6 @@
 [package]
 name = "shroud"
-version = "1.6.5"
+version = "1.7.0"
 edition = "2021"
 authors = ["loujr"]
 description = "A provider-agnostic VPN connection manager for Linux with kill switch, auto-reconnect, and system tray integration"
@@ -19,12 +19,12 @@ path = "src/main.rs"
 
 # Arch Linux Setup Instructions:
 # Install required system packages:
-#   sudo pacman -S networkmanager networkmanager-openvpn nftables polkit
+#   sudo pacman -S networkmanager networkmanager-openvpn nftables iptables sudo
 #
 # The application uses:
 # - NetworkManager for VPN connection management
 # - nmcli for NetworkManager interface
-# - nftables for kill switch firewall rules
+# - nftables/iptables for kill switch firewall rules
 # - D-Bus for StatusNotifierItem (SNI) tray support on KDE Plasma
 
 [dependencies]

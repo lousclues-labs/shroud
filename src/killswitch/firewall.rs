@@ -403,7 +403,7 @@ impl KillSwitch {
         ));
 
         s.push_str(&format!(
-            "{} -A SHROUD_KILLSWITCH -m limit --limit 1/sec -j LOG --log-prefix '[SHROUD-KS DROP] ' --log-level 4\n",
+            "{} -A SHROUD_KILLSWITCH -m limit --limit 1/sec -j LOG --log-prefix SHROUD-KS-DROP --log-level 4\n",
             iptables()
         ));
         s.push_str(&format!("{} -A SHROUD_KILLSWITCH -j DROP\n", iptables()));
@@ -773,18 +773,6 @@ impl KillSwitch {
 
     /// Check if sudo is available and configured for passwordless iptables.
     pub fn check_sudo_access() -> Result<(), KillSwitchError> {
-        let sudo_check = std::process::Command::new("sudo")
-            .args(["-n", "true"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .output()
-            .map_err(KillSwitchError::Spawn)?;
-
-        if !sudo_check.status.success() {
-            return Err(KillSwitchError::Permission);
-        }
-
         let output = std::process::Command::new("sudo")
             .args(["-n", iptables(), "-L", "-n"])
             .stdin(Stdio::null())
@@ -809,6 +797,10 @@ impl KillSwitch {
 
         if output.status.success() {
             return Ok(());
+        }
+
+        if stderr_lower.contains("permission denied") || stderr_lower.contains("password") {
+            return Err(KillSwitchError::Permission);
         }
 
         Err(KillSwitchError::Command(format!(
@@ -1181,7 +1173,7 @@ table inet {table} {{
         rules.push_str(
             r#"
         # === DEFAULT DROP ===
-        limit rate 1/second log prefix "[SHROUD-KS DROP] " drop
+        limit rate 1/second log prefix "SHROUD-KS-DROP" drop
     }
 
     chain input {

@@ -9,7 +9,8 @@
 │  ┌──────────────┐    ┌──────────────┐    ┌──────────────┐              │
 │  │   System     │    │     VPN      │    │    Kill      │              │
 │  │    Tray      │◄──►│  Supervisor  │◄──►│   Switch     │              │
-│  │   (ksni)     │    │              │    │ (iptables)   │              │
+│  │   (ksni)     │    │              │    │ (iptables/   │              │
+│  │             │    │              │    │  nftables)   │              │
 │  └──────────────┘    └──────────────┘    └──────────────┘              │
 │         │                   │                   │                        │
 │         │                   │                   │                        │
@@ -90,7 +91,7 @@ src/
 │   └── client.rs     # Unix Domain Socket Client
 ├── killswitch/
 │   ├── mod.rs        # Module exports
-│   └── firewall.rs   # KillSwitch, iptables rule generation
+│   └── firewall.rs   # KillSwitch, iptables/nftables rule generation
 ├── nm/
 │   ├── mod.rs        # Module exports
 │   ├── client.rs     # nmcli wrappers (connect, disconnect, list)
@@ -144,10 +145,8 @@ Errors are propagated up to the `VpnSupervisor` or CLI handlers, where they are 
                                           │
                                           ▼
                                    ┌──────────────┐
-                                   │    nmcli     │
                                    └──────────────┘
 
-### Import Flow (Config → NetworkManager)
 
 ```
 ┌────────────┐     Config Path      ┌──────────────┐     nmcli import     ┌──────────────┐
@@ -194,7 +193,7 @@ Errors are propagated up to the `VpnSupervisor` or CLI handlers, where they are 
        ▼                                              │
 ┌──────────────┐                                      │
 │  Connecting  │────────────────┐                     │
-└──────────────┘                │                     │
+                                             limit rate 1/second log prefix "SHROUD-KS-DROP" drop
        │                        │                     │
        │ NmVpnUp                │ Timeout             │
        ▼                        ▼                     │
@@ -252,6 +251,11 @@ Shroud applies the same kill switch policy to both OpenVPN and WireGuard, but th
 The rules are interface-driven, so the primary difference is which tunnel interface prefix is permitted (`tun*/tap*` vs `wg*`). Server/endpoint IP allowlisting uses NetworkManager-reported connection details for each VPN type.
 
 ### iptables Chain Structure
+
+Shroud prefers iptables, but falls back to nftables and retries with
+iptables-legacy when the nft-based backend reports netlink/cache errors. Firewall
+binaries are discovered at runtime from `/usr/bin` and `/usr/sbin` to avoid
+distro-specific path issues.
 
 ```
 Chain SHROUD_KILLSWITCH (policy DROP)
