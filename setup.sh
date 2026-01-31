@@ -20,13 +20,13 @@
 #   -v, --verbose   Show detailed output
 #   -q, --quiet     Minimal output
 
-Sudoers Options:
-    --install-sudoers    Install sudoers rule for passwordless kill switch
-    --uninstall-sudoers  Remove sudoers rule
-
-Polkit Options (legacy):
-    --install-polkit     Install polkit policy for passwordless kill switch
-    --uninstall-polkit   Remove polkit policy
+# Sudoers Options:
+#   --install-sudoers    Install sudoers rule for passwordless kill switch
+#   --uninstall-sudoers  Remove sudoers rule
+#
+# Polkit Options (legacy):
+#   --install-polkit     Install polkit policy for passwordless kill switch
+#   --uninstall-polkit   Remove polkit policy
 #
 # Examples:
 #   ./setup.sh                  # Install
