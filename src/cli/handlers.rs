@@ -608,7 +608,7 @@ async fn try_handle_update_command(
         }
     }
 
-    std::thread::sleep(std::time::Duration::from_secs(2));
+    std::thread::sleep(std::time::Duration::from_millis(200));
 
     let local_path = dirs::home_dir()
         .map(|h| h.join(".local/bin/shroud"))
@@ -619,29 +619,44 @@ async fn try_handle_update_command(
             .ok_or("Failed to resolve home directory")?
             .join(".cargo/bin/shroud");
 
-        let mut attempts = 0;
-        loop {
-            match std::fs::copy(&cargo_bin, &local_path) {
-                Ok(_) => {
-                    println!("✓ Copied to {}", local_path.display());
-                    break;
-                }
-                Err(e) if e.raw_os_error() == Some(26) && attempts < 3 => {
-                    attempts += 1;
-                    println!(
-                        "  Waiting for old process to exit (attempt {}/3)...",
-                        attempts
-                    );
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                }
-                Err(e) if e.raw_os_error() == Some(26) => {
-                    println!("⚠ Could not copy to {}: file busy", local_path.display());
-                    println!("  Run manually: cp ~/.cargo/bin/shroud ~/.local/bin/shroud");
-                    break;
+        if !cargo_bin.exists() {
+            return Err(format!(
+                "Source binary not found at {}",
+                cargo_bin.display()
+            )
+            .into());
+        }
+
+        if let Some(parent) = local_path.parent() {
+            if !parent.exists() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+
+        if crate::cli::install::is_same_file(&cargo_bin, &local_path) {
+            println!("✓ Binary already up to date at {}", local_path.display());
+        } else {
+            match crate::cli::install::install_binary_atomic(&cargo_bin, &local_path) {
+                Ok(()) => {
+                    println!("✓ Installed to {}", local_path.display());
                 }
                 Err(e) => {
-                    println!("⚠ Could not copy to {}: {}", local_path.display(), e);
-                    break;
+                    println!("⚠ Installation failed: {}", e);
+                    println!("");
+                    println!("  Manual installation:");
+                    println!(
+                        "    cp {} {}",
+                        cargo_bin.display(),
+                        local_path.display()
+                    );
+                    println!("");
+                    println!("  Or use move (works on busy files):");
+                    println!(
+                        "    mv {} {}",
+                        cargo_bin.display(),
+                        local_path.display()
+                    );
+                    return Err("Installation failed".into());
                 }
             }
         }

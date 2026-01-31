@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Shutdown**: Non-blocking cleanup with clear user notification on failure.
 - **Startup**: Stale rule detection and cleanup on launch.
 
+### Fixed
+- **Update/Restart**: Use atomic rename when installing the binary to avoid "file busy" errors while updating a running process.
+
 ## [1.6.4] - 2026-02-15
 
 ### Fixed

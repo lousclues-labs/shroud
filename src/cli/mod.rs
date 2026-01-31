@@ -5,6 +5,7 @@
 pub mod args;
 pub mod handlers;
 pub mod help;
+pub mod install;
 pub mod import;
 pub mod validation;
 
