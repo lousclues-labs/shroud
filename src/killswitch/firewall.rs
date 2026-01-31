@@ -479,20 +479,26 @@ impl KillSwitch {
                 continue;
             }
 
-            let status = Command::new("sudo")
+            let output = Command::new("sudo")
                 .args(&parts)
-                .status()
+                .output()
                 .await
                 .map_err(KillSwitchError::Spawn)?;
 
-            if !status.success() && !ignore_error {
-                let code = status.code().unwrap_or(-1);
+            if !output.status.success() && !ignore_error {
+                let code = output.status.code().unwrap_or(-1);
                 if code == 126 || code == 127 {
                     return Err(KillSwitchError::Permission);
                 }
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let detail = if stderr.trim().is_empty() {
+                    line.clone()
+                } else {
+                    stderr.trim().to_string()
+                };
                 return Err(KillSwitchError::Command(format!(
                     "Command failed (exit {}): {}",
-                    code, line
+                    code, detail
                 )));
             }
         }
