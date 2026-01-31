@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-02-14
+
+### Added
+- **Update UX**: Pacman-style progress line for `shroud update` build/install steps.
+
+### Fixed
+- **Restart**: Resolve restart executable path when the current binary is deleted during update.
+
+## [1.6.2] - 2026-02-14
+
+### Fixed
+- **Tests**: Stabilized import tests with async-safe environment locking.
+
+## [1.6.1] - 2026-02-14
+
+### Fixed
+- **Import Tests**: Avoid tempfs noexec issues for nmcli stub execution.
+
+## [1.6.0] - 2026-02-14
+
 ### Added
 - **WireGuard**: NetworkManager-based WireGuard connection support and type detection.
 - **Import Helper**: `shroud import` for WireGuard/OpenVPN config files, including bulk directory import.

@@ -11,7 +11,7 @@
 <img height="20" alt="Shroud logo" src="https://github.com/user-attachments/assets/85c62428-7608-4dcf-8e16-434f901d5021" />
 
 
-Shroud wraps around NetworkManager and OpenVPN like a protective shroud around a lock mechanism — hardening security without replacing the tools you already have.
+Shroud wraps around NetworkManager (OpenVPN and WireGuard) like a protective shroud around a lock mechanism — hardening security without replacing the tools you already have.
 
 ---
 
@@ -35,7 +35,7 @@ A **lock shroud** is the protective metal casing that surrounds a padlock's shac
 
 | Lock Shroud | Shroud (This Tool) |
 |-------------|-------------------|
-| Wraps around the lock | Wraps around NetworkManager + OpenVPN |
+| Wraps around the lock | Wraps around NetworkManager (OpenVPN + WireGuard) |
 | Protects the mechanism | Kill switch protects against leaks |
 | Doesn't replace the lock | Doesn't replace NM, works alongside it |
 | Hardens against attack | Hardens against connection failures, stale states |
@@ -49,11 +49,11 @@ The name has layers:
 
 ## Features
 
-- **Provider-agnostic** — Works with any `.ovpn` config file (NordVPN, Mullvad, ProtonVPN, self-hosted, corporate VPNs)
+- **Provider-agnostic** — Works with `.ovpn` (OpenVPN) and `.conf` (WireGuard) configs (NordVPN, Mullvad, ProtonVPN, self-hosted, corporate VPNs)
 - **Kill switch** — iptables-based traffic blocking with DNS and IPv6 leak protection
 - **Auto-reconnect** — Health monitoring with exponential backoff retry
 - **Formal state machine** — Disconnected → Connecting → Connected → Degraded → Reconnecting → Failed
-- **Works alongside NetworkManager** — Wraps, doesn't replace (Principle I)
+- **Works alongside NetworkManager** — Wraps, doesn't replace (Principle I), with OpenVPN and WireGuard via NM
 - **System tray integration** — KDE Plasma, GNOME with AppIndicator extension, etc.
 - **Configurable via TOML** — All settings persisted across restarts
 - **No telemetry** — No phoning home, no analytics (Principle IV)
@@ -131,13 +131,13 @@ If you prefer manual control:
 
 ```bash
 # Arch Linux
-sudo pacman -S rust networkmanager networkmanager-openvpn openvpn iptables polkit libappindicator-gtk3
+sudo pacman -S rust networkmanager networkmanager-openvpn networkmanager-wireguard openvpn wireguard-tools iptables polkit libappindicator-gtk3
 
 # Debian/Ubuntu
-sudo apt install rustc cargo network-manager network-manager-openvpn openvpn iptables policykit-1 libayatana-appindicator3-1
+sudo apt install rustc cargo network-manager network-manager-openvpn network-manager-wireguard openvpn wireguard-tools iptables policykit-1 libayatana-appindicator3-1
 
 # Fedora
-sudo dnf install rust cargo NetworkManager NetworkManager-openvpn openvpn iptables polkit libappindicator-gtk3
+sudo dnf install rust cargo NetworkManager NetworkManager-openvpn NetworkManager-wireguard openvpn wireguard-tools iptables polkit libappindicator-gtk3
 ```
 
 #### Build and Install
@@ -185,11 +185,14 @@ Supported formats:
 
 You can still import via nmcli if you prefer:
 
-Before using Shroud, import your `.ovpn` files into NetworkManager:
+Before using Shroud, import your VPN configs into NetworkManager:
 
 ```bash
-# Import a single config
+# Import a single OpenVPN config
 nmcli connection import type openvpn file /path/to/config.ovpn
+
+# Import a single WireGuard config
+nmcli connection import type wireguard file /path/to/config.conf
 
 # The connection will be named after the file (e.g., "us-east-1")
 # You can rename it:

@@ -8,7 +8,7 @@ These principles define how Shroud is built and must be reflected in all documen
 
 Shroud is not a VPN. It is the armor around one.
 
-We do not reinvent NetworkManager. We do not rewrite OpenVPN. We do not spawn daemons where none are needed. The Linux ecosystem already solved these problems — our job is to protect and enhance, not to compete.
+We do not reinvent NetworkManager. We do not rewrite OpenVPN or WireGuard. We do not spawn daemons where none are needed. The Linux ecosystem already solved these problems — our job is to protect and enhance, not to compete.
 
 When you wrap something, you respect its shape. Shroud follows the contours of the tools it surrounds.
 
