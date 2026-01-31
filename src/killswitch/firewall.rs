@@ -529,6 +529,17 @@ impl KillSwitch {
                             continue;
                         }
                     }
+
+                    let detail = if stderr.trim().is_empty() {
+                        line.clone()
+                    } else {
+                        stderr.trim().to_string()
+                    };
+
+                    return Err(KillSwitchError::Command(format!(
+                        "{} (iptables-nft failed; install iptables-legacy or nftables)",
+                        detail
+                    )));
                 }
 
                 let detail = if stderr.trim().is_empty() {
