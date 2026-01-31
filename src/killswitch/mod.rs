@@ -6,8 +6,5 @@
 pub mod cleanup;
 pub mod firewall;
 
-pub use cleanup::{
-    cleanup_stale_on_startup, cleanup_with_fallback, cleanup_with_timeout, rules_exist,
-    CleanupError, CleanupResult, CLEANUP_TIMEOUT,
-};
+pub use cleanup::{cleanup_stale_on_startup, cleanup_with_fallback, CleanupResult};
 pub use firewall::KillSwitch;

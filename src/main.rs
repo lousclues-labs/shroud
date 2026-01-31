@@ -43,7 +43,7 @@ mod state;
 mod supervisor;
 mod tray;
 
-use log::{error, info, warn};
+use log::{error, info};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 

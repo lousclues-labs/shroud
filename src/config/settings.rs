@@ -671,6 +671,8 @@ mod tests {
             max_reconnect_attempts: 5,
             kill_switch_enabled: true,
             dns_mode: DnsMode::Localhost,
+            block_doh: false,
+            custom_doh_blocklist: vec!["1.1.1.1".to_string()],
             ipv6_mode: Ipv6Mode::Tunnel,
         };
 

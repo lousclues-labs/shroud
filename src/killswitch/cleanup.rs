@@ -20,14 +20,8 @@ pub enum CleanupError {
     #[error("Cleanup timed out after {0:?} - password prompt may be blocking")]
     Timeout(Duration),
 
-    #[error("Failed to spawn cleanup process: {0}")]
-    Spawn(#[source] std::io::Error),
-
     #[error("Cleanup command failed: {0}")]
     CommandFailed(String),
-
-    #[error("Failed to check rule status: {0}")]
-    StatusCheck(String),
 }
 
 /// Result of a cleanup attempt
@@ -78,30 +72,30 @@ pub fn rules_exist_ipv6() -> Result<bool, CleanupError> {
 }
 
 fn run_cleanup_command() -> Result<(), CleanupError> {
-    let commands = [
-        [
+    let commands: Vec<Vec<&str>> = vec![
+        vec![
             "/usr/sbin/iptables",
             "-D",
             "OUTPUT",
             "-j",
             "SHROUD_KILLSWITCH",
         ],
-        ["/usr/sbin/iptables", "-F", "SHROUD_KILLSWITCH"],
-        ["/usr/sbin/iptables", "-X", "SHROUD_KILLSWITCH"],
-        [
+        vec!["/usr/sbin/iptables", "-F", "SHROUD_KILLSWITCH"],
+        vec!["/usr/sbin/iptables", "-X", "SHROUD_KILLSWITCH"],
+        vec![
             "/usr/sbin/ip6tables",
             "-D",
             "OUTPUT",
             "-j",
             "SHROUD_KILLSWITCH",
         ],
-        ["/usr/sbin/ip6tables", "-F", "SHROUD_KILLSWITCH"],
-        ["/usr/sbin/ip6tables", "-X", "SHROUD_KILLSWITCH"],
+        vec!["/usr/sbin/ip6tables", "-F", "SHROUD_KILLSWITCH"],
+        vec!["/usr/sbin/ip6tables", "-X", "SHROUD_KILLSWITCH"],
     ];
 
     for command in commands {
         let _ = Command::new("pkexec")
-            .args(command)
+            .args(&command)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -223,10 +217,6 @@ pub fn cleanup_stale_on_startup() {
         }
         Err(CleanupError::Timeout(_)) => {
             warn!("Cleanup timed out. You may need to enter your password.");
-            log_manual_cleanup_instructions();
-        }
-        Err(e) => {
-            error!("Unexpected error during stale cleanup: {}", e);
             log_manual_cleanup_instructions();
         }
     }
