@@ -39,6 +39,15 @@ use crate::config::{DnsMode, Ipv6Mode};
 /// Name of the iptables chain for the kill switch
 const CHAIN_NAME: &str = "SHROUD_KILLSWITCH";
 
+/// Name of the nftables table for the kill switch
+const NFT_TABLE: &str = "shroud_killswitch";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FirewallBackend {
+    Iptables,
+    Nftables,
+}
+
 /// Known DNS-over-HTTPS provider IP addresses
 const DOH_PROVIDER_IPS: &[&str] = &[
     // Cloudflare
@@ -122,6 +131,8 @@ pub struct KillSwitch {
     custom_doh_blocklist: Vec<String>,
     /// IPv6 leak protection mode
     ipv6_mode: Ipv6Mode,
+    /// Firewall backend in use
+    backend: FirewallBackend,
 }
 
 impl KillSwitch {
@@ -135,6 +146,7 @@ impl KillSwitch {
             block_doh: true,
             custom_doh_blocklist: Vec::new(),
             ipv6_mode: Ipv6Mode::default(),
+            backend: FirewallBackend::Iptables,
         }
     }
 
@@ -153,6 +165,7 @@ impl KillSwitch {
             block_doh,
             custom_doh_blocklist,
             ipv6_mode,
+            backend: FirewallBackend::Iptables,
         }
     }
 
@@ -221,16 +234,28 @@ impl KillSwitch {
 
     /// Check actual state of rules, not just our flag
     pub fn is_actually_enabled(&self) -> bool {
-        // Synchronous check - used for status queries
         use std::process::{Command, Stdio};
 
-        let result = Command::new("iptables")
-            .args(["-C", "OUTPUT", "-j", CHAIN_NAME])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
+        match self.backend {
+            FirewallBackend::Iptables => {
+                let result = Command::new("iptables")
+                    .args(["-C", "OUTPUT", "-j", CHAIN_NAME])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
 
-        matches!(result, Ok(status) if status.success())
+                matches!(result, Ok(status) if status.success())
+            }
+            FirewallBackend::Nftables => {
+                let result = Command::new("sudo")
+                    .args(["nft", "list", "table", "inet", NFT_TABLE])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+
+                matches!(result, Ok(status) if status.success())
+            }
+        }
     }
 
     /// Sync our internal state with actual iptables state
@@ -240,14 +265,18 @@ impl KillSwitch {
 
     /// Enable the kill switch
     pub async fn enable(&mut self) -> Result<(), KillSwitchError> {
-        if self.enabled && self.verify_rules_exist().await {
-            debug!("Kill switch already enabled");
-            return Ok(());
+        if self.enabled {
+            let rules_exist = match self.backend {
+                FirewallBackend::Iptables => self.verify_rules_exist().await,
+                FirewallBackend::Nftables => self.verify_nft_rules_exist().await,
+            };
+            if rules_exist {
+                debug!("Kill switch already enabled");
+                return Ok(());
+            }
         }
 
         info!("Enabling VPN kill switch");
-
-        Self::check_sudo_access()?;
 
         // Detect VPN server IPs first
         let vpn_server_ips = Self::detect_all_vpn_server_ips().await;
@@ -258,11 +287,18 @@ impl KillSwitch {
             );
         }
 
-        // Build ONE script with ALL rules
-        let script = self.build_complete_script(&vpn_server_ips);
+        let backend = self.select_backend().await?;
+        self.backend = backend;
 
-        // Run with ONE sudo call per command
-        self.run_single_script(&script).await?;
+        match backend {
+            FirewallBackend::Iptables => {
+                let script = self.build_complete_script(&vpn_server_ips);
+                self.run_single_script(&script).await?;
+            }
+            FirewallBackend::Nftables => {
+                self.enable_nft(&vpn_server_ips).await?;
+            }
+        }
 
         // Note: We cannot run verification here because iptables -C
         // requires root or special permissions which the user might not have
@@ -452,6 +488,45 @@ impl KillSwitch {
         Ok(())
     }
 
+    async fn select_backend(&self) -> Result<FirewallBackend, KillSwitchError> {
+        match Self::check_sudo_access() {
+            Ok(()) => Ok(FirewallBackend::Iptables),
+            Err(err) if Self::should_fallback_to_nft(&err) => {
+                if Self::nft_is_available().await {
+                    Ok(FirewallBackend::Nftables)
+                } else {
+                    Err(err)
+                }
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    fn should_fallback_to_nft(error: &KillSwitchError) -> bool {
+        match error {
+            KillSwitchError::Command(msg) => {
+                let msg = msg.to_lowercase();
+                msg.contains("ip_tables")
+                    || msg.contains("table does not exist")
+                    || msg.contains("can't initialize iptables table")
+                    || msg.contains("does not exist")
+            }
+            KillSwitchError::Spawn(_) | KillSwitchError::NotFound => true,
+            _ => false,
+        }
+    }
+
+    async fn nft_is_available() -> bool {
+        Command::new("nft")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
     /// Check if sudo is available and configured for passwordless iptables.
     pub fn check_sudo_access() -> Result<(), KillSwitchError> {
         let sudo_check = std::process::Command::new("sudo")
@@ -498,11 +573,24 @@ impl KillSwitch {
         matches!(output, Ok(status) if status.success())
     }
 
+    async fn verify_nft_rules_exist(&self) -> bool {
+        let output = Command::new("sudo")
+            .args(["nft", "list", "table", "inet", NFT_TABLE])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        matches!(output, Ok(status) if status.success())
+    }
+
     /// Disable the kill switch
     pub async fn disable(&mut self) -> Result<(), KillSwitchError> {
         info!("Disabling VPN kill switch");
 
-        Self::check_sudo_access()?;
+        if matches!(self.backend, FirewallBackend::Iptables) {
+            Self::check_sudo_access()?;
+        }
 
         // We run cleanup regardless of enabled status to ensuring we don't leave
         // the user stranded if the internal state is out of sync.
@@ -519,7 +607,14 @@ ip6tables -D OUTPUT -d fe80::/10 -j ACCEPT 2>/dev/null || true
 nft delete table inet shroud_killswitch 2>/dev/null || true
 "#;
 
-        self.run_single_script(script).await?;
+        match self.backend {
+            FirewallBackend::Iptables => {
+                self.run_single_script(script).await?;
+            }
+            FirewallBackend::Nftables => {
+                self.disable_nft().await?;
+            }
+        }
 
         self.enabled = false;
         info!("VPN kill switch disabled");
@@ -532,9 +627,263 @@ nft delete table inet shroud_killswitch 2>/dev/null || true
             return Ok(());
         }
 
-        // Just toggle off/on to refresh rules
-        self.disable().await?;
-        self.enable().await
+        match self.backend {
+            FirewallBackend::Iptables => {
+                self.disable().await?;
+                self.enable().await
+            }
+            FirewallBackend::Nftables => {
+                let vpn_server_ips = Self::detect_all_vpn_server_ips().await;
+                self.enable_nft(&vpn_server_ips).await
+            }
+        }
+    }
+
+    async fn enable_nft(&mut self, vpn_server_ips: &[IpAddr]) -> Result<(), KillSwitchError> {
+        let _ = self.cleanup_nft_table().await;
+        let rules = self.build_nft_ruleset(vpn_server_ips);
+        self.run_nft(&["-f", "-"], Some(&rules)).await?;
+        self.enabled = true;
+        Ok(())
+    }
+
+    async fn disable_nft(&self) -> Result<(), KillSwitchError> {
+        self.cleanup_nft_table().await
+    }
+
+    async fn cleanup_nft_table(&self) -> Result<(), KillSwitchError> {
+        let result = self
+            .run_nft(&["delete", "table", "inet", NFT_TABLE], None)
+            .await;
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(KillSwitchError::Command(msg))
+                if msg.contains("No such file") || msg.contains("does not exist") =>
+            {
+                Ok(())
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    async fn run_nft(
+        &self,
+        args: &[&str],
+        stdin_data: Option<&str>,
+    ) -> Result<(), KillSwitchError> {
+        let mut cmd = Command::new("sudo");
+        cmd.arg("nft");
+        cmd.args(args);
+
+        if stdin_data.is_some() {
+            cmd.stdin(Stdio::piped());
+        }
+        cmd.stdout(Stdio::piped());
+        cmd.stderr(Stdio::piped());
+
+        let mut child = cmd.spawn().map_err(KillSwitchError::Spawn)?;
+
+        if let Some(data) = stdin_data {
+            use tokio::io::AsyncWriteExt;
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin
+                    .write_all(data.as_bytes())
+                    .await
+                    .map_err(KillSwitchError::Write)?;
+            }
+        }
+
+        let output = child
+            .wait_with_output()
+            .await
+            .map_err(KillSwitchError::Wait)?;
+
+        if output.status.success() {
+            Ok(())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(KillSwitchError::Command(stderr.trim().to_string()))
+        }
+    }
+
+    fn build_nft_ruleset(&self, vpn_server_ips: &[IpAddr]) -> String {
+        let mut rules = format!(
+            r#"
+table inet {table} {{
+    chain output {{
+        type filter hook output priority 0; policy drop;
+
+        # === LOOPBACK ===
+        oifname "lo" accept
+
+        # === ESTABLISHED/RELATED ===
+        ct state established,related accept
+"#,
+            table = NFT_TABLE
+        );
+
+        match self.ipv6_mode {
+            Ipv6Mode::Block => {
+                rules.push_str(
+                    r#"
+        # === IPv6 LEAK PROTECTION (block mode) ===
+        meta nfproto ipv6 drop
+"#,
+                );
+            }
+            Ipv6Mode::Tunnel => {
+                rules.push_str(
+                    r#"
+        # === IPv6 LEAK PROTECTION (tunnel mode) ===
+        ip6 daddr fe80::/10 accept
+"#,
+                );
+            }
+            Ipv6Mode::Off => {
+                rules.push_str(
+                    r#"
+        # === IPv6 (off - no special handling) ===
+        ip6 daddr fe80::/10 accept
+"#,
+                );
+            }
+        }
+
+        rules.push_str(
+            r#"
+        # === DHCP ===
+        udp dport 67 accept
+        udp sport 68 accept
+"#,
+        );
+
+        match self.dns_mode {
+            DnsMode::Tunnel | DnsMode::Strict => {
+                rules.push_str(
+                    r#"
+        # === DNS LEAK PROTECTION (tunnel/strict) ===
+        oifname "tun*" udp dport 53 accept
+        oifname "tun*" tcp dport 53 accept
+        oifname "wg*" udp dport 53 accept
+        oifname "wg*" tcp dport 53 accept
+        oifname "tap*" udp dport 53 accept
+        oifname "tap*" tcp dport 53 accept
+        udp dport 53 drop
+        tcp dport 53 drop
+        tcp dport 853 drop
+"#,
+                );
+            }
+            DnsMode::Localhost => {
+                rules.push_str(
+                    r#"
+        # === DNS LEAK PROTECTION (localhost) ===
+        ip daddr 127.0.0.0/8 udp dport 53 accept
+        ip daddr 127.0.0.0/8 tcp dport 53 accept
+        ip daddr 127.0.0.53 udp dport 53 accept
+        ip daddr 127.0.0.53 tcp dport 53 accept
+"#,
+                );
+                if self.ipv6_mode != Ipv6Mode::Block {
+                    rules.push_str(
+                        r#"
+        ip6 daddr ::1 udp dport 53 accept
+        ip6 daddr ::1 tcp dport 53 accept
+"#,
+                    );
+                }
+                rules.push_str(
+                    r#"
+        udp dport 53 drop
+        tcp dport 53 drop
+        tcp dport 853 drop
+"#,
+                );
+            }
+            DnsMode::Any => {
+                rules.push_str(
+                    r#"
+        # === DNS (any mode - LEGACY/INSECURE) ===
+        udp dport 53 accept
+        tcp dport 53 accept
+"#,
+                );
+            }
+        }
+
+        if self.block_doh && matches!(self.dns_mode, DnsMode::Tunnel | DnsMode::Strict) {
+            rules.push_str("\n        # === Block DNS-over-HTTPS (DoH) ===\n");
+            for ip in DOH_PROVIDER_IPS
+                .iter()
+                .copied()
+                .chain(self.custom_doh_blocklist.iter().map(|s| s.as_str()))
+            {
+                rules.push_str(&format!("        ip daddr {} tcp dport 443 drop\n", ip));
+            }
+        }
+
+        rules.push_str(
+            r#"
+        # === LOCAL NETWORK ===
+        ip daddr 192.168.0.0/16 accept
+        ip daddr 10.0.0.0/8 accept
+        ip daddr 172.16.0.0/12 accept
+"#,
+        );
+
+        rules.push_str(
+            r#"
+        # === VPN TUNNEL INTERFACES ===
+        oifname "tun*" accept
+        oifname "tap*" accept
+        oifname "wg*" accept
+"#,
+        );
+
+        if !vpn_server_ips.is_empty() {
+            rules.push_str("\n        # === VPN SERVER ALLOWLIST ===\n");
+        }
+        for ip in vpn_server_ips {
+            match ip {
+                IpAddr::V4(v4) => {
+                    rules.push_str(&format!("        ip daddr {} accept\n", v4));
+                }
+                IpAddr::V6(v6) => {
+                    if self.ipv6_mode != Ipv6Mode::Block {
+                        rules.push_str(&format!("        ip6 daddr {} accept\n", v6));
+                    }
+                }
+            }
+        }
+
+        if let Some(ip) = self.vpn_server_ip {
+            match ip {
+                IpAddr::V4(v4) => {
+                    rules.push_str(&format!("        ip daddr {} accept\n", v4));
+                }
+                IpAddr::V6(v6) => {
+                    if self.ipv6_mode != Ipv6Mode::Block {
+                        rules.push_str(&format!("        ip6 daddr {} accept\n", v6));
+                    }
+                }
+            }
+        }
+
+        rules.push_str(
+            r#"
+        # === DEFAULT DROP ===
+        limit rate 1/second log prefix "[SHROUD-KS DROP] " drop
+    }
+
+    chain input {
+        type filter hook input priority 0; policy accept;
+    }
+}
+"#,
+        );
+
+        rules
     }
 
     /// Detect the VPN tunnel interface from the system

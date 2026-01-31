@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **Kill Switch**: Replace `pkexec` with `sudo` for privilege escalation to avoid session-type polkit failures.
+- **Kill Switch**: Automatically fall back to nftables when iptables kernel modules are unavailable.
 
 ## [1.6.5] - 2026-01-31
 

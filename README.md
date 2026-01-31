@@ -502,6 +502,12 @@ sudo chmod 440 /etc/sudoers.d/shroud
 - Only `iptables`, `ip6tables`, and `nft` are granted passwordless access
 - Only users in the wheel/sudo group can use this
 - Remove anytime with: `sudo rm /etc/sudoers.d/shroud`
+
+### Backend Fallback (iptables ↔ nftables)
+
+Shroud prefers iptables, but will automatically fall back to nftables when the
+iptables kernel modules are unavailable. The nftables rules mirror the same
+DNS/DoH/DoT protections to avoid leak regressions.
 ```
 
 ---
