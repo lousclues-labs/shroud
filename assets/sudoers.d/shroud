@@ -11,4 +11,6 @@
 
 %wheel ALL=(ALL) NOPASSWD: /usr/sbin/iptables
 %wheel ALL=(ALL) NOPASSWD: /usr/sbin/ip6tables
+%wheel ALL=(ALL) NOPASSWD: /usr/sbin/iptables-legacy
+%wheel ALL=(ALL) NOPASSWD: /usr/sbin/ip6tables-legacy
 %wheel ALL=(ALL) NOPASSWD: /usr/sbin/nft

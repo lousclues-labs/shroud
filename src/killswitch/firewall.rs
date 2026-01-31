@@ -39,6 +39,11 @@ use crate::config::{DnsMode, Ipv6Mode};
 /// Name of the iptables chain for the kill switch
 const CHAIN_NAME: &str = "SHROUD_KILLSWITCH";
 
+/// Absolute paths used for sudoers compatibility
+const IPTABLES_BIN: &str = "/usr/sbin/iptables";
+const IP6TABLES_BIN: &str = "/usr/sbin/ip6tables";
+const NFT_BIN: &str = "/usr/sbin/nft";
+
 /// Name of the nftables table for the kill switch
 const NFT_TABLE: &str = "shroud_killswitch";
 
@@ -133,6 +138,8 @@ pub struct KillSwitch {
     ipv6_mode: Ipv6Mode,
     /// Firewall backend in use
     backend: FirewallBackend,
+    /// Prefer iptables-legacy over iptables-nft
+    use_legacy: bool,
 }
 
 impl KillSwitch {
@@ -147,6 +154,7 @@ impl KillSwitch {
             custom_doh_blocklist: Vec::new(),
             ipv6_mode: Ipv6Mode::default(),
             backend: FirewallBackend::Iptables,
+            use_legacy: false,
         }
     }
 
@@ -166,6 +174,7 @@ impl KillSwitch {
             custom_doh_blocklist,
             ipv6_mode,
             backend: FirewallBackend::Iptables,
+            use_legacy: false,
         }
     }
 
@@ -185,7 +194,7 @@ impl KillSwitch {
 
     /// Check if iptables is available
     pub async fn is_available() -> bool {
-        Command::new("iptables")
+        Command::new(IPTABLES_BIN)
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -198,7 +207,7 @@ impl KillSwitch {
     /// Check if we have permission to modify iptables
     pub async fn has_permission() -> bool {
         // Try to list filter table - this will fail if we don't have permission
-        Command::new("iptables")
+        Command::new(IPTABLES_BIN)
             .args(["-t", "filter", "-nL", "OUTPUT"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -238,7 +247,7 @@ impl KillSwitch {
 
         match self.backend {
             FirewallBackend::Iptables => {
-                let result = Command::new("iptables")
+                let result = Command::new(IPTABLES_BIN)
                     .args(["-C", "OUTPUT", "-j", CHAIN_NAME])
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
@@ -248,7 +257,7 @@ impl KillSwitch {
             }
             FirewallBackend::Nftables => {
                 let result = Command::new("sudo")
-                    .args(["nft", "list", "table", "inet", NFT_TABLE])
+                    .args([NFT_BIN, "list", "table", "inet", NFT_TABLE])
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status();
@@ -325,59 +334,59 @@ impl KillSwitch {
         let mut s = String::new();
 
         // Cleanup (always runs, errors ignored)
-        s.push_str("iptables -D OUTPUT -j SHROUD_KILLSWITCH 2>/dev/null || true\n");
-        s.push_str("iptables -F SHROUD_KILLSWITCH 2>/dev/null || true\n");
-        s.push_str("iptables -X SHROUD_KILLSWITCH 2>/dev/null || true\n");
-        s.push_str("nft delete table inet shroud_killswitch 2>/dev/null || true\n");
+        s.push_str("/usr/sbin/iptables -D OUTPUT -j SHROUD_KILLSWITCH 2>/dev/null || true\n");
+        s.push_str("/usr/sbin/iptables -F SHROUD_KILLSWITCH 2>/dev/null || true\n");
+        s.push_str("/usr/sbin/iptables -X SHROUD_KILLSWITCH 2>/dev/null || true\n");
+        s.push_str("/usr/sbin/nft delete table inet shroud_killswitch 2>/dev/null || true\n");
 
         // Create chain
-        s.push_str("iptables -N SHROUD_KILLSWITCH\n");
-        s.push_str("iptables -I OUTPUT 1 -j SHROUD_KILLSWITCH\n");
+        s.push_str("/usr/sbin/iptables -N SHROUD_KILLSWITCH\n");
+        s.push_str("/usr/sbin/iptables -I OUTPUT 1 -j SHROUD_KILLSWITCH\n");
 
         // Rules
-        s.push_str("iptables -A SHROUD_KILLSWITCH -o lo -j ACCEPT\n");
+        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o lo -j ACCEPT\n");
         s.push_str(
-            "iptables -A SHROUD_KILLSWITCH -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n",
+            "/usr/sbin/iptables -A SHROUD_KILLSWITCH -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n",
         );
         // DNS rules must come before VPN interface allow rules
         s.push_str(&self.build_dns_rules());
 
-        s.push_str("iptables -A SHROUD_KILLSWITCH -o tun+ -j ACCEPT\n");
-        s.push_str("iptables -A SHROUD_KILLSWITCH -o tap+ -j ACCEPT\n");
-        s.push_str("iptables -A SHROUD_KILLSWITCH -o wg+ -j ACCEPT\n");
+        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o tun+ -j ACCEPT\n");
+        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o tap+ -j ACCEPT\n");
+        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o wg+ -j ACCEPT\n");
 
         s.push_str(&self.build_doh_blocking_rules());
 
         for ip in vpn_ips {
             if let IpAddr::V4(v4) = ip {
                 s.push_str(&format!(
-                    "iptables -A SHROUD_KILLSWITCH -d {} -j ACCEPT\n",
+                    "/usr/sbin/iptables -A SHROUD_KILLSWITCH -d {} -j ACCEPT\n",
                     v4
                 ));
             }
         }
 
-        s.push_str("iptables -A SHROUD_KILLSWITCH -d 192.168.0.0/16 -j ACCEPT\n");
-        s.push_str("iptables -A SHROUD_KILLSWITCH -d 10.0.0.0/8 -j ACCEPT\n");
-        s.push_str("iptables -A SHROUD_KILLSWITCH -d 172.16.0.0/12 -j ACCEPT\n");
-        s.push_str("iptables -A SHROUD_KILLSWITCH -p udp --dport 67 -j ACCEPT\n");
-        s.push_str("iptables -A SHROUD_KILLSWITCH -p udp --sport 68 -j ACCEPT\n");
+        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -d 192.168.0.0/16 -j ACCEPT\n");
+        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -d 10.0.0.0/8 -j ACCEPT\n");
+        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -d 172.16.0.0/12 -j ACCEPT\n");
+        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p udp --dport 67 -j ACCEPT\n");
+        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p udp --sport 68 -j ACCEPT\n");
 
-        s.push_str("iptables -A SHROUD_KILLSWITCH -m limit --limit 1/sec -j LOG --log-prefix '[SHROUD-KS DROP] ' --log-level 4\n");
-        s.push_str("iptables -A SHROUD_KILLSWITCH -j DROP\n");
+        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -m limit --limit 1/sec -j LOG --log-prefix '[SHROUD-KS DROP] ' --log-level 4\n");
+        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -j DROP\n");
 
         // IPv6
         match self.ipv6_mode {
             Ipv6Mode::Block => {
-                s.push_str("ip6tables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null || true\n");
-                s.push_str("ip6tables -I OUTPUT 2 -j DROP 2>/dev/null || true\n");
+                s.push_str("/usr/sbin/ip6tables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null || true\n");
+                s.push_str("/usr/sbin/ip6tables -I OUTPUT 2 -j DROP 2>/dev/null || true\n");
             }
             Ipv6Mode::Tunnel => {
-                s.push_str("ip6tables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null || true\n");
-                s.push_str("ip6tables -I OUTPUT 2 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true\n");
-                s.push_str("ip6tables -I OUTPUT 3 -o tun+ -j ACCEPT 2>/dev/null || true\n");
-                s.push_str("ip6tables -I OUTPUT 4 -d fe80::/10 -j ACCEPT 2>/dev/null || true\n");
-                s.push_str("ip6tables -I OUTPUT 5 -j DROP 2>/dev/null || true\n");
+                s.push_str("/usr/sbin/ip6tables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null || true\n");
+                s.push_str("/usr/sbin/ip6tables -I OUTPUT 2 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true\n");
+                s.push_str("/usr/sbin/ip6tables -I OUTPUT 3 -o tun+ -j ACCEPT 2>/dev/null || true\n");
+                s.push_str("/usr/sbin/ip6tables -I OUTPUT 4 -d fe80::/10 -j ACCEPT 2>/dev/null || true\n");
+                s.push_str("/usr/sbin/ip6tables -I OUTPUT 5 -j DROP 2>/dev/null || true\n");
             }
             Ipv6Mode::Off => {}
         }
@@ -396,34 +405,34 @@ impl KillSwitch {
         match self.dns_mode {
             DnsMode::Tunnel | DnsMode::Strict => {
                 s.push_str("# DNS Leak Protection (Tunnel/Strict)\n");
-                s.push_str("iptables -A SHROUD_KILLSWITCH -o tun+ -p udp --dport 53 -j ACCEPT\n");
-                s.push_str("iptables -A SHROUD_KILLSWITCH -o tun+ -p tcp --dport 53 -j ACCEPT\n");
-                s.push_str("iptables -A SHROUD_KILLSWITCH -o wg+ -p udp --dport 53 -j ACCEPT\n");
-                s.push_str("iptables -A SHROUD_KILLSWITCH -o wg+ -p tcp --dport 53 -j ACCEPT\n");
-                s.push_str("iptables -A SHROUD_KILLSWITCH -o tap+ -p udp --dport 53 -j ACCEPT\n");
-                s.push_str("iptables -A SHROUD_KILLSWITCH -o tap+ -p tcp --dport 53 -j ACCEPT\n");
-                s.push_str("iptables -A SHROUD_KILLSWITCH -p udp --dport 53 -j DROP\n");
-                s.push_str("iptables -A SHROUD_KILLSWITCH -p tcp --dport 53 -j DROP\n");
-                s.push_str("iptables -A SHROUD_KILLSWITCH -p tcp --dport 853 -j DROP\n");
+                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o tun+ -p udp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o tun+ -p tcp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o wg+ -p udp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o wg+ -p tcp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o tap+ -p udp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o tap+ -p tcp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p udp --dport 53 -j DROP\n");
+                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p tcp --dport 53 -j DROP\n");
+                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p tcp --dport 853 -j DROP\n");
             }
             DnsMode::Localhost => {
                 s.push_str("# DNS Leak Protection (Localhost)\n");
                 s.push_str(
-                    "iptables -A SHROUD_KILLSWITCH -d 127.0.0.0/8 -p udp --dport 53 -j ACCEPT\n",
+                    "/usr/sbin/iptables -A SHROUD_KILLSWITCH -d 127.0.0.0/8 -p udp --dport 53 -j ACCEPT\n",
                 );
                 s.push_str(
-                    "iptables -A SHROUD_KILLSWITCH -d 127.0.0.0/8 -p tcp --dport 53 -j ACCEPT\n",
+                    "/usr/sbin/iptables -A SHROUD_KILLSWITCH -d 127.0.0.0/8 -p tcp --dport 53 -j ACCEPT\n",
                 );
-                s.push_str("iptables -A SHROUD_KILLSWITCH -d ::1 -p udp --dport 53 -j ACCEPT\n");
-                s.push_str("iptables -A SHROUD_KILLSWITCH -d ::1 -p tcp --dport 53 -j ACCEPT\n");
-                s.push_str("iptables -A SHROUD_KILLSWITCH -p udp --dport 53 -j DROP\n");
-                s.push_str("iptables -A SHROUD_KILLSWITCH -p tcp --dport 53 -j DROP\n");
-                s.push_str("iptables -A SHROUD_KILLSWITCH -p tcp --dport 853 -j DROP\n");
+                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -d ::1 -p udp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -d ::1 -p tcp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p udp --dport 53 -j DROP\n");
+                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p tcp --dport 53 -j DROP\n");
+                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p tcp --dport 853 -j DROP\n");
             }
             DnsMode::Any => {
                 s.push_str("# DNS (Any Mode - NOT RECOMMENDED)\n");
-                s.push_str("iptables -A SHROUD_KILLSWITCH -p udp --dport 53 -j ACCEPT\n");
-                s.push_str("iptables -A SHROUD_KILLSWITCH -p tcp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p udp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p tcp --dport 53 -j ACCEPT\n");
             }
         }
 
@@ -448,7 +457,7 @@ impl KillSwitch {
             .chain(self.custom_doh_blocklist.iter().map(|s| s.as_str()))
         {
             s.push_str(&format!(
-                "iptables -A SHROUD_KILLSWITCH -d {} -p tcp --dport 443 -j DROP\n",
+                "/usr/sbin/iptables -A SHROUD_KILLSWITCH -d {} -p tcp --dport 443 -j DROP\n",
                 ip
             ));
         }
@@ -479,8 +488,16 @@ impl KillSwitch {
                 continue;
             }
 
+            let mut cmd = parts[0];
+            if self.use_legacy && (parts[0].ends_with("iptables") || parts[0].ends_with("ip6tables")) {
+                if let Some(legacy_cmd) = Self::legacy_variant(parts[0]).await {
+                    cmd = legacy_cmd;
+                }
+            }
+
             let output = Command::new("sudo")
-                .args(&parts)
+                .arg(cmd)
+                .args(&parts[1..])
                 .output()
                 .await
                 .map_err(KillSwitchError::Spawn)?;
@@ -491,6 +508,29 @@ impl KillSwitch {
                     return Err(KillSwitchError::Permission);
                 }
                 let stderr = String::from_utf8_lossy(&output.stderr);
+                let stderr_lower = stderr.to_lowercase();
+
+                if (stderr_lower.contains("cache initialization failed")
+                    || stderr_lower.contains("netlink: error")
+                    || stderr_lower.contains("can't initialize iptables table")
+                    || stderr_lower.contains("ip_tables"))
+                    && !parts.is_empty()
+                    && (parts[0].ends_with("iptables") || parts[0].ends_with("ip6tables"))
+                {
+                    if let Some(legacy_cmd) = Self::legacy_variant(parts[0]).await {
+                        let legacy_output = Command::new("sudo")
+                            .arg(legacy_cmd)
+                            .args(&parts[1..])
+                            .output()
+                            .await
+                            .map_err(KillSwitchError::Spawn)?;
+
+                        if legacy_output.status.success() {
+                            continue;
+                        }
+                    }
+                }
+
                 let detail = if stderr.trim().is_empty() {
                     line.clone()
                 } else {
@@ -506,11 +546,50 @@ impl KillSwitch {
         Ok(())
     }
 
-    async fn select_backend(&self) -> Result<FirewallBackend, KillSwitchError> {
+    async fn legacy_variant(cmd: &str) -> Option<&'static str> {
+        let (candidate, candidate_path) = if cmd.ends_with("iptables") {
+            ("iptables-legacy", "/usr/sbin/iptables-legacy")
+        } else if cmd.ends_with("ip6tables") {
+            ("ip6tables-legacy", "/usr/sbin/ip6tables-legacy")
+        } else {
+            return None;
+        };
+
+        if Command::new(candidate)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return Some(candidate);
+        }
+
+        if Command::new(candidate_path)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return Some(candidate_path);
+        }
+
+        None
+    }
+
+    async fn select_backend(&mut self) -> Result<FirewallBackend, KillSwitchError> {
         match Self::check_sudo_access() {
             Ok(()) => Ok(FirewallBackend::Iptables),
             Err(err) if Self::should_fallback_to_nft(&err) => {
-                if Self::nft_is_available().await {
+                if Self::check_iptables_legacy_access().unwrap_or(false) {
+                    self.use_legacy = true;
+                    Ok(FirewallBackend::Iptables)
+                } else if Self::nft_is_available().await {
                     Ok(FirewallBackend::Nftables)
                 } else {
                     Err(err)
@@ -538,8 +617,32 @@ impl KillSwitch {
     }
 
     async fn nft_is_available() -> bool {
-        Command::new("nft")
+        if Command::new("nft")
             .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+
+        if Command::new(NFT_BIN)
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await
+            .map(|s| s.success())
+            .unwrap_or(false)
+        {
+            return true;
+        }
+
+        Command::new("sudo")
+            .args(["-n", NFT_BIN, "--version"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -563,7 +666,7 @@ impl KillSwitch {
         }
 
         let output = std::process::Command::new("sudo")
-            .args(["-n", "iptables", "-L", "-n"])
+            .args(["-n", IPTABLES_BIN, "-L", "-n"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -594,10 +697,24 @@ impl KillSwitch {
         )))
     }
 
+    fn check_iptables_legacy_access() -> Result<bool, KillSwitchError> {
+        let output = std::process::Command::new("sudo")
+            .args(["-n", "/usr/sbin/iptables-legacy", "-L", "-n"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output();
+
+        match output {
+            Ok(out) => Ok(out.status.success()),
+            Err(_) => Ok(false),
+        }
+    }
+
     /// Verify our rules are actually in place
     async fn verify_rules_exist(&self) -> bool {
         // Check if our chain exists and has the jump rule
-        let output = Command::new("iptables")
+        let output = Command::new(IPTABLES_BIN)
             .args(["-C", "OUTPUT", "-j", CHAIN_NAME])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -609,7 +726,7 @@ impl KillSwitch {
 
     async fn verify_nft_rules_exist(&self) -> bool {
         let output = Command::new("sudo")
-            .args(["nft", "list", "table", "inet", NFT_TABLE])
+            .args([NFT_BIN, "list", "table", "inet", NFT_TABLE])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -623,27 +740,59 @@ impl KillSwitch {
         info!("Disabling VPN kill switch");
 
         if matches!(self.backend, FirewallBackend::Iptables) {
-            Self::check_sudo_access()?;
+            if let Err(err) = Self::check_sudo_access() {
+                if matches!(err, KillSwitchError::Permission) {
+                    return Err(err);
+                }
+
+                if Self::should_fallback_to_nft(&err) {
+                    if Self::check_iptables_legacy_access().unwrap_or(false) {
+                        warn!("iptables-nft unavailable during disable; using iptables-legacy");
+                        self.use_legacy = true;
+                    } else if Self::nft_is_available().await {
+                        warn!("iptables unavailable during disable; falling back to nftables");
+                        self.backend = FirewallBackend::Nftables;
+                        self.disable_nft().await?;
+                        self.enabled = false;
+                        info!("VPN kill switch disabled");
+                        return Ok(());
+                    }
+                }
+
+                warn!("iptables check failed during disable; attempting best-effort cleanup");
+            }
         }
 
         // We run cleanup regardless of enabled status to ensuring we don't leave
         // the user stranded if the internal state is out of sync.
 
         let script = r#"
-iptables -D OUTPUT -j SHROUD_KILLSWITCH 2>/dev/null || true
-iptables -F SHROUD_KILLSWITCH 2>/dev/null || true
-iptables -X SHROUD_KILLSWITCH 2>/dev/null || true
-ip6tables -D OUTPUT -j DROP 2>/dev/null || true
-ip6tables -D OUTPUT -o lo -j ACCEPT 2>/dev/null || true
-ip6tables -D OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
-ip6tables -D OUTPUT -o tun+ -j ACCEPT 2>/dev/null || true
-ip6tables -D OUTPUT -d fe80::/10 -j ACCEPT 2>/dev/null || true
-nft delete table inet shroud_killswitch 2>/dev/null || true
+/usr/sbin/iptables -D OUTPUT -j SHROUD_KILLSWITCH 2>/dev/null || true
+/usr/sbin/iptables -F SHROUD_KILLSWITCH 2>/dev/null || true
+/usr/sbin/iptables -X SHROUD_KILLSWITCH 2>/dev/null || true
+/usr/sbin/ip6tables -D OUTPUT -j DROP 2>/dev/null || true
+/usr/sbin/ip6tables -D OUTPUT -o lo -j ACCEPT 2>/dev/null || true
+/usr/sbin/ip6tables -D OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+/usr/sbin/ip6tables -D OUTPUT -o tun+ -j ACCEPT 2>/dev/null || true
+/usr/sbin/ip6tables -D OUTPUT -d fe80::/10 -j ACCEPT 2>/dev/null || true
+/usr/sbin/nft delete table inet shroud_killswitch 2>/dev/null || true
 "#;
 
         match self.backend {
             FirewallBackend::Iptables => {
-                self.run_single_script(script).await?;
+                match self.run_single_script(script).await {
+                    Ok(()) => {}
+                    Err(err) if Self::should_fallback_to_nft(&err) => {
+                        if Self::nft_is_available().await {
+                            warn!("iptables failed during disable; falling back to nftables");
+                            self.backend = FirewallBackend::Nftables;
+                            self.disable_nft().await?;
+                        } else {
+                            warn!("iptables failed during disable and nft is unavailable; proceeding best-effort");
+                        }
+                    }
+                    Err(err) => return Err(err),
+                }
             }
             FirewallBackend::Nftables => {
                 self.disable_nft().await?;
@@ -707,7 +856,7 @@ nft delete table inet shroud_killswitch 2>/dev/null || true
         stdin_data: Option<&str>,
     ) -> Result<(), KillSwitchError> {
         let mut cmd = Command::new("sudo");
-        cmd.arg("nft");
+        cmd.arg(NFT_BIN);
         cmd.args(args);
 
         if stdin_data.is_some() {

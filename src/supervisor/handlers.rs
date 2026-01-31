@@ -908,6 +908,37 @@ impl super::VpnSupervisor {
                 );
             }
             Err(e) => {
+                if !new_enabled {
+                    if let crate::killswitch::firewall::KillSwitchError::Command(msg) = &e {
+                        let msg_lower = msg.to_lowercase();
+                        if msg_lower.contains("cache initialization failed")
+                            || msg_lower.contains("netlink: error")
+                            || msg_lower.contains("ip_tables")
+                            || msg_lower.contains("can't initialize iptables table")
+                            || msg_lower.contains("table does not exist")
+                        {
+                            warn!(
+                                "Kill switch disable encountered iptables error; treating as best-effort: {}",
+                                e
+                            );
+
+                            {
+                                let mut state = self.shared_state.write().await;
+                                state.kill_switch = false;
+                            }
+
+                            self.app_config.kill_switch_enabled = false;
+                            if let Err(save_err) = self.config_manager.save(&self.app_config) {
+                                warn!("Failed to save config: {}", save_err);
+                            }
+
+                            self.update_tray();
+                            self.show_notification("Kill Switch", "Disabled");
+                            return;
+                        }
+                    }
+                }
+
                 error!("Failed to toggle kill switch: {}", e);
                 self.show_notification("Kill Switch Error", &format!("Failed: {}", e));
             }
