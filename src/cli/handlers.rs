@@ -638,10 +638,10 @@ async fn try_handle_update_command(
                 }
                 Err(e) => {
                     println!("⚠ Installation failed: {}", e);
-                    println!("");
+                    println!();
                     println!("  Manual installation:");
                     println!("    cp {} {}", cargo_bin.display(), local_path.display());
-                    println!("");
+                    println!();
                     println!("  Or use move (works on busy files):");
                     println!("    mv {} {}", cargo_bin.display(), local_path.display());
                     return Err("Installation failed".into());
