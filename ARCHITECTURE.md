@@ -270,10 +270,13 @@ Chain SHROUD_KILLSWITCH (policy DROP)
        -p udp --dport 67 -j ACCEPT
        -p udp --sport 68 -j ACCEPT
         
-        # 5. DNS (based on dns_mode)
-        # tunnel: (no rules - only via VPN interface)
-        # localhost: ip daddr 127.0.0.0/8 udp dport 53 accept
-        # any: udp dport 53 accept
+       # 5. DNS (based on dns_mode)
+       # tunnel/strict: allow 53 only via tun*/tap*/wg*, drop other 53, block 853 (DoT)
+       # localhost: allow 127.0.0.0/8 and ::1, drop other 53, block 853
+       # any: allow 53 to any destination (legacy)
+
+       # 5b. DoH blocking (optional)
+       # block_doh=true: drop TCP/443 to known DoH provider IPs
         
         # 6. Local network
         ip daddr 192.168.0.0/16 accept

@@ -142,7 +142,12 @@ impl VpnSupervisor {
         };
 
         // Create kill switch with config-based DNS and IPv6 modes
-        let mut kill_switch = KillSwitch::with_config(app_config.dns_mode, app_config.ipv6_mode);
+        let mut kill_switch = KillSwitch::with_config(
+            app_config.dns_mode,
+            app_config.ipv6_mode,
+            app_config.block_doh,
+            app_config.custom_doh_blocklist.clone(),
+        );
 
         // Sync with actual system state (detect existing rules)
         kill_switch.sync_state();

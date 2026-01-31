@@ -14,11 +14,16 @@
 //! max_reconnect_attempts = 10
 //! kill_switch_enabled = false
 //!
-//! # DNS leak protection mode: "tunnel" | "localhost" | "any"
+//! # DNS leak protection mode: "tunnel" | "strict" | "localhost" | "any"
 //! # - tunnel: DNS only via VPN tunnel interfaces (most secure, default)
+//! # - strict: tunnel + DoH/DoT blocking (maximum protection)
 //! # - localhost: DNS only to 127.0.0.0/8, ::1, 127.0.0.53 (for local resolvers)
 //! # - any: DNS to any destination (legacy, least secure)
 //! dns_mode = "tunnel"
+//! # Block DNS-over-HTTPS to known providers (recommended)
+//! block_doh = true
+//! # Additional DoH provider IPs to block
+//! custom_doh_blocklist = []
 //!
 //! # IPv6 leak protection: "block" | "tunnel" | "off"
 //! # - block: Drop all IPv6 except loopback (most secure, default)
@@ -71,12 +76,26 @@ pub enum DnsMode {
     /// Most secure - prevents DNS leaks entirely
     #[default]
     Tunnel,
+    /// Maximum protection: tunnel DNS rules + DoH/DoT blocking
+    /// Recommended for privacy-critical use
+    Strict,
     /// DNS only to localhost (127.0.0.0/8, ::1, 127.0.0.53)
     /// For systems using systemd-resolved or local caching resolver
     Localhost,
     /// DNS to any destination (legacy behavior, least secure)
     /// Only use if you have specific requirements
     Any,
+}
+
+impl std::fmt::Display for DnsMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DnsMode::Tunnel => write!(f, "tunnel"),
+            DnsMode::Strict => write!(f, "strict"),
+            DnsMode::Localhost => write!(f, "localhost"),
+            DnsMode::Any => write!(f, "any"),
+        }
+    }
 }
 
 /// IPv6 leak protection mode
@@ -115,8 +134,18 @@ pub struct Config {
     pub kill_switch_enabled: bool,
     /// DNS leak protection mode
     pub dns_mode: DnsMode,
+    /// Block DNS-over-HTTPS to known providers (tunnel/strict)
+    #[serde(default = "default_block_doh")]
+    pub block_doh: bool,
+    /// Additional DoH provider IPs to block
+    #[serde(default)]
+    pub custom_doh_blocklist: Vec<String>,
     /// IPv6 leak protection mode
     pub ipv6_mode: Ipv6Mode,
+}
+
+fn default_block_doh() -> bool {
+    true
 }
 
 impl Default for Config {
@@ -130,6 +159,8 @@ impl Default for Config {
             max_reconnect_attempts: 10,
             kill_switch_enabled: false,
             dns_mode: DnsMode::default(),
+            block_doh: default_block_doh(),
+            custom_doh_blocklist: Vec::new(),
             ipv6_mode: Ipv6Mode::default(),
         }
     }
@@ -327,6 +358,15 @@ impl ConfigManager {
                     toml::Value::String("tunnel".to_string()),
                 );
             }
+            if !table.contains_key("block_doh") {
+                table.insert("block_doh".to_string(), toml::Value::Boolean(true));
+            }
+            if !table.contains_key("custom_doh_blocklist") {
+                table.insert(
+                    "custom_doh_blocklist".to_string(),
+                    toml::Value::Array(Vec::new()),
+                );
+            }
             if !table.contains_key("ipv6_mode") {
                 table.insert(
                     "ipv6_mode".to_string(),
@@ -439,6 +479,8 @@ mod tests {
         assert_eq!(config.health_check_interval_secs, 30);
         assert_eq!(config.max_reconnect_attempts, 10);
         assert_eq!(config.dns_mode, DnsMode::Tunnel);
+        assert!(config.block_doh);
+        assert!(config.custom_doh_blocklist.is_empty());
         assert_eq!(config.ipv6_mode, Ipv6Mode::Block);
     }
 
@@ -453,6 +495,8 @@ mod tests {
             max_reconnect_attempts: 5,
             kill_switch_enabled: true,
             dns_mode: DnsMode::Localhost,
+            block_doh: false,
+            custom_doh_blocklist: vec!["1.1.1.1".to_string()],
             ipv6_mode: Ipv6Mode::Tunnel,
         };
 
@@ -468,6 +512,8 @@ mod tests {
         assert_eq!(parsed.max_reconnect_attempts, config.max_reconnect_attempts);
         assert_eq!(parsed.kill_switch_enabled, config.kill_switch_enabled);
         assert_eq!(parsed.dns_mode, config.dns_mode);
+        assert_eq!(parsed.block_doh, config.block_doh);
+        assert_eq!(parsed.custom_doh_blocklist, config.custom_doh_blocklist);
         assert_eq!(parsed.ipv6_mode, config.ipv6_mode);
     }
 
@@ -483,6 +529,8 @@ mod tests {
         assert!(config.last_server.is_none()); // default
         assert_eq!(config.health_check_interval_secs, 30); // default
         assert_eq!(config.dns_mode, DnsMode::Tunnel); // default
+        assert!(config.block_doh);
+        assert!(config.custom_doh_blocklist.is_empty());
         assert_eq!(config.ipv6_mode, Ipv6Mode::Block); // default
     }
 
@@ -509,6 +557,13 @@ mod tests {
         };
         let toml_str = toml::to_string(&config).unwrap();
         assert!(toml_str.contains("dns_mode = \"any\""));
+
+        let config = Config {
+            dns_mode: DnsMode::Strict,
+            ..Default::default()
+        };
+        let toml_str = toml::to_string(&config).unwrap();
+        assert!(toml_str.contains("dns_mode = \"strict\""));
     }
 
     #[test]

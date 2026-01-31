@@ -347,8 +347,14 @@ max_reconnect_attempts = 10
 # Enable kill switch (blocks non-VPN traffic)
 kill_switch_enabled = false
 
-# DNS leak protection mode: "tunnel" | "localhost" | "any"
+# DNS leak protection mode: "tunnel" | "strict" | "localhost" | "any"
 dns_mode = "tunnel"
+
+# Block DNS-over-HTTPS to known providers (tunnel/strict)
+block_doh = true
+
+# Additional DoH provider IPs to block
+custom_doh_blocklist = []
 
 # IPv6 leak protection: "block" | "tunnel" | "off"
 ipv6_mode = "block"
@@ -377,8 +383,11 @@ When enabled, the kill switch creates iptables rules that:
 | Mode | Behavior | Use Case |
 |------|----------|----------|
 | `tunnel` (default) | DNS only through VPN interface | Maximum security |
+| `strict` | Tunnel + DoH/DoT blocking | Privacy-critical environments |
 | `localhost` | DNS to 127.0.0.0/8, ::1, 127.0.0.53 | systemd-resolved, local DNS cache |
 | `any` | DNS to any destination | Legacy compatibility (not recommended) |
+
+When `dns_mode` is `tunnel` or `strict`, Shroud explicitly drops DNS (53) on non-VPN interfaces and blocks DNS-over-TLS (853). If `block_doh = true`, known DoH provider IPs are blocked on port 443 unless routed through the VPN.
 
 ### IPv6 Leak Protection
 

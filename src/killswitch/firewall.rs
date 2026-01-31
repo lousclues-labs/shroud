@@ -15,6 +15,7 @@
 //!
 //! Controlled by `dns_mode` config:
 //! - `tunnel`: DNS only via VPN tunnel interfaces (most secure)
+//! - `strict`: tunnel + DoH/DoT blocking (maximum protection)
 //! - `localhost`: DNS only to 127.0.0.0/8, ::1, 127.0.0.53
 //! - `any`: DNS to any destination (legacy, least secure)
 //!
@@ -37,6 +38,31 @@ use crate::config::{DnsMode, Ipv6Mode};
 
 /// Name of the iptables chain for the kill switch
 const CHAIN_NAME: &str = "SHROUD_KILLSWITCH";
+
+/// Known DNS-over-HTTPS provider IP addresses
+const DOH_PROVIDER_IPS: &[&str] = &[
+    // Cloudflare
+    "1.1.1.1",
+    "1.0.0.1",
+    // Google
+    "8.8.8.8",
+    "8.8.4.4",
+    // Quad9
+    "9.9.9.9",
+    "149.112.112.112",
+    // OpenDNS (Cisco)
+    "208.67.222.222",
+    "208.67.220.220",
+    // AdGuard
+    "94.140.14.14",
+    "94.140.15.15",
+    // CleanBrowsing
+    "185.228.168.168",
+    "185.228.169.168",
+    // Comodo
+    "8.26.56.26",
+    "8.20.247.20",
+];
 
 /// Errors that can occur during kill switch operations.
 #[derive(Error, Debug)]
@@ -88,6 +114,10 @@ pub struct KillSwitch {
     vpn_interface: Option<String>,
     /// DNS leak protection mode
     dns_mode: DnsMode,
+    /// Block DNS-over-HTTPS to known providers
+    block_doh: bool,
+    /// Additional DoH provider IPs to block
+    custom_doh_blocklist: Vec<String>,
     /// IPv6 leak protection mode
     ipv6_mode: Ipv6Mode,
 }
@@ -100,24 +130,41 @@ impl KillSwitch {
             vpn_server_ip: None,
             vpn_interface: None,
             dns_mode: DnsMode::default(),
+            block_doh: true,
+            custom_doh_blocklist: Vec::new(),
             ipv6_mode: Ipv6Mode::default(),
         }
     }
 
     /// Create a kill switch with specific DNS and IPv6 modes
-    pub fn with_config(dns_mode: DnsMode, ipv6_mode: Ipv6Mode) -> Self {
+    pub fn with_config(
+        dns_mode: DnsMode,
+        ipv6_mode: Ipv6Mode,
+        block_doh: bool,
+        custom_doh_blocklist: Vec<String>,
+    ) -> Self {
         Self {
             enabled: false,
             vpn_server_ip: None,
             vpn_interface: None,
             dns_mode,
+            block_doh,
+            custom_doh_blocklist,
             ipv6_mode,
         }
     }
 
     /// Update configuration (DNS and IPv6 modes)
-    pub fn set_config(&mut self, dns_mode: DnsMode, ipv6_mode: Ipv6Mode) {
+    pub fn set_config(
+        &mut self,
+        dns_mode: DnsMode,
+        ipv6_mode: Ipv6Mode,
+        block_doh: bool,
+        custom_doh_blocklist: Vec<String>,
+    ) {
         self.dns_mode = dns_mode;
+        self.block_doh = block_doh;
+        self.custom_doh_blocklist = custom_doh_blocklist;
         self.ipv6_mode = ipv6_mode;
     }
 
@@ -240,9 +287,14 @@ impl KillSwitch {
         s.push_str(
             "iptables -A SHROUD_KILLSWITCH -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n",
         );
+        // DNS rules must come before VPN interface allow rules
+        s.push_str(&self.build_dns_rules());
+
         s.push_str("iptables -A SHROUD_KILLSWITCH -o tun+ -j ACCEPT\n");
         s.push_str("iptables -A SHROUD_KILLSWITCH -o tap+ -j ACCEPT\n");
         s.push_str("iptables -A SHROUD_KILLSWITCH -o wg+ -j ACCEPT\n");
+
+        s.push_str(&self.build_doh_blocking_rules());
 
         for ip in vpn_ips {
             if let IpAddr::V4(v4) = ip {
@@ -258,23 +310,6 @@ impl KillSwitch {
         s.push_str("iptables -A SHROUD_KILLSWITCH -d 172.16.0.0/12 -j ACCEPT\n");
         s.push_str("iptables -A SHROUD_KILLSWITCH -p udp --dport 67 -j ACCEPT\n");
         s.push_str("iptables -A SHROUD_KILLSWITCH -p udp --sport 68 -j ACCEPT\n");
-
-        // DNS based on mode
-        match self.dns_mode {
-            DnsMode::Localhost => {
-                s.push_str(
-                    "iptables -A SHROUD_KILLSWITCH -d 127.0.0.0/8 -p udp --dport 53 -j ACCEPT\n",
-                );
-                s.push_str(
-                    "iptables -A SHROUD_KILLSWITCH -d 127.0.0.0/8 -p tcp --dport 53 -j ACCEPT\n",
-                );
-            }
-            DnsMode::Any => {
-                s.push_str("iptables -A SHROUD_KILLSWITCH -p udp --dport 53 -j ACCEPT\n");
-                s.push_str("iptables -A SHROUD_KILLSWITCH -p tcp --dport 53 -j ACCEPT\n");
-            }
-            DnsMode::Tunnel => {}
-        }
 
         s.push_str("iptables -A SHROUD_KILLSWITCH -m limit --limit 1/sec -j LOG --log-prefix '[SHROUD-KS DROP] ' --log-level 4\n");
         s.push_str("iptables -A SHROUD_KILLSWITCH -j DROP\n");
@@ -293,6 +328,77 @@ impl KillSwitch {
                 s.push_str("ip6tables -I OUTPUT 5 -j DROP 2>/dev/null || true\n");
             }
             Ipv6Mode::Off => {}
+        }
+
+        s
+    }
+
+    /// Build a preview of the kill switch rules script (for diagnostics/tests)
+    pub fn build_rules_preview(&self, vpn_ips: &[IpAddr]) -> String {
+        self.build_complete_script(vpn_ips)
+    }
+
+    fn build_dns_rules(&self) -> String {
+        let mut s = String::new();
+
+        match self.dns_mode {
+            DnsMode::Tunnel | DnsMode::Strict => {
+                s.push_str("# DNS Leak Protection (Tunnel/Strict)\n");
+                s.push_str("iptables -A SHROUD_KILLSWITCH -o tun+ -p udp --dport 53 -j ACCEPT\n");
+                s.push_str("iptables -A SHROUD_KILLSWITCH -o tun+ -p tcp --dport 53 -j ACCEPT\n");
+                s.push_str("iptables -A SHROUD_KILLSWITCH -o wg+ -p udp --dport 53 -j ACCEPT\n");
+                s.push_str("iptables -A SHROUD_KILLSWITCH -o wg+ -p tcp --dport 53 -j ACCEPT\n");
+                s.push_str("iptables -A SHROUD_KILLSWITCH -o tap+ -p udp --dport 53 -j ACCEPT\n");
+                s.push_str("iptables -A SHROUD_KILLSWITCH -o tap+ -p tcp --dport 53 -j ACCEPT\n");
+                s.push_str("iptables -A SHROUD_KILLSWITCH -p udp --dport 53 -j DROP\n");
+                s.push_str("iptables -A SHROUD_KILLSWITCH -p tcp --dport 53 -j DROP\n");
+                s.push_str("iptables -A SHROUD_KILLSWITCH -p tcp --dport 853 -j DROP\n");
+            }
+            DnsMode::Localhost => {
+                s.push_str("# DNS Leak Protection (Localhost)\n");
+                s.push_str(
+                    "iptables -A SHROUD_KILLSWITCH -d 127.0.0.0/8 -p udp --dport 53 -j ACCEPT\n",
+                );
+                s.push_str(
+                    "iptables -A SHROUD_KILLSWITCH -d 127.0.0.0/8 -p tcp --dport 53 -j ACCEPT\n",
+                );
+                s.push_str("iptables -A SHROUD_KILLSWITCH -d ::1 -p udp --dport 53 -j ACCEPT\n");
+                s.push_str("iptables -A SHROUD_KILLSWITCH -d ::1 -p tcp --dport 53 -j ACCEPT\n");
+                s.push_str("iptables -A SHROUD_KILLSWITCH -p udp --dport 53 -j DROP\n");
+                s.push_str("iptables -A SHROUD_KILLSWITCH -p tcp --dport 53 -j DROP\n");
+                s.push_str("iptables -A SHROUD_KILLSWITCH -p tcp --dport 853 -j DROP\n");
+            }
+            DnsMode::Any => {
+                s.push_str("# DNS (Any Mode - NOT RECOMMENDED)\n");
+                s.push_str("iptables -A SHROUD_KILLSWITCH -p udp --dport 53 -j ACCEPT\n");
+                s.push_str("iptables -A SHROUD_KILLSWITCH -p tcp --dport 53 -j ACCEPT\n");
+            }
+        }
+
+        s
+    }
+
+    fn build_doh_blocking_rules(&self) -> String {
+        if !self.block_doh {
+            return String::new();
+        }
+
+        if !matches!(self.dns_mode, DnsMode::Tunnel | DnsMode::Strict) {
+            return String::new();
+        }
+
+        let mut s = String::new();
+        s.push_str("# Block DNS-over-HTTPS (DoH) to known providers\n");
+
+        for ip in DOH_PROVIDER_IPS
+            .iter()
+            .copied()
+            .chain(self.custom_doh_blocklist.iter().map(|s| s.as_str()))
+        {
+            s.push_str(&format!(
+                "iptables -A SHROUD_KILLSWITCH -d {} -p tcp --dport 443 -j DROP\n",
+                ip
+            ));
         }
 
         s
@@ -650,7 +756,7 @@ mod tests {
 
     #[test]
     fn test_kill_switch_with_config() {
-        let ks = KillSwitch::with_config(DnsMode::Localhost, Ipv6Mode::Tunnel);
+        let ks = KillSwitch::with_config(DnsMode::Localhost, Ipv6Mode::Tunnel, true, Vec::new());
         assert_eq!(ks.dns_mode, DnsMode::Localhost);
         assert_eq!(ks.ipv6_mode, Ipv6Mode::Tunnel);
     }
@@ -658,7 +764,7 @@ mod tests {
     #[test]
     fn test_kill_switch_configuration_update() {
         let mut ks = KillSwitch::new();
-        ks.set_config(DnsMode::Any, Ipv6Mode::Off);
+        ks.set_config(DnsMode::Any, Ipv6Mode::Off, false, Vec::new());
         assert_eq!(ks.dns_mode, DnsMode::Any);
         assert_eq!(ks.ipv6_mode, Ipv6Mode::Off);
     }
@@ -673,6 +779,72 @@ mod tests {
         assert!(script.contains("nft delete table inet shroud_killswitch"));
         // Check for cleanup commands at start
         assert!(script.contains("iptables -X SHROUD_KILLSWITCH 2>/dev/null || true"));
+    }
+
+    #[test]
+    fn test_tunnel_mode_dns_rules() {
+        let ks = KillSwitch::with_config(DnsMode::Tunnel, Ipv6Mode::Block, true, Vec::new());
+        let rules = ks.build_rules_preview(&[]);
+
+        assert!(rules.contains("-o tun+ -p udp --dport 53 -j ACCEPT"));
+        assert!(rules.contains("-o tun+ -p tcp --dport 53 -j ACCEPT"));
+        assert!(rules.contains("-o wg+ -p udp --dport 53 -j ACCEPT"));
+        assert!(rules.contains("-o wg+ -p tcp --dport 53 -j ACCEPT"));
+        assert!(rules.contains("-p udp --dport 53 -j DROP"));
+        assert!(rules.contains("-p tcp --dport 53 -j DROP"));
+        assert!(rules.contains("-p tcp --dport 853 -j DROP"));
+    }
+
+    #[test]
+    fn test_localhost_mode_dns_rules() {
+        let ks = KillSwitch::with_config(DnsMode::Localhost, Ipv6Mode::Block, true, Vec::new());
+        let rules = ks.build_rules_preview(&[]);
+
+        assert!(rules.contains("-d 127.0.0.0/8 -p udp --dport 53 -j ACCEPT"));
+        assert!(rules.contains("-d 127.0.0.0/8 -p tcp --dport 53 -j ACCEPT"));
+        assert!(rules.contains("-d ::1 -p udp --dport 53 -j ACCEPT"));
+        assert!(rules.contains("-d ::1 -p tcp --dport 53 -j ACCEPT"));
+        assert!(rules.contains("-p udp --dport 53 -j DROP"));
+        assert!(rules.contains("-p tcp --dport 53 -j DROP"));
+    }
+
+    #[test]
+    fn test_any_mode_dns_rules() {
+        let ks = KillSwitch::with_config(DnsMode::Any, Ipv6Mode::Block, true, Vec::new());
+        let rules = ks.build_rules_preview(&[]);
+
+        assert!(rules.contains("-p udp --dport 53 -j ACCEPT"));
+        assert!(rules.contains("-p tcp --dport 53 -j ACCEPT"));
+        assert!(!rules.contains("-p udp --dport 53 -j DROP"));
+    }
+
+    #[test]
+    fn test_doh_blocking_rules() {
+        let ks = KillSwitch::with_config(DnsMode::Strict, Ipv6Mode::Block, true, Vec::new());
+        let rules = ks.build_rules_preview(&[]);
+
+        assert!(rules.contains("-d 1.1.1.1 -p tcp --dport 443 -j DROP"));
+        assert!(rules.contains("-d 8.8.8.8 -p tcp --dport 443 -j DROP"));
+        assert!(rules.contains("-d 9.9.9.9 -p tcp --dport 443 -j DROP"));
+    }
+
+    #[test]
+    fn test_dns_rule_ordering() {
+        let ks = KillSwitch::with_config(DnsMode::Tunnel, Ipv6Mode::Block, true, Vec::new());
+        let script = ks.build_rules_preview(&[]);
+
+        let dns_accept_pos = script
+            .find("-o tun+ -p udp --dport 53 -j ACCEPT")
+            .expect("DNS accept rule not found");
+        let dns_drop_pos = script
+            .find("-p udp --dport 53 -j DROP")
+            .expect("DNS drop rule not found");
+        let general_tun_pos = script
+            .find("-o tun+ -j ACCEPT")
+            .expect("General tun+ rule not found");
+
+        assert!(dns_accept_pos < dns_drop_pos);
+        assert!(dns_drop_pos < general_tun_pos);
     }
 }
 

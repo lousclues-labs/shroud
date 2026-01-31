@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.4] - 2026-02-15
+
+### Fixed
+- **Kill Switch**: Explicit DNS drop rules in tunnel/localhost/strict modes, DoT blocking, and optional DoH blocking to prevent DNS leaks.
+
 ## [1.6.3] - 2026-02-14
 
 ### Added

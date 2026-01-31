@@ -505,6 +505,15 @@ impl super::VpnSupervisor {
         // NOTE: We do NOT disable kill switch during VPN switch anymore.
         // The kill switch rules already whitelist all VPN server IPs from NetworkManager,
         // so VPN connections should work even with kill switch enabled.
+        if self.app_config.kill_switch_enabled && !self.kill_switch.is_enabled() {
+            info!("Pre-enabling kill switch before connection");
+            if let Err(e) = self.kill_switch.enable().await {
+                warn!("Failed to pre-enable kill switch: {}", e);
+            } else {
+                let mut state = self.shared_state.write().await;
+                state.kill_switch = true;
+            }
+        }
 
         // STEP 1: ALWAYS check NM for active VPNs first (don't trust our state machine)
         // This catches VPNs that NM still has active even if our state is wrong
@@ -959,8 +968,12 @@ impl super::VpnSupervisor {
         let new_config = self.config_manager.load_validated();
 
         self.app_config = new_config.clone();
-        self.kill_switch
-            .set_config(new_config.dns_mode, new_config.ipv6_mode);
+        self.kill_switch.set_config(
+            new_config.dns_mode,
+            new_config.ipv6_mode,
+            new_config.block_doh,
+            new_config.custom_doh_blocklist.clone(),
+        );
 
         {
             let mut state = self.shared_state.write().await;
