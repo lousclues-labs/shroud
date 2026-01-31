@@ -529,6 +529,7 @@ impl KillSwitch {
                     || msg.contains("can't initialize iptables table")
                     || msg.contains("cache initialization failed")
                     || msg.contains("netlink: error")
+                    || msg.contains("exit 3")
                     || msg.contains("does not exist")
             }
             KillSwitchError::Spawn(_) | KillSwitchError::NotFound => true,
@@ -569,11 +570,24 @@ impl KillSwitch {
             .output()
             .map_err(KillSwitchError::Spawn)?;
 
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stderr_lower = stderr.to_lowercase();
+        if stderr_lower.contains("ip_tables")
+            || stderr_lower.contains("table does not exist")
+            || stderr_lower.contains("can't initialize iptables table")
+            || stderr_lower.contains("cache initialization failed")
+            || stderr_lower.contains("netlink: error")
+        {
+            return Err(KillSwitchError::Command(format!(
+                "Sudo check failed: {}",
+                stderr.trim()
+            )));
+        }
+
         if output.status.success() {
             return Ok(());
         }
 
-        let stderr = String::from_utf8_lossy(&output.stderr);
         Err(KillSwitchError::Command(format!(
             "Sudo check failed: {}",
             stderr.trim()
