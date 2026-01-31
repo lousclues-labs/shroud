@@ -4,8 +4,9 @@
 //! with the daemon over IPC.
 
 use log::{error, info};
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
+use std::time::Instant;
 
 use super::args::{Args, DebugAction, ParsedCommand, ToggleAction};
 use super::help;
@@ -565,17 +566,18 @@ async fn try_handle_update_command(
         }
     }
 
-    println!("\n📦 Building...");
     let build_args = if debug_mode {
         vec!["build"]
     } else {
         vec!["build", "--release"]
     };
 
-    let build_status = std::process::Command::new("cargo")
-        .args(&build_args)
-        .current_dir(&project_dir)
-        .status()?;
+    println!("\n📦 Building...");
+    let build_status = run_with_progress("Building", || {
+        let mut command = std::process::Command::new("cargo");
+        command.args(&build_args).current_dir(&project_dir);
+        command
+    })?;
 
     if !build_status.success() {
         return Err("Build failed".into());
@@ -583,10 +585,13 @@ async fn try_handle_update_command(
     println!("✓ Build successful");
 
     println!("\n📥 Installing...");
-    let install_status = std::process::Command::new("cargo")
-        .args(["install", "--path", ".", "--force"])
-        .current_dir(&project_dir)
-        .status()?;
+    let install_status = run_with_progress("Installing", || {
+        let mut command = std::process::Command::new("cargo");
+        command
+            .args(["install", "--path", ".", "--force"])
+            .current_dir(&project_dir);
+        command
+    })?;
 
     if !install_status.success() {
         return Err("Install failed".into());
@@ -653,6 +658,54 @@ async fn try_handle_update_command(
     }
 
     Ok(())
+}
+
+fn run_with_progress(
+    label: &str,
+    make_command: impl FnOnce() -> std::process::Command,
+) -> Result<std::process::ExitStatus, Box<dyn std::error::Error>> {
+    let mut command = make_command();
+    let is_tty = std::io::stdout().is_terminal();
+
+    if is_tty {
+        command
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    }
+
+    let mut child = command.spawn()?;
+    let start = Instant::now();
+
+    if !is_tty {
+        return Ok(child.wait()?);
+    }
+
+    let bar_width = 24usize;
+    let mut tick = 0usize;
+
+    loop {
+        if let Some(status) = child.try_wait()? {
+            let elapsed = start.elapsed().as_secs();
+            let bar = "█".repeat(bar_width);
+            print!("\r==> {} [{}] {}s\n", label, bar, elapsed);
+            std::io::stdout().flush()?;
+            return Ok(status);
+        }
+
+        let phase = tick % (bar_width * 2);
+        let filled = if phase < bar_width {
+            phase + 1
+        } else {
+            bar_width * 2 - phase
+        };
+        let bar = format!("{}{}", "█".repeat(filled), "░".repeat(bar_width - filled));
+        let elapsed = start.elapsed().as_secs();
+        print!("\r==> {} [{}] {}s", label, bar, elapsed);
+        std::io::stdout().flush()?;
+
+        std::thread::sleep(std::time::Duration::from_millis(250));
+        tick += 1;
+    }
 }
 
 async fn handle_version_command(check: bool) -> i32 {
