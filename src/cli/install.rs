@@ -15,10 +15,7 @@ pub enum InstallError {
         error: io::Error,
     },
     /// Failed to set executable permissions.
-    Permissions {
-        path: PathBuf,
-        error: io::Error,
-    },
+    Permissions { path: PathBuf, error: io::Error },
     /// Failed to perform atomic rename.
     Rename {
         temp: PathBuf,
@@ -26,14 +23,9 @@ pub enum InstallError {
         error: io::Error,
     },
     /// Failed to clean up temp file after error.
-    Cleanup {
-        path: PathBuf,
-        error: io::Error,
-    },
+    Cleanup { path: PathBuf, error: io::Error },
     /// Source file does not exist.
-    SourceNotFound {
-        path: PathBuf,
-    },
+    SourceNotFound { path: PathBuf },
 }
 
 impl std::fmt::Display for InstallError {
@@ -51,7 +43,12 @@ impl std::fmt::Display for InstallError {
                 error
             ),
             InstallError::Permissions { path, error } => {
-                write!(f, "Failed to set permissions on {}: {}", path.display(), error)
+                write!(
+                    f,
+                    "Failed to set permissions on {}: {}",
+                    path.display(),
+                    error
+                )
             }
             InstallError::Rename { temp, dest, error } => write!(
                 f,
@@ -61,7 +58,12 @@ impl std::fmt::Display for InstallError {
                 error
             ),
             InstallError::Cleanup { path, error } => {
-                write!(f, "Failed to clean up temp file {}: {}", path.display(), error)
+                write!(
+                    f,
+                    "Failed to clean up temp file {}: {}",
+                    path.display(),
+                    error
+                )
             }
             InstallError::SourceNotFound { path } => {
                 write!(f, "Source binary not found: {}", path.display())
@@ -119,11 +121,9 @@ pub fn install_binary_atomic(source: &Path, dest: &Path) -> Result<(), InstallEr
     }
 
     fs::rename(&temp_dest, dest).map_err(|e| {
-        let cleanup = fs::remove_file(&temp_dest).map_err(|cleanup_error| {
-            InstallError::Cleanup {
-                path: temp_dest.clone(),
-                error: cleanup_error,
-            }
+        let cleanup = fs::remove_file(&temp_dest).map_err(|cleanup_error| InstallError::Cleanup {
+            path: temp_dest.clone(),
+            error: cleanup_error,
         });
 
         if let Err(cleanup_error) = cleanup {
@@ -233,7 +233,10 @@ mod tests {
         assert!(result.is_err());
 
         let temp_path = dest.with_file_name(".shroud.new");
-        assert!(!temp_path.exists(), "Temp file should be cleaned up on failure");
+        assert!(
+            !temp_path.exists(),
+            "Temp file should be cleaned up on failure"
+        );
     }
 
     #[test]

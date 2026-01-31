@@ -620,11 +620,7 @@ async fn try_handle_update_command(
             .join(".cargo/bin/shroud");
 
         if !cargo_bin.exists() {
-            return Err(format!(
-                "Source binary not found at {}",
-                cargo_bin.display()
-            )
-            .into());
+            return Err(format!("Source binary not found at {}", cargo_bin.display()).into());
         }
 
         if let Some(parent) = local_path.parent() {
@@ -644,18 +640,10 @@ async fn try_handle_update_command(
                     println!("⚠ Installation failed: {}", e);
                     println!("");
                     println!("  Manual installation:");
-                    println!(
-                        "    cp {} {}",
-                        cargo_bin.display(),
-                        local_path.display()
-                    );
+                    println!("    cp {} {}", cargo_bin.display(), local_path.display());
                     println!("");
                     println!("  Or use move (works on busy files):");
-                    println!(
-                        "    mv {} {}",
-                        cargo_bin.display(),
-                        local_path.display()
-                    );
+                    println!("    mv {} {}", cargo_bin.display(), local_path.display());
                     return Err("Installation failed".into());
                 }
             }
