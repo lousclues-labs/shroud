@@ -107,6 +107,9 @@ pub async fn send_command_on_stream(
     debug!("Received response: {}", response_line.trim());
 
     if response_line.trim().is_empty() {
+        if matches!(command, IpcCommand::Restart | IpcCommand::Quit) {
+            return Ok(IpcResponse::Ok);
+        }
         return Err(ClientError::Receive(io::Error::new(
             io::ErrorKind::UnexpectedEof,
             "Empty response from daemon",

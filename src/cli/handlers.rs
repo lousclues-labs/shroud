@@ -112,6 +112,16 @@ pub async fn run_client_mode(args: &Args) -> i32 {
                 }
                 0
             }
+            Ok(IpcResponse::Ok) => {
+                if !args.quiet {
+                    println!("Daemon restarting...");
+                }
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                if !args.quiet {
+                    println!("Daemon restarted successfully");
+                }
+                0
+            }
             Ok(IpcResponse::Error { message }) => {
                 eprintln!("Error: {}", message);
                 1
