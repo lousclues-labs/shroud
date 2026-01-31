@@ -40,9 +40,9 @@ use crate::config::{DnsMode, Ipv6Mode};
 const CHAIN_NAME: &str = "SHROUD_KILLSWITCH";
 
 /// Absolute paths used for sudoers compatibility
-const IPTABLES_BIN: &str = "/usr/sbin/iptables";
-const IP6TABLES_BIN: &str = "/usr/sbin/ip6tables";
-const NFT_BIN: &str = "/usr/sbin/nft";
+const IPTABLES_BIN: &str = "/usr/bin/iptables";
+const IP6TABLES_BIN: &str = "/usr/bin/ip6tables";
+const NFT_BIN: &str = "/usr/bin/nft";
 
 /// Name of the nftables table for the kill switch
 const NFT_TABLE: &str = "shroud_killswitch";
@@ -334,59 +334,59 @@ impl KillSwitch {
         let mut s = String::new();
 
         // Cleanup (always runs, errors ignored)
-        s.push_str("/usr/sbin/iptables -D OUTPUT -j SHROUD_KILLSWITCH 2>/dev/null || true\n");
-        s.push_str("/usr/sbin/iptables -F SHROUD_KILLSWITCH 2>/dev/null || true\n");
-        s.push_str("/usr/sbin/iptables -X SHROUD_KILLSWITCH 2>/dev/null || true\n");
-        s.push_str("/usr/sbin/nft delete table inet shroud_killswitch 2>/dev/null || true\n");
+        s.push_str("/usr/bin/iptables -D OUTPUT -j SHROUD_KILLSWITCH 2>/dev/null || true\n");
+        s.push_str("/usr/bin/iptables -F SHROUD_KILLSWITCH 2>/dev/null || true\n");
+        s.push_str("/usr/bin/iptables -X SHROUD_KILLSWITCH 2>/dev/null || true\n");
+        s.push_str("/usr/bin/nft delete table inet shroud_killswitch 2>/dev/null || true\n");
 
         // Create chain
-        s.push_str("/usr/sbin/iptables -N SHROUD_KILLSWITCH\n");
-        s.push_str("/usr/sbin/iptables -I OUTPUT 1 -j SHROUD_KILLSWITCH\n");
+        s.push_str("/usr/bin/iptables -N SHROUD_KILLSWITCH\n");
+        s.push_str("/usr/bin/iptables -I OUTPUT 1 -j SHROUD_KILLSWITCH\n");
 
         // Rules
-        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o lo -j ACCEPT\n");
+        s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -o lo -j ACCEPT\n");
         s.push_str(
-            "/usr/sbin/iptables -A SHROUD_KILLSWITCH -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n",
+            "/usr/bin/iptables -A SHROUD_KILLSWITCH -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT\n",
         );
         // DNS rules must come before VPN interface allow rules
         s.push_str(&self.build_dns_rules());
 
-        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o tun+ -j ACCEPT\n");
-        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o tap+ -j ACCEPT\n");
-        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o wg+ -j ACCEPT\n");
+        s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -o tun+ -j ACCEPT\n");
+        s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -o tap+ -j ACCEPT\n");
+        s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -o wg+ -j ACCEPT\n");
 
         s.push_str(&self.build_doh_blocking_rules());
 
         for ip in vpn_ips {
             if let IpAddr::V4(v4) = ip {
                 s.push_str(&format!(
-                    "/usr/sbin/iptables -A SHROUD_KILLSWITCH -d {} -j ACCEPT\n",
+                    "/usr/bin/iptables -A SHROUD_KILLSWITCH -d {} -j ACCEPT\n",
                     v4
                 ));
             }
         }
 
-        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -d 192.168.0.0/16 -j ACCEPT\n");
-        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -d 10.0.0.0/8 -j ACCEPT\n");
-        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -d 172.16.0.0/12 -j ACCEPT\n");
-        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p udp --dport 67 -j ACCEPT\n");
-        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p udp --sport 68 -j ACCEPT\n");
+        s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -d 192.168.0.0/16 -j ACCEPT\n");
+        s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -d 10.0.0.0/8 -j ACCEPT\n");
+        s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -d 172.16.0.0/12 -j ACCEPT\n");
+        s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -p udp --dport 67 -j ACCEPT\n");
+        s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -p udp --sport 68 -j ACCEPT\n");
 
-        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -m limit --limit 1/sec -j LOG --log-prefix '[SHROUD-KS DROP] ' --log-level 4\n");
-        s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -j DROP\n");
+        s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -m limit --limit 1/sec -j LOG --log-prefix '[SHROUD-KS DROP] ' --log-level 4\n");
+        s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -j DROP\n");
 
         // IPv6
         match self.ipv6_mode {
             Ipv6Mode::Block => {
-                s.push_str("/usr/sbin/ip6tables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null || true\n");
-                s.push_str("/usr/sbin/ip6tables -I OUTPUT 2 -j DROP 2>/dev/null || true\n");
+                s.push_str("/usr/bin/ip6tables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null || true\n");
+                s.push_str("/usr/bin/ip6tables -I OUTPUT 2 -j DROP 2>/dev/null || true\n");
             }
             Ipv6Mode::Tunnel => {
-                s.push_str("/usr/sbin/ip6tables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null || true\n");
-                s.push_str("/usr/sbin/ip6tables -I OUTPUT 2 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true\n");
-                s.push_str("/usr/sbin/ip6tables -I OUTPUT 3 -o tun+ -j ACCEPT 2>/dev/null || true\n");
-                s.push_str("/usr/sbin/ip6tables -I OUTPUT 4 -d fe80::/10 -j ACCEPT 2>/dev/null || true\n");
-                s.push_str("/usr/sbin/ip6tables -I OUTPUT 5 -j DROP 2>/dev/null || true\n");
+                s.push_str("/usr/bin/ip6tables -I OUTPUT 1 -o lo -j ACCEPT 2>/dev/null || true\n");
+                s.push_str("/usr/bin/ip6tables -I OUTPUT 2 -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true\n");
+                s.push_str("/usr/bin/ip6tables -I OUTPUT 3 -o tun+ -j ACCEPT 2>/dev/null || true\n");
+                s.push_str("/usr/bin/ip6tables -I OUTPUT 4 -d fe80::/10 -j ACCEPT 2>/dev/null || true\n");
+                s.push_str("/usr/bin/ip6tables -I OUTPUT 5 -j DROP 2>/dev/null || true\n");
             }
             Ipv6Mode::Off => {}
         }
@@ -405,34 +405,34 @@ impl KillSwitch {
         match self.dns_mode {
             DnsMode::Tunnel | DnsMode::Strict => {
                 s.push_str("# DNS Leak Protection (Tunnel/Strict)\n");
-                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o tun+ -p udp --dport 53 -j ACCEPT\n");
-                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o tun+ -p tcp --dport 53 -j ACCEPT\n");
-                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o wg+ -p udp --dport 53 -j ACCEPT\n");
-                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o wg+ -p tcp --dport 53 -j ACCEPT\n");
-                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o tap+ -p udp --dport 53 -j ACCEPT\n");
-                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -o tap+ -p tcp --dport 53 -j ACCEPT\n");
-                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p udp --dport 53 -j DROP\n");
-                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p tcp --dport 53 -j DROP\n");
-                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p tcp --dport 853 -j DROP\n");
+                s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -o tun+ -p udp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -o tun+ -p tcp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -o wg+ -p udp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -o wg+ -p tcp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -o tap+ -p udp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -o tap+ -p tcp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -p udp --dport 53 -j DROP\n");
+                s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -p tcp --dport 53 -j DROP\n");
+                s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -p tcp --dport 853 -j DROP\n");
             }
             DnsMode::Localhost => {
                 s.push_str("# DNS Leak Protection (Localhost)\n");
                 s.push_str(
-                    "/usr/sbin/iptables -A SHROUD_KILLSWITCH -d 127.0.0.0/8 -p udp --dport 53 -j ACCEPT\n",
+                    "/usr/bin/iptables -A SHROUD_KILLSWITCH -d 127.0.0.0/8 -p udp --dport 53 -j ACCEPT\n",
                 );
                 s.push_str(
-                    "/usr/sbin/iptables -A SHROUD_KILLSWITCH -d 127.0.0.0/8 -p tcp --dport 53 -j ACCEPT\n",
+                    "/usr/bin/iptables -A SHROUD_KILLSWITCH -d 127.0.0.0/8 -p tcp --dport 53 -j ACCEPT\n",
                 );
-                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -d ::1 -p udp --dport 53 -j ACCEPT\n");
-                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -d ::1 -p tcp --dport 53 -j ACCEPT\n");
-                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p udp --dport 53 -j DROP\n");
-                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p tcp --dport 53 -j DROP\n");
-                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p tcp --dport 853 -j DROP\n");
+                s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -d ::1 -p udp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -d ::1 -p tcp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -p udp --dport 53 -j DROP\n");
+                s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -p tcp --dport 53 -j DROP\n");
+                s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -p tcp --dport 853 -j DROP\n");
             }
             DnsMode::Any => {
                 s.push_str("# DNS (Any Mode - NOT RECOMMENDED)\n");
-                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p udp --dport 53 -j ACCEPT\n");
-                s.push_str("/usr/sbin/iptables -A SHROUD_KILLSWITCH -p tcp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -p udp --dport 53 -j ACCEPT\n");
+                s.push_str("/usr/bin/iptables -A SHROUD_KILLSWITCH -p tcp --dport 53 -j ACCEPT\n");
             }
         }
 
@@ -457,7 +457,7 @@ impl KillSwitch {
             .chain(self.custom_doh_blocklist.iter().map(|s| s.as_str()))
         {
             s.push_str(&format!(
-                "/usr/sbin/iptables -A SHROUD_KILLSWITCH -d {} -p tcp --dport 443 -j DROP\n",
+                "/usr/bin/iptables -A SHROUD_KILLSWITCH -d {} -p tcp --dport 443 -j DROP\n",
                 ip
             ));
         }
@@ -559,9 +559,9 @@ impl KillSwitch {
 
     async fn legacy_variant(cmd: &str) -> Option<&'static str> {
         let (candidate, candidate_path) = if cmd.ends_with("iptables") {
-            ("iptables-legacy", "/usr/sbin/iptables-legacy")
+            ("iptables-legacy", "/usr/bin/iptables-legacy")
         } else if cmd.ends_with("ip6tables") {
-            ("ip6tables-legacy", "/usr/sbin/ip6tables-legacy")
+            ("ip6tables-legacy", "/usr/bin/ip6tables-legacy")
         } else {
             return None;
         };
@@ -710,7 +710,7 @@ impl KillSwitch {
 
     fn check_iptables_legacy_access() -> Result<bool, KillSwitchError> {
         let output = std::process::Command::new("sudo")
-            .args(["-n", "/usr/sbin/iptables-legacy", "-L", "-n"])
+            .args(["-n", "/usr/bin/iptables-legacy", "-L", "-n"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
@@ -778,15 +778,15 @@ impl KillSwitch {
         // the user stranded if the internal state is out of sync.
 
         let script = r#"
-/usr/sbin/iptables -D OUTPUT -j SHROUD_KILLSWITCH 2>/dev/null || true
-/usr/sbin/iptables -F SHROUD_KILLSWITCH 2>/dev/null || true
-/usr/sbin/iptables -X SHROUD_KILLSWITCH 2>/dev/null || true
-/usr/sbin/ip6tables -D OUTPUT -j DROP 2>/dev/null || true
-/usr/sbin/ip6tables -D OUTPUT -o lo -j ACCEPT 2>/dev/null || true
-/usr/sbin/ip6tables -D OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
-/usr/sbin/ip6tables -D OUTPUT -o tun+ -j ACCEPT 2>/dev/null || true
-/usr/sbin/ip6tables -D OUTPUT -d fe80::/10 -j ACCEPT 2>/dev/null || true
-/usr/sbin/nft delete table inet shroud_killswitch 2>/dev/null || true
+/usr/bin/iptables -D OUTPUT -j SHROUD_KILLSWITCH 2>/dev/null || true
+/usr/bin/iptables -F SHROUD_KILLSWITCH 2>/dev/null || true
+/usr/bin/iptables -X SHROUD_KILLSWITCH 2>/dev/null || true
+/usr/bin/ip6tables -D OUTPUT -j DROP 2>/dev/null || true
+/usr/bin/ip6tables -D OUTPUT -o lo -j ACCEPT 2>/dev/null || true
+/usr/bin/ip6tables -D OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
+/usr/bin/ip6tables -D OUTPUT -o tun+ -j ACCEPT 2>/dev/null || true
+/usr/bin/ip6tables -D OUTPUT -d fe80::/10 -j ACCEPT 2>/dev/null || true
+/usr/bin/nft delete table inet shroud_killswitch 2>/dev/null || true
 "#;
 
         match self.backend {

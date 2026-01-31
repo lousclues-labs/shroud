@@ -74,23 +74,23 @@ pub fn rules_exist_ipv6() -> Result<bool, CleanupError> {
 fn run_cleanup_command() -> Result<(), CleanupError> {
     let commands: Vec<Vec<&str>> = vec![
         vec![
-            "/usr/sbin/iptables",
+            "/usr/bin/iptables",
             "-D",
             "OUTPUT",
             "-j",
             "SHROUD_KILLSWITCH",
         ],
-        vec!["/usr/sbin/iptables", "-F", "SHROUD_KILLSWITCH"],
-        vec!["/usr/sbin/iptables", "-X", "SHROUD_KILLSWITCH"],
+        vec!["/usr/bin/iptables", "-F", "SHROUD_KILLSWITCH"],
+        vec!["/usr/bin/iptables", "-X", "SHROUD_KILLSWITCH"],
         vec![
-            "/usr/sbin/ip6tables",
+            "/usr/bin/ip6tables",
             "-D",
             "OUTPUT",
             "-j",
             "SHROUD_KILLSWITCH",
         ],
-        vec!["/usr/sbin/ip6tables", "-F", "SHROUD_KILLSWITCH"],
-        vec!["/usr/sbin/ip6tables", "-X", "SHROUD_KILLSWITCH"],
+        vec!["/usr/bin/ip6tables", "-F", "SHROUD_KILLSWITCH"],
+        vec!["/usr/bin/ip6tables", "-X", "SHROUD_KILLSWITCH"],
     ];
 
     for command in commands {
@@ -104,7 +104,7 @@ fn run_cleanup_command() -> Result<(), CleanupError> {
 
     let _ = Command::new("sudo")
         .args([
-            "/usr/sbin/nft",
+            "/usr/bin/nft",
             "delete",
             "table",
             "inet",
@@ -172,12 +172,12 @@ pub fn cleanup_with_fallback() -> CleanupResult {
             error!("Your firewall rules may still be blocking network traffic.");
             error!("To manually clean up, run:");
             error!("");
-            error!("  sudo iptables -D OUTPUT -j SHROUD_KILLSWITCH");
-            error!("  sudo iptables -F SHROUD_KILLSWITCH");
-            error!("  sudo iptables -X SHROUD_KILLSWITCH");
-            error!("  sudo ip6tables -D OUTPUT -j SHROUD_KILLSWITCH");
-            error!("  sudo ip6tables -F SHROUD_KILLSWITCH");
-            error!("  sudo ip6tables -X SHROUD_KILLSWITCH");
+            error!("  sudo /usr/bin/iptables -D OUTPUT -j SHROUD_KILLSWITCH");
+            error!("  sudo /usr/bin/iptables -F SHROUD_KILLSWITCH");
+            error!("  sudo /usr/bin/iptables -X SHROUD_KILLSWITCH");
+            error!("  sudo /usr/bin/ip6tables -D OUTPUT -j SHROUD_KILLSWITCH");
+            error!("  sudo /usr/bin/ip6tables -F SHROUD_KILLSWITCH");
+            error!("  sudo /usr/bin/ip6tables -X SHROUD_KILLSWITCH");
             error!("");
             error!("To avoid this in the future, install the sudoers rule:");
             error!("  ./setup.sh --install-sudoers");
@@ -227,9 +227,9 @@ pub fn cleanup_stale_on_startup() {
 fn log_manual_cleanup_instructions() {
     error!("");
     error!("Manual cleanup commands:");
-    error!("  sudo iptables -D OUTPUT -j SHROUD_KILLSWITCH");
-    error!("  sudo iptables -F SHROUD_KILLSWITCH");
-    error!("  sudo iptables -X SHROUD_KILLSWITCH");
+    error!("  sudo /usr/bin/iptables -D OUTPUT -j SHROUD_KILLSWITCH");
+    error!("  sudo /usr/bin/iptables -F SHROUD_KILLSWITCH");
+    error!("  sudo /usr/bin/iptables -X SHROUD_KILLSWITCH");
     error!("  sudo ip6tables -D OUTPUT -j SHROUD_KILLSWITCH");
     error!("  sudo ip6tables -F SHROUD_KILLSWITCH");
     error!("  sudo ip6tables -X SHROUD_KILLSWITCH");
