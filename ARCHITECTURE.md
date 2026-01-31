@@ -238,6 +238,19 @@ Errors are propagated up to the `VpnSupervisor` or CLI handlers, where they are 
 
 ## Kill Switch Architecture
 
+### OpenVPN vs WireGuard Behavior
+
+Shroud applies the same kill switch policy to both OpenVPN and WireGuard, but the tunnel interface and endpoint handling differ:
+
+- **OpenVPN (tun/tap)**
+       - Tunnel interfaces: `tun*` or `tap*`
+       - Kill switch allows traffic only through `tun*`/`tap*` plus the VPN server IP detected from NetworkManager
+- **WireGuard (wg)**
+       - Tunnel interfaces: `wg*`
+       - Kill switch allows traffic only through `wg*` plus the WireGuard endpoint IP detected from NetworkManager
+
+The rules are interface-driven, so the primary difference is which tunnel interface prefix is permitted (`tun*/tap*` vs `wg*`). Server/endpoint IP allowlisting uses NetworkManager-reported connection details for each VPN type.
+
 ### iptables Chain Structure
 
 ```
