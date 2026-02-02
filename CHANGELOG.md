@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.2] - 2026-02-01
+
+### Fixed
+- **CRITICAL: Desktop Mode Silent Failure** - Desktop users were silently switched to headless mode when running from terminals without DISPLAY/WAYLAND_DISPLAY environment variables set. This caused the tray icon to not appear and the application to seem "hung" (actually running headless in foreground). Root cause: overly aggressive auto-detection heuristics in mode.rs were checking for display variables, SSH sessions, and systemd INVOCATION_ID to determine mode.
+- **Mode Detection Now Explicit** - Removed all auto-detection heuristics. Desktop mode is now ALWAYS the default. Headless mode requires explicit opt-in via `--headless` flag or `SHROUD_MODE=headless` environment variable. This prevents accidental mode switching that breaks user workflows.
+- **Update Command Double Build** - The `shroud update` command was running `cargo build --release` followed by `cargo install --path .`, causing two separate builds (0s cached build + 98s fresh install build). Now uses single `cargo install` step.
+- **Misleading Error Message** - Error messages incorrectly told users to run `shroud --daemon` which doesn't exist. Changed to correct instruction: `shroud`.
+
+### Changed
+- **Startup Banner** - Added visible startup message "Shroud daemon starting..." so users know the daemon launched successfully.
+
 ## [1.8.1] - 2026-02-01
 
 ### Fixed

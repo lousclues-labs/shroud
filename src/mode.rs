@@ -1,15 +1,19 @@
 //! Runtime mode detection for Shroud.
 //!
 //! Shroud can run in two modes:
-//! - Desktop: With tray icon, notifications, D-Bus session
-//! - Headless: No GUI, systemd integration, server-optimized
+//! - Desktop: With tray icon, notifications, D-Bus session (ALWAYS DEFAULT)
+//! - Headless: No GUI, systemd integration, server-optimized (EXPLICIT ONLY)
 //!
-//! Mode is determined by:
-//! 1. Explicit --headless flag (highest priority)
-//! 2. Explicit --desktop flag
-//! 3. Auto-detection based on environment
+//! DESIGN PRINCIPLE: Desktop is ALWAYS the default.
+//! Headless mode requires EXPLICIT opt-in via:
+//! 1. --headless flag
+//! 2. SHROUD_MODE=headless environment variable
+//!
+//! We do NOT auto-detect headless based on missing DISPLAY, SSH sessions,
+//! or any other heuristics. This prevents accidental mode switches that
+//! could break user workflows.
 
-use log::{debug, info};
+use log::info;
 use std::env;
 
 /// Runtime mode for Shroud
@@ -32,83 +36,47 @@ impl std::fmt::Display for RuntimeMode {
 
 /// Detect the appropriate runtime mode.
 ///
-/// Priority:
-/// 1. Explicit CLI flag (--headless or --desktop)
-/// 2. Environment variable (SHROUD_MODE=headless|desktop)
-/// 3. Auto-detection based on session type
+/// EXPLICIT OPT-IN ONLY:
+/// - --headless flag → Headless
+/// - SHROUD_MODE=headless → Headless  
+/// - Everything else → Desktop (safe default)
+///
+/// --desktop flag is accepted but redundant (desktop is always default)
 pub fn detect_mode(cli_headless: bool, cli_desktop: bool) -> RuntimeMode {
-    // Explicit flags take priority
+    // --headless flag: explicit headless request
     if cli_headless {
-        info!("Mode: headless (explicit flag)");
+        info!("Mode: headless (--headless flag)");
         return RuntimeMode::Headless;
     }
 
+    // --desktop flag: explicit desktop (redundant but accepted)
     if cli_desktop {
-        info!("Mode: desktop (explicit flag)");
+        info!("Mode: desktop (--desktop flag)");
         return RuntimeMode::Desktop;
     }
 
-    // Check environment variable
+    // SHROUD_MODE environment variable: explicit mode choice
     if let Ok(mode) = env::var("SHROUD_MODE") {
         match mode.to_lowercase().as_str() {
             "headless" => {
-                info!("Mode: headless (SHROUD_MODE env)");
+                info!("Mode: headless (SHROUD_MODE=headless)");
                 return RuntimeMode::Headless;
             }
             "desktop" => {
-                info!("Mode: desktop (SHROUD_MODE env)");
+                info!("Mode: desktop (SHROUD_MODE=desktop)");
                 return RuntimeMode::Desktop;
             }
             _ => {
-                debug!("Unknown SHROUD_MODE value: {}, auto-detecting", mode);
+                // Unknown value - warn but use default
+                eprintln!("Warning: Unknown SHROUD_MODE='{}', using desktop", mode);
             }
         }
     }
 
-    // Auto-detect based on environment
-    auto_detect_mode()
-}
-
-/// Auto-detect mode based on session environment.
-fn auto_detect_mode() -> RuntimeMode {
-    // Check for display server
-    let has_display = env::var("DISPLAY").is_ok() || env::var("WAYLAND_DISPLAY").is_ok();
-
-    // Check for desktop session
-    let has_desktop_session =
-        env::var("XDG_CURRENT_DESKTOP").is_ok() || env::var("DESKTOP_SESSION").is_ok();
-
-    // Check if running as system service (no user session)
-    let is_system_service = env::var("USER").map(|u| u == "root").unwrap_or(false) && !has_display;
-
-    // Check for SSH session
-    let is_ssh = env::var("SSH_CONNECTION").is_ok() || env::var("SSH_CLIENT").is_ok();
-
-    // Check systemd invocation
-    let is_systemd_service = env::var("INVOCATION_ID").is_ok();
-
-    debug!(
-        "Auto-detect: display={}, desktop_session={}, system_service={}, ssh={}, systemd={}",
-        has_display, has_desktop_session, is_system_service, is_ssh, is_systemd_service
-    );
-
-    // Decision logic
-    if is_system_service || is_systemd_service {
-        info!("Mode: headless (detected system service)");
-        RuntimeMode::Headless
-    } else if is_ssh && !has_display {
-        info!("Mode: headless (detected SSH without display)");
-        RuntimeMode::Headless
-    } else if has_display && has_desktop_session {
-        info!("Mode: desktop (detected display + desktop session)");
-        RuntimeMode::Desktop
-    } else if has_display {
-        info!("Mode: desktop (detected display)");
-        RuntimeMode::Desktop
-    } else {
-        info!("Mode: headless (no display detected)");
-        RuntimeMode::Headless
-    }
+    // DEFAULT: Always desktop
+    // No auto-detection, no heuristics, no surprises.
+    info!("Mode: desktop (default)");
+    RuntimeMode::Desktop
 }
 
 /// Check if headless mode can run (basic requirements).
@@ -154,8 +122,14 @@ mod tests {
 
     #[test]
     fn test_headless_takes_priority() {
-        // If both flags somehow set, headless wins
+        // If both flags somehow set, headless wins (it's checked first)
         assert_eq!(detect_mode(true, true), RuntimeMode::Headless);
+    }
+
+    #[test]
+    fn test_default_is_always_desktop() {
+        // No flags = desktop (the safe default)
+        assert_eq!(detect_mode(false, false), RuntimeMode::Desktop);
     }
 
     #[test]

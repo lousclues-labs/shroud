@@ -63,6 +63,9 @@ use crate::tray::{SharedState, VpnTray};
 
 /// Run daemon mode - start the tray application
 async fn run_daemon_mode(args: cli::Args) {
+    // Print startup banner FIRST (before any async/logging setup)
+    println!("Shroud daemon starting... (use Ctrl+C to stop)");
+    
     // Convert CLI args to logging args format
     let log_args = logging::Args {
         verbose: args.verbose,
@@ -87,9 +90,6 @@ async fn run_daemon_mode(args: cli::Args) {
             std::process::exit(1);
         }
     };
-
-    // Print startup banner (visible even without verbose flag)
-    eprintln!("Shroud daemon starting... (use Ctrl+C to stop)");
 
     // Clean up any stale kill switch rules from previous crash
     killswitch::cleanup_stale_on_startup();
