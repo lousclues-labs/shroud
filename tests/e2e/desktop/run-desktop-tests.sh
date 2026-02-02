@@ -14,19 +14,20 @@ E2E_DIR="$(dirname "$SCRIPT_DIR")"
 PROJECT_ROOT="$(dirname "$(dirname "$E2E_DIR")")"
 RESULTS_DIR="${SCRIPT_DIR}/results"
 
-# Source test helpers
-source "${E2E_DIR}/lib.sh" 2>/dev/null || {
-    # Inline minimal helpers if file doesn't exist
-    RED='\033[0;31m'
-    GREEN='\033[0;32m'
-    YELLOW='\033[1;33m'
-    NC='\033[0m'
-    
-    log_pass() { echo -e "${GREEN}✓ PASS${NC}: $1"; }
-    log_fail() { echo -e "${RED}✗ FAIL${NC}: $1"; }
-    log_info() { echo -e "${YELLOW}→${NC} $1"; }
-    log_skip() { echo -e "${YELLOW}○ SKIP${NC}: $1"; }
-}
+# Color codes
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+# Helper functions
+log_pass() { echo -e "${GREEN}✓ PASS${NC}: $1"; }
+log_fail() { echo -e "${RED}✗ FAIL${NC}: $1"; }
+log_info() { echo -e "${YELLOW}→${NC} $1"; }
+log_skip() { echo -e "${YELLOW}○ SKIP${NC}: $1"; }
+
+# Try to source additional helpers (optional)
+source "${E2E_DIR}/lib.sh" 2>/dev/null || true
 
 # Flags
 PRIVILEGED=false
@@ -106,7 +107,7 @@ run_suite() {
     
     if [[ ! -f "$suite_path" ]]; then
         log_skip "$suite (not found)"
-        ((TOTAL_SKIPPED++))
+        TOTAL_SKIPPED=$((TOTAL_SKIPPED + 1))
         return
     fi
     
@@ -119,10 +120,10 @@ run_suite() {
     
     if SHROUD_BIN="$SHROUD_BIN" RESULTS_DIR="$RESULTS_DIR" "$suite_path"; then
         log_pass "$suite"
-        ((TOTAL_PASSED++))
+        TOTAL_PASSED=$((TOTAL_PASSED + 1))
     else
         log_fail "$suite"
-        ((TOTAL_FAILED++))
+        TOTAL_FAILED=$((TOTAL_FAILED + 1))
     fi
 }
 
