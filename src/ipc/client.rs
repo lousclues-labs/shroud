@@ -38,7 +38,7 @@ pub enum ClientError {
     #[error("Failed to parse response: {0}")]
     Parse(#[from] serde_json::Error),
     /// Daemon is not running
-    #[error("Daemon is not running. Start it with: shroud --daemon")]
+    #[error("Daemon is not running. Start it with: shroud")]
     DaemonNotRunning,
 }
 

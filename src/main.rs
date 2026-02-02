@@ -88,6 +88,9 @@ async fn run_daemon_mode(args: cli::Args) {
         }
     };
 
+    // Print startup banner (visible even without verbose flag)
+    eprintln!("Shroud daemon starting... (use Ctrl+C to stop)");
+
     // Clean up any stale kill switch rules from previous crash
     killswitch::cleanup_stale_on_startup();
 

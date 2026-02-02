@@ -140,7 +140,7 @@ pub async fn run_client_mode(args: &Args) -> i32 {
                 match e {
                     ClientError::DaemonNotRunning => {
                         eprintln!("Error: Shroud daemon is not running.");
-                        eprintln!("Start it with: shroud --daemon");
+                        eprintln!("Start it with: shroud");
                     }
                     _ => {
                         eprintln!("Error: {}", e);
@@ -155,7 +155,7 @@ pub async fn run_client_mode(args: &Args) -> i32 {
                 match e {
                     ClientError::DaemonNotRunning => {
                         eprintln!("Error: Shroud daemon is not running.");
-                        eprintln!("Start it with: shroud --daemon");
+                        eprintln!("Start it with: shroud");
                         // Special exit code for daemon not running?
                         // Standard practice is 1, but maybe another is better. Sticking to 1.
                     }
@@ -770,35 +770,23 @@ async fn try_handle_update_command(
         }
     }
 
-    let build_args = if debug_mode {
-        vec!["build"]
+    // Use cargo install which builds and installs in one step
+    // (no need for separate cargo build since install does its own build)
+    let install_args = if debug_mode {
+        vec!["install", "--path", ".", "--force", "--debug"]
     } else {
-        vec!["build", "--release"]
+        vec!["install", "--path", ".", "--force"]
     };
 
-    println!("\n📦 Building...");
-    let build_status = run_with_progress("Building", || {
+    println!("\n📦 Building and installing...");
+    let install_status = run_with_progress("Building", || {
         let mut command = std::process::Command::new("cargo");
-        command.args(&build_args).current_dir(&project_dir);
-        command
-    })?;
-
-    if !build_status.success() {
-        return Err("Build failed".into());
-    }
-    println!("✓ Build successful");
-
-    println!("\n📥 Installing...");
-    let install_status = run_with_progress("Installing", || {
-        let mut command = std::process::Command::new("cargo");
-        command
-            .args(["install", "--path", ".", "--force"])
-            .current_dir(&project_dir);
+        command.args(&install_args).current_dir(&project_dir);
         command
     })?;
 
     if !install_status.success() {
-        return Err("Install failed".into());
+        return Err("Build/install failed".into());
     }
     println!("✓ Installed to ~/.cargo/bin/shroud");
 
