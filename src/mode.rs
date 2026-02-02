@@ -129,11 +129,9 @@ pub fn check_headless_requirements() -> Result<(), String> {
 pub fn check_desktop_requirements() -> Result<(), String> {
     // Check for display
     if env::var("DISPLAY").is_err() && env::var("WAYLAND_DISPLAY").is_err() {
-        return Err(
-            "Desktop mode requires a display (X11 or Wayland).\n\
-             Use --headless for server environments."
-                .to_string(),
-        );
+        return Err("Desktop mode requires a display (X11 or Wayland).\n\
+              Use --headless for server environments."
+            .to_string());
     }
 
     Ok(())

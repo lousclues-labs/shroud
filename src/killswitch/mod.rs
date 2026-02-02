@@ -22,4 +22,3 @@ pub use sudo_check::{
     check_sudo_access, check_sudo_access_with_message, validate_sudoers_on_startup,
     SudoAccessStatus,
 };
-

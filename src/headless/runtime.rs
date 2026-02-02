@@ -46,12 +46,12 @@ pub async fn run_headless(config: Config) -> Result<(), Box<dyn std::error::Erro
 
     // Step 2: Set up channels (similar to desktop mode, but no tray)
     let shared_state = Arc::new(RwLock::new(SharedState::default()));
-    
+
     // Channels
     let (_tray_tx, tray_rx) = mpsc::channel(16); // Unused in headless but needed for supervisor
     let (dbus_tx, dbus_rx) = mpsc::channel(32); // NM events
     let (ipc_tx, ipc_rx) = mpsc::channel(32); // IPC commands
-    
+
     // No tray handle in headless mode
     let tray_handle = Arc::new(std::sync::Mutex::new(None));
 
@@ -162,7 +162,14 @@ pub async fn run_headless(config: Config) -> Result<(), Box<dyn std::error::Erro
     info!("Received {}, shutting down", shutdown_reason);
 
     // Step 11: Graceful shutdown
-    shutdown(&config, watchdog_handle, ipc_handle, dbus_handle, supervisor_handle).await;
+    shutdown(
+        &config,
+        watchdog_handle,
+        ipc_handle,
+        dbus_handle,
+        supervisor_handle,
+    )
+    .await;
 
     info!("Shroud headless shutdown complete");
     Ok(())
@@ -223,10 +230,7 @@ async fn auto_connect_nmcli(
 
         if attempt < max_attempts {
             // Calculate delay with exponential backoff and jitter
-            let delay = std::cmp::min(
-                base_delay * 2u32.saturating_pow(attempt - 1),
-                max_delay,
-            );
+            let delay = std::cmp::min(base_delay * 2u32.saturating_pow(attempt - 1), max_delay);
             let jitter = rand::rng().random_range(0..1000);
             let total_delay = delay + Duration::from_millis(jitter);
 

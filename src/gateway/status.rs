@@ -1,6 +1,8 @@
 //! Gateway status reporting.
 
-use super::detect::{detect_lan_interface, detect_vpn_interface, get_interface_ip, get_interface_subnet};
+use super::detect::{
+    detect_lan_interface, detect_vpn_interface, get_interface_ip, get_interface_subnet,
+};
 use super::firewall::{get_forward_rules, is_forward_killswitch_active};
 use super::{is_enabled, is_forwarding_enabled};
 use std::fmt;

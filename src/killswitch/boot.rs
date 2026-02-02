@@ -93,14 +93,7 @@ fn add_boot_rules(allow_lan: bool) -> Result<(), KillSwitchError> {
 
     // Allow DHCP
     run_iptables(&[
-        "-A",
-        BOOT_CHAIN,
-        "-p",
-        "udp",
-        "--dport",
-        "67:68",
-        "-j",
-        "ACCEPT",
+        "-A", BOOT_CHAIN, "-p", "udp", "--dport", "67:68", "-j", "ACCEPT",
     ])?;
 
     // Allow LAN if configured
