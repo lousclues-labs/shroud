@@ -1,0 +1,210 @@
+name: E2E Headless Tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/headless/**'
+      - 'src/gateway/**'
+      - 'src/mode.rs'
+      - 'src/killswitch/boot.rs'
+      - 'tests/e2e/**'
+      - '.github/workflows/e2e-headless.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/headless/**'
+      - 'src/gateway/**'
+      - 'src/mode.rs'
+      - 'src/killswitch/boot.rs'
+      - 'tests/e2e/**'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # Non-privileged tests that can run in CI
+  unit-tests:
+    name: Headless Unit Tests
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "v2"
+      
+      - name: Run unit tests
+        run: |
+          cargo test mode::tests --all-features
+          cargo test headless::systemd::tests --all-features
+          cargo test gateway::detect::tests --all-features
+          cargo test gateway::firewall::tests --all-features
+          cargo test gateway::forwarding::tests --all-features
+          cargo test killswitch::boot::tests --all-features
+
+  # Integration tests (require privileges - run locally or on self-hosted)
+  e2e-headless:
+    name: E2E Headless Mode
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libdbus-1-dev \
+            pkg-config \
+            network-manager \
+            iptables \
+            iproute2 \
+            jq
+          sudo systemctl start NetworkManager || true
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "v2"
+      
+      - name: Build Shroud
+        run: cargo build --release
+      
+      - name: Setup test environment
+        run: |
+          sudo mkdir -p /etc/shroud
+          sudo mkdir -p /var/lib/shroud
+          sudo mkdir -p /run/shroud
+          sudo chmod 755 /etc/shroud /var/lib/shroud /run/shroud
+          
+          # Create test config
+          sudo tee /etc/shroud/config.toml > /dev/null << 'EOF'
+          version = 1
+          auto_reconnect = true
+          
+          [headless]
+          auto_connect = false
+          kill_switch_on_boot = false
+          require_kill_switch = false
+          
+          [killswitch]
+          allow_lan = true
+          
+          [gateway]
+          enabled = false
+          kill_switch_forwarding = true
+          EOF
+      
+      - name: Run E2E mode detection tests
+        run: |
+          chmod +x tests/e2e/test-mode-detection.sh
+          tests/e2e/test-mode-detection.sh
+      
+      - name: Run E2E headless runtime tests (unprivileged)
+        run: |
+          chmod +x tests/e2e/test-headless-runtime.sh
+          tests/e2e/test-headless-runtime.sh --unprivileged
+      
+      - name: Note about privileged tests
+        run: |
+          echo "=========================================="
+          echo "E2E TESTS NOTICE"
+          echo "=========================================="
+          echo ""
+          echo "Some tests require privileged access:"
+          echo "  - Boot kill switch tests (iptables)"
+          echo "  - Gateway tests (iptables, ip forwarding)"
+          echo ""
+          echo "To run privileged tests locally:"
+          echo "  sudo -E tests/e2e/run-privileged.sh"
+          echo "=========================================="
+      
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-headless-results
+          path: tests/e2e/results/
+          if-no-files-found: ignore
+
+  e2e-gateway:
+    name: E2E Gateway Mode
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libdbus-1-dev \
+            pkg-config \
+            network-manager \
+            iptables \
+            iproute2 \
+            jq
+          sudo systemctl start NetworkManager || true
+      
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+      
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "v2"
+      
+      - name: Build Shroud
+        run: cargo build --release
+      
+      - name: Setup test environment
+        run: |
+          sudo mkdir -p /etc/shroud /var/lib/shroud /run/shroud
+          
+          # Create mock VPN interface for gateway tests
+          sudo ip link add tun-test type dummy || true
+          sudo ip addr add 10.8.0.2/24 dev tun-test || true
+          sudo ip link set tun-test up || true
+      
+      - name: Run gateway detection tests
+        run: |
+          chmod +x tests/e2e/test-gateway-detection.sh
+          tests/e2e/test-gateway-detection.sh
+      
+      - name: Cleanup
+        if: always()
+        run: |
+          sudo ip link del tun-test 2>/dev/null || true
+          # Clean up any lingering iptables rules
+          sudo iptables -F SHROUD_GATEWAY 2>/dev/null || true
+          sudo iptables -X SHROUD_GATEWAY 2>/dev/null || true
+          sudo iptables -F SHROUD_GATEWAY_KS 2>/dev/null || true
+          sudo iptables -X SHROUD_GATEWAY_KS 2>/dev/null || true
+          sudo iptables -F SHROUD_BOOT_KS 2>/dev/null || true
+          sudo iptables -X SHROUD_BOOT_KS 2>/dev/null || true
+      
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-gateway-results
+          path: tests/e2e/results/
+          if-no-files-found: ignore
