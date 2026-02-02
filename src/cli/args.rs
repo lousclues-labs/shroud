@@ -28,6 +28,10 @@ pub struct Args {
     pub quiet: bool,
     /// Timeout for daemon communication in seconds
     pub timeout: u64,
+    /// Force headless mode
+    pub headless: bool,
+    /// Force desktop mode
+    pub desktop: bool,
 
     /// Command to execute (None = daemon mode)
     pub command: Option<ParsedCommand>,
@@ -42,6 +46,8 @@ impl Default for Args {
             json_output: false,
             quiet: false,
             timeout: super::validation::DEFAULT_TIMEOUT_SECS,
+            headless: false,
+            desktop: false,
             command: None,
         }
     }
@@ -113,10 +119,23 @@ pub enum ParsedCommand {
     Audit,
     Doctor,
 
+    // Gateway
+    Gateway {
+        action: GatewayAction,
+    },
+
     // Help
     Help {
         command: Option<String>,
     },
+}
+
+/// Action for gateway commands
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GatewayAction {
+    On,
+    Off,
+    Status,
 }
 
 /// Action for toggle commands (killswitch, auto-reconnect)
@@ -172,6 +191,8 @@ pub fn parse_args_from(argv: &[String]) -> Result<Args, String> {
             }
             "--json" => args.json_output = true,
             "-q" | "--quiet" => args.quiet = true,
+            "-H" | "--headless" => args.headless = true,
+            "--desktop" => args.desktop = true,
             "--timeout" => {
                 i += 1;
                 let value = argv.get(i).ok_or("--timeout requires a value")?;
@@ -194,6 +215,7 @@ pub fn parse_args_from(argv: &[String]) -> Result<Args, String> {
                             args.verbose = validate_verbosity(args.verbose.saturating_add(1));
                         }
                         'q' => args.quiet = true,
+                        'H' => args.headless = true,
                         'h' => {
                             args.command = Some(ParsedCommand::Help { command: None });
                             return Ok(args);
@@ -281,6 +303,10 @@ fn parse_command(argv: &[String]) -> Result<ParsedCommand, String> {
         "import" => parse_import_args(&argv[1..]),
         "audit" => Ok(ParsedCommand::Audit),
         "doctor" => Ok(ParsedCommand::Doctor),
+        "gateway" | "gw" => {
+            let action = parse_gateway_action(argv.get(1).map(|s| s.as_str()))?;
+            Ok(ParsedCommand::Gateway { action })
+        }
         "update" => parse_update_flags(&argv[1..]),
         "version" => parse_version_flags(&argv[1..]),
         "help" => Ok(ParsedCommand::Help {
@@ -350,6 +376,19 @@ fn parse_debug_action(arg: Option<&str>) -> Result<DebugAction, String> {
         Some("dump") | Some("state") => Ok(DebugAction::Dump),
         None => Err("debug requires an action: on/off/log-path/tail/dump".to_string()),
         Some(other) => Err(format!("Unknown debug action: '{}'", other)),
+    }
+}
+
+/// Parse a gateway action argument
+fn parse_gateway_action(arg: Option<&str>) -> Result<GatewayAction, String> {
+    match arg {
+        Some("on") | Some("enable") => Ok(GatewayAction::On),
+        Some("off") | Some("disable") => Ok(GatewayAction::Off),
+        None | Some("status") | Some("show") => Ok(GatewayAction::Status),
+        Some(other) => Err(format!(
+            "Unknown gateway action: '{}'. Use on/off/status",
+            other
+        )),
     }
 }
 

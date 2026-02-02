@@ -114,6 +114,165 @@ pub enum Ipv6Mode {
     Off,
 }
 
+/// Headless mode configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HeadlessConfig {
+    /// Auto-connect to VPN on startup
+    pub auto_connect: bool,
+    /// Server to connect to on startup
+    pub startup_server: Option<String>,
+    /// Maximum reconnection attempts (0 = infinite)
+    pub max_reconnect_attempts: u32,
+    /// Delay between reconnection attempts (seconds)
+    pub reconnect_delay_secs: u64,
+    /// Enable kill switch before VPN connects
+    pub kill_switch_on_boot: bool,
+    /// Fail startup if kill switch cannot be enabled
+    pub require_kill_switch: bool,
+    /// Keep kill switch enabled after Shroud exits
+    pub persist_kill_switch: bool,
+}
+
+impl Default for HeadlessConfig {
+    fn default() -> Self {
+        Self {
+            auto_connect: false,
+            startup_server: None,
+            max_reconnect_attempts: 0,
+            reconnect_delay_secs: 5,
+            kill_switch_on_boot: true,
+            require_kill_switch: true,
+            persist_kill_switch: false,
+        }
+    }
+}
+
+/// Kill switch specific configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KillSwitchConfig {
+    /// Allow LAN traffic when kill switch is active
+    pub allow_lan: bool,
+}
+
+impl Default for KillSwitchConfig {
+    fn default() -> Self {
+        Self { allow_lan: true }
+    }
+}
+
+/// VPN Gateway configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GatewayConfig {
+    /// Enable gateway mode
+    pub enabled: bool,
+    /// Fail startup if gateway cannot be enabled
+    pub required: bool,
+    /// LAN interface to accept traffic from
+    pub lan_interface: Option<String>,
+    /// Which clients can use the gateway
+    pub allowed_clients: AllowedClients,
+    /// Enable kill switch for forwarded traffic
+    pub kill_switch_forwarding: bool,
+    /// Persist IP forwarding setting after exit
+    pub persist_ip_forward: bool,
+    /// Enable IPv6 forwarding
+    pub enable_ipv6: bool,
+}
+
+impl Default for GatewayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            required: false,
+            lan_interface: None,
+            allowed_clients: AllowedClients::All,
+            kill_switch_forwarding: true,
+            persist_ip_forward: false,
+            enable_ipv6: false,
+        }
+    }
+}
+
+/// Allowed clients for gateway mode
+#[derive(Debug, Clone, PartialEq)]
+pub enum AllowedClients {
+    /// Allow all clients on LAN
+    All,
+    /// Allow specific CIDR range
+    Cidr(String),
+    /// Allow specific IP addresses
+    List(Vec<String>),
+}
+
+impl Default for AllowedClients {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
+impl Serialize for AllowedClients {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        match self {
+            AllowedClients::All => serializer.serialize_str("all"),
+            AllowedClients::Cidr(cidr) => serializer.serialize_str(cidr),
+            AllowedClients::List(list) => list.serialize(serializer),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for AllowedClients {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, Visitor};
+
+        struct AllowedClientsVisitor;
+
+        impl<'de> Visitor<'de> for AllowedClientsVisitor {
+            type Value = AllowedClients;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("\"all\", a CIDR string, or an array of IP addresses")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                if v == "all" {
+                    Ok(AllowedClients::All)
+                } else if v.contains('/') {
+                    // Looks like CIDR notation
+                    Ok(AllowedClients::Cidr(v.to_string()))
+                } else {
+                    // Single IP as a list of one
+                    Ok(AllowedClients::List(vec![v.to_string()]))
+                }
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: de::SeqAccess<'de>,
+            {
+                let mut list = Vec::new();
+                while let Some(item) = seq.next_element()? {
+                    list.push(item);
+                }
+                Ok(AllowedClients::List(list))
+            }
+        }
+
+        deserializer.deserialize_any(AllowedClientsVisitor)
+    }
+}
+
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -142,6 +301,15 @@ pub struct Config {
     pub custom_doh_blocklist: Vec<String>,
     /// IPv6 leak protection mode
     pub ipv6_mode: Ipv6Mode,
+    /// Headless mode configuration
+    #[serde(default)]
+    pub headless: HeadlessConfig,
+    /// Kill switch specific configuration
+    #[serde(default)]
+    pub killswitch: KillSwitchConfig,
+    /// Gateway configuration
+    #[serde(default)]
+    pub gateway: GatewayConfig,
 }
 
 fn default_block_doh() -> bool {
@@ -162,6 +330,9 @@ impl Default for Config {
             block_doh: default_block_doh(),
             custom_doh_blocklist: Vec::new(),
             ipv6_mode: Ipv6Mode::default(),
+            headless: HeadlessConfig::default(),
+            killswitch: KillSwitchConfig::default(),
+            gateway: GatewayConfig::default(),
         }
     }
 }
@@ -498,6 +669,9 @@ mod tests {
             block_doh: false,
             custom_doh_blocklist: vec!["1.1.1.1".to_string()],
             ipv6_mode: Ipv6Mode::Tunnel,
+            headless: HeadlessConfig::default(),
+            killswitch: KillSwitchConfig::default(),
+            gateway: GatewayConfig::default(),
         };
 
         let toml_str = toml::to_string(&config).unwrap();
@@ -674,6 +848,9 @@ mod tests {
             block_doh: false,
             custom_doh_blocklist: vec!["1.1.1.1".to_string()],
             ipv6_mode: Ipv6Mode::Tunnel,
+            headless: HeadlessConfig::default(),
+            killswitch: KillSwitchConfig::default(),
+            gateway: GatewayConfig::default(),
         };
 
         manager.save(&original).unwrap();

@@ -220,6 +220,35 @@ fn log_manual_cleanup_instructions() {
     error!("");
 }
 
+/// Clean up all kill switch rules (iptables, ip6tables, nft, boot chain).
+///
+/// Used during shutdown to ensure no rules are left behind.
+pub fn cleanup_all() -> Result<(), CleanupError> {
+    // Clean main kill switch
+    let _ = cleanup_with_timeout(CLEANUP_TIMEOUT);
+
+    // Clean boot kill switch chain
+    let boot_commands: Vec<Vec<&str>> = vec![
+        vec![iptables(), "-D", "OUTPUT", "-j", "SHROUD_BOOT_KS"],
+        vec![iptables(), "-F", "SHROUD_BOOT_KS"],
+        vec![iptables(), "-X", "SHROUD_BOOT_KS"],
+        vec![ip6tables(), "-D", "OUTPUT", "-j", "SHROUD_BOOT_KS"],
+        vec![ip6tables(), "-F", "SHROUD_BOOT_KS"],
+        vec![ip6tables(), "-X", "SHROUD_BOOT_KS"],
+    ];
+
+    for command in boot_commands {
+        let _ = Command::new("sudo")
+            .args(&command)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

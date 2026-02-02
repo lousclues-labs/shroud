@@ -7,6 +7,64 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-02-01
+
+### Added
+- **Headless Mode**: Run Shroud as a system service without GUI dependencies.
+  - New `-H` / `--headless` CLI flag to force headless mode.
+  - New `--desktop` CLI flag to force desktop mode with tray.
+  - Auto-detection based on environment (DISPLAY, systemd, SSH session).
+  - Environment variable `SHROUD_MODE=headless|desktop` for configuration.
+- **Systemd Integration**: Full Type=notify service support.
+  - Systemd notify protocol: READY, STOPPING, STATUS, WATCHDOG messages.
+  - Watchdog keep-alive for service health monitoring.
+  - Service file at `assets/shroud.service` with security hardening.
+- **Boot Kill Switch**: Block all traffic before VPN connects.
+  - New `SHROUD_BOOT_KS` iptables chain for boot-time protection.
+  - Configurable via `[headless] kill_switch_on_boot` option.
+  - Transitions to runtime kill switch after VPN connects.
+- **Auto-Connect**: Automatic VPN connection on startup with exponential backoff.
+  - Configurable retry attempts (0 = infinite) and delay.
+  - Jitter added to prevent thundering herd on reconnection.
+- **VPN Gateway Mode**: Route LAN traffic through the VPN tunnel.
+  - New `shroud gateway on/off/status` commands (alias: `gw`).
+  - IP forwarding control via `/proc/sys/net/ipv4/ip_forward`.
+  - NAT MASQUERADE rules for VPN interface.
+  - FORWARD chain rules with client filtering (`allowed_clients`).
+  - Gateway kill switch: blocks forwarded traffic if VPN drops.
+  - Interface auto-detection for LAN (eth0, enp*) and VPN (tun*, wg*).
+- **Gateway Configuration**: New `[gateway]` config section.
+  - `enabled`: Auto-enable gateway on startup.
+  - `lan_interface`: Override LAN interface (auto-detected by default).
+  - `allowed_clients`: Filter by "all", CIDR, or IP list.
+  - `kill_switch_forwarding`: Block forwarded traffic on VPN drop.
+  - `persist_ip_forward`: Keep IP forwarding after exit.
+  - `enable_ipv6`: Enable IPv6 forwarding (disabled by default for leak prevention).
+- **Headless Configuration**: New `[headless]` config section.
+  - `auto_connect`: Connect to VPN on startup.
+  - `startup_server`: Server name to connect to.
+  - `max_reconnect_attempts`: Retry limit (0 = infinite).
+  - `reconnect_delay_secs`: Base delay for exponential backoff.
+  - `kill_switch_on_boot`: Enable boot kill switch.
+  - `require_kill_switch`: Fail startup if kill switch unavailable.
+  - `persist_kill_switch`: Keep kill switch after Shroud exits.
+- **Kill Switch Configuration**: New `[killswitch]` config section.
+  - `allow_lan`: Allow LAN traffic when kill switch active.
+- **Documentation**: Comprehensive guides for new features.
+  - `docs/HEADLESS.md`: Headless deployment guide.
+  - `docs/GATEWAY.md`: VPN gateway setup and usage.
+  - `assets/shroud-headless.conf.example`: Example headless configuration.
+
+### Changed
+- **Main Entry Point**: Mode dispatch based on headless/desktop detection.
+- **Config**: Extended `Config` struct with `headless`, `killswitch`, and `gateway` sections.
+- **CLI Help**: Added gateway commands and headless examples.
+- **Dependencies**: Added `rand` crate for jitter in exponential backoff.
+- **Tokio**: Added `signal` feature for Unix signal handling.
+
+### Fixed
+- **Serialization**: Custom serde implementation for `AllowedClients` enum to handle TOML unit variants.
+
 ## [1.7.0] - 2026-03-01
 
 ### Added

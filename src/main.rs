@@ -33,11 +33,14 @@ mod cli;
 mod config;
 mod daemon;
 mod dbus;
+mod gateway;
+mod headless;
 mod health;
 mod import;
 mod ipc;
 mod killswitch;
 mod logging;
+mod mode;
 mod nm;
 mod state;
 mod supervisor;
@@ -183,8 +186,26 @@ async fn main() {
             std::process::exit(code);
         }
         None => {
-            // Daemon mode: start the tray application
-            run_daemon_mode(args).await;
+            // Check for headless mode
+            let runtime_mode = mode::detect_mode(args.headless, args.desktop);
+
+            match runtime_mode {
+                mode::RuntimeMode::Headless => {
+                    // Load config from system location for headless
+                    let config = config::ConfigManager::new().load_validated();
+                    match headless::run_headless(config).await {
+                        Ok(()) => std::process::exit(0),
+                        Err(e) => {
+                            error!("Headless mode failed: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                }
+                mode::RuntimeMode::Desktop => {
+                    // Desktop mode: start the tray application
+                    run_daemon_mode(args).await;
+                }
+            }
         }
     }
 }

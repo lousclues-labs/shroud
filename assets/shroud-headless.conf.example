@@ -1,0 +1,83 @@
+# Shroud Headless Configuration
+#
+# This is an example configuration for running Shroud in headless/server mode.
+# Copy to /etc/shroud/config.toml and customize.
+#
+# Documentation: https://github.com/loujr/shroud/blob/main/docs/HEADLESS.md
+
+# =============================================================================
+# HEADLESS MODE SETTINGS
+# =============================================================================
+
+[headless]
+# Auto-connect to VPN on startup.
+# Set to true for always-on VPN servers.
+auto_connect = true
+
+# Server to connect to on startup.
+# Must match a connection name in NetworkManager.
+# Find available connections with: nmcli connection show
+startup_server = "my-vpn-connection"
+
+# Maximum reconnection attempts (0 = infinite).
+# For servers, infinite is recommended.
+max_reconnect_attempts = 0
+
+# Delay between reconnection attempts (seconds).
+reconnect_delay_secs = 5
+
+# Enable kill switch BEFORE VPN connects.
+# This ensures no traffic leaks during boot.
+# Highly recommended for security.
+kill_switch_on_boot = true
+
+# Fail startup if kill switch cannot be enabled.
+# Set to false only if you understand the risks.
+require_kill_switch = true
+
+# Keep kill switch enabled after Shroud exits.
+# Useful if you want protection to persist during maintenance.
+persist_kill_switch = false
+
+# =============================================================================
+# KILL SWITCH SETTINGS
+# =============================================================================
+
+[killswitch]
+# Allow LAN traffic when kill switch is active.
+allow_lan = true
+
+# =============================================================================
+# GATEWAY MODE SETTINGS (Optional)
+# =============================================================================
+
+[gateway]
+# Enable VPN gateway mode.
+# This allows other devices to route their traffic through this machine's VPN.
+enabled = false
+
+# Fail startup if gateway cannot be enabled.
+required = false
+
+# LAN interface to accept traffic from.
+# If not set, auto-detected (usually eth0, enp3s0, etc.)
+# lan_interface = "eth0"
+
+# Which clients can use the gateway.
+# Options:
+#   "all"                    - Any device on the LAN
+#   "192.168.1.0/24"        - Specific subnet
+#   ["192.168.1.50", "..."] - Specific IPs
+allowed_clients = "all"
+
+# Enable kill switch for forwarded traffic.
+# If VPN drops, all forwarded traffic is blocked.
+kill_switch_forwarding = true
+
+# Persist IP forwarding after Shroud exits.
+# If false, restores original sysctl value.
+persist_ip_forward = false
+
+# Enable IPv6 forwarding.
+# Disabled by default to prevent IPv6 leaks.
+enable_ipv6 = false

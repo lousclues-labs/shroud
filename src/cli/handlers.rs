@@ -8,7 +8,7 @@ use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::time::Instant;
 
-use super::args::{Args, DebugAction, ParsedCommand, ToggleAction};
+use super::args::{Args, DebugAction, GatewayAction, ParsedCommand, ToggleAction};
 use super::help;
 use super::import as import_command;
 use crate::ipc::client::{send_command, ClientError};
@@ -47,6 +47,9 @@ pub async fn run_client_mode(args: &Args) -> i32 {
         }
         ParsedCommand::Doctor => {
             return handle_doctor_command();
+        }
+        ParsedCommand::Gateway { action } => {
+            return handle_gateway_command(*action).await;
         }
         ParsedCommand::Import { options } => {
             let mut merged = options.clone();
@@ -212,6 +215,7 @@ fn args_to_command(cmd: &ParsedCommand) -> Option<IpcCommand> {
         ParsedCommand::Version { .. } => None,
         ParsedCommand::Audit => None,
         ParsedCommand::Doctor => None,
+        ParsedCommand::Gateway { .. } => None,
         ParsedCommand::Import { .. } => None,
 
         ParsedCommand::Help { .. } => None, // Handled locally
@@ -372,6 +376,85 @@ fn handle_doctor_command() -> i32 {
         println!("  ✗ Found {} issue(s) that need attention.", issues);
         println!("\n  Quick fix: ./setup.sh --install-sudoers");
         1
+    }
+}
+
+/// Handle gateway commands.
+async fn handle_gateway_command(action: GatewayAction) -> i32 {
+    use crate::config::ConfigManager;
+    use crate::gateway;
+    use crate::gateway::status::GatewayStatus;
+
+    match action {
+        GatewayAction::On => {
+            // Load config
+            let config = ConfigManager::new().load_validated();
+
+            // Check if VPN is connected
+            let vpn_interface = gateway::detect::detect_vpn_interface();
+            if vpn_interface.is_none() {
+                eprintln!("Error: VPN not connected. Connect to VPN first, then enable gateway.");
+                eprintln!();
+                eprintln!("  shroud connect <server-name>");
+                eprintln!("  shroud gateway on");
+                return 1;
+            }
+
+            println!("Enabling VPN gateway...");
+
+            match gateway::enable(&config.gateway).await {
+                Ok(()) => {
+                    println!();
+                    println!("✓ Gateway enabled");
+                    println!();
+
+                    let status = GatewayStatus::collect();
+                    if let Some(ref lan) = status.lan_interface {
+                        if let Some(ref ip) = status.lan_ip {
+                            println!("  LAN interface: {} ({})", lan, ip);
+                        }
+                    }
+                    if let Some(ref vpn) = status.vpn_interface {
+                        if let Some(ref ip) = status.vpn_ip {
+                            println!("  VPN interface: {} ({})", vpn, ip);
+                        }
+                    }
+                    println!();
+                    println!("Clients can now route traffic through this gateway.");
+                    println!("Set their default gateway to this machine's LAN IP.");
+
+                    0
+                }
+                Err(e) => {
+                    eprintln!("Error: Failed to enable gateway: {}", e);
+                    1
+                }
+            }
+        }
+        GatewayAction::Off => {
+            if !gateway::is_enabled() {
+                println!("Gateway is not enabled.");
+                return 0;
+            }
+
+            println!("Disabling VPN gateway...");
+
+            match gateway::disable().await {
+                Ok(()) => {
+                    println!("✓ Gateway disabled");
+                    0
+                }
+                Err(e) => {
+                    eprintln!("Error: Failed to disable gateway: {}", e);
+                    1
+                }
+            }
+        }
+        GatewayAction::Status => {
+            let status = GatewayStatus::collect();
+            println!("{}", status);
+            0
+        }
     }
 }
 

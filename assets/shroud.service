@@ -1,0 +1,70 @@
+# Shroud VPN Manager - Systemd Service
+#
+# This unit file runs Shroud in headless mode as a system service.
+#
+# Installation:
+#   sudo cp assets/shroud.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable shroud
+#   sudo systemctl start shroud
+#
+# Or use setup.sh:
+#   sudo ./setup.sh --headless
+
+[Unit]
+Description=Shroud VPN Manager
+Documentation=https://github.com/loujr/shroud
+
+# Start after network is available
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+
+# Dependencies
+Requires=NetworkManager.service
+
+[Service]
+Type=notify
+
+# Run as root (required for iptables/kill switch)
+User=root
+Group=root
+
+# Main binary
+ExecStart=/usr/local/bin/shroud --headless
+
+# Graceful shutdown
+ExecStop=/usr/local/bin/shroud quit
+TimeoutStopSec=30
+
+# Restart on failure
+Restart=on-failure
+RestartSec=5
+
+# Watchdog: service must notify within this interval
+WatchdogSec=60
+
+# Environment
+Environment=RUST_LOG=info
+Environment=SHROUD_MODE=headless
+
+# Security hardening
+NoNewPrivileges=no
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/lib/shroud /run/shroud /etc/shroud /proc/sys/net
+
+# Allow network administration
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+
+# Resource limits
+LimitNOFILE=65535
+LimitNPROC=4096
+
+# Logging (goes to journald)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=shroud
+
+[Install]
+WantedBy=multi-user.target
