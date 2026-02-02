@@ -119,3 +119,40 @@ jobs:
 
       - name: Check MSRV
         run: cargo check --all-features
+
+  e2e-desktop:
+    name: Desktop E2E Tests
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config network-manager iptables
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: "v2"
+
+      - name: Build release
+        run: cargo build --release
+
+      - name: Make test scripts executable
+        run: chmod +x tests/e2e/desktop/*.sh
+
+      - name: Run non-privileged E2E tests
+        run: ./tests/e2e/desktop/run-desktop-tests.sh
+        continue-on-error: true
+
+      - name: Upload E2E results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-e2e-results
+          path: tests/e2e/desktop/results/

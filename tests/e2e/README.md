@@ -1,16 +1,19 @@
 # Shroud E2E Tests
 
-End-to-end tests for Shroud's headless mode and gateway functionality.
+End-to-end tests for Shroud's headless mode, desktop mode, and gateway functionality.
 
 ## Overview
 
 These tests verify the complete functionality of:
 - **Mode Detection**: `--headless` and `--desktop` flag handling
+- **Desktop Mode**: Tray actions, IPC communication, state consistency
 - **Headless Runtime**: Daemon startup, IPC, boot killswitch
 - **Gateway Mode**: IP forwarding, NAT, FORWARD chain rules
 - **Cleanup**: Proper removal of firewall rules and state
 
 ## Test Suites
+
+### Headless/Gateway Tests
 
 | Suite | Description | Requires Root |
 |-------|-------------|---------------|
@@ -20,6 +23,19 @@ These tests verify the complete functionality of:
 | `test-headless-runtime.sh` | Headless daemon operation | Yes |
 | `test-gateway.sh` | Gateway NAT and firewall rules | Yes |
 | `test-cleanup.sh` | Firewall rule cleanup | Yes |
+
+### Desktop Tests (`desktop/`)
+
+| Suite | Description | Requires Root |
+|-------|-------------|---------------|
+| `test-mode-detection.sh` | Desktop mode detection | No |
+| `test-ipc.sh` | CLI ↔ daemon IPC communication | No |
+| `test-commands.sh` | CLI command functionality | No |
+| `test-tray-actions.sh` | Simulated tray menu actions | No |
+| `test-state.sh` | State machine consistency | No |
+| `test-stress.sh` | Rapid operation stress tests | No |
+| `test-killswitch.sh` | iptables rule management | Yes |
+| `test-cleanup.sh` | Resource cleanup on exit | Yes |
 
 ## Running Tests
 
@@ -35,6 +51,16 @@ These tests verify the complete functionality of:
 sudo ./tests/e2e/run-all.sh --privileged
 ```
 
+### Desktop E2E Tests
+
+```bash
+# Non-privileged
+./tests/e2e/desktop/run-desktop-tests.sh
+
+# All including privileged
+sudo ./tests/e2e/desktop/run-desktop-tests.sh --privileged
+```
+
 ### Privileged Tests Only
 
 ```bash
@@ -46,6 +72,7 @@ sudo ./tests/e2e/run-privileged.sh
 ```bash
 ./tests/e2e/run-all.sh --suite mode-detection
 sudo ./tests/e2e/run-all.sh --privileged --suite gateway
+./tests/e2e/desktop/run-desktop-tests.sh --suite ipc
 ```
 
 ### Individual Test File
@@ -53,6 +80,7 @@ sudo ./tests/e2e/run-all.sh --privileged --suite gateway
 ```bash
 ./tests/e2e/test-mode-detection.sh
 sudo ./tests/e2e/test-gateway.sh
+./tests/e2e/desktop/test-ipc.sh
 ```
 
 ## Options
