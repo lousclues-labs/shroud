@@ -11,8 +11,9 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-E2E_DIR="$(dirname "$SCRIPT_DIR")"
+# Save our script directory before sourcing test-helpers.sh (which redefines SCRIPT_DIR)
+HEADLESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+E2E_DIR="$(dirname "$HEADLESS_DIR")"
 
 # shellcheck source=../lib/test-helpers.sh
 source "${E2E_DIR}/lib/test-helpers.sh"
@@ -88,8 +89,8 @@ run_test() {
 
 # Unprivileged tests (always run)
 if $RUN_UNPRIVILEGED; then
-    run_test "${SCRIPT_DIR}/test-mode-detection.sh"
-    run_test "${SCRIPT_DIR}/test-gateway-detection.sh"
+    run_test "${HEADLESS_DIR}/test-mode-detection.sh"
+    run_test "${HEADLESS_DIR}/test-gateway-detection.sh"
 fi
 
 # Privileged tests (require root)
@@ -99,10 +100,10 @@ if $RUN_PRIVILEGED; then
         exit 1
     fi
     
-    run_test "${SCRIPT_DIR}/test-boot-killswitch.sh"
-    run_test "${SCRIPT_DIR}/test-headless-runtime.sh"
-    run_test "${SCRIPT_DIR}/test-gateway.sh"
-    run_test "${SCRIPT_DIR}/test-cleanup.sh"
+    run_test "${HEADLESS_DIR}/test-boot-killswitch.sh"
+    run_test "${HEADLESS_DIR}/test-headless-runtime.sh"
+    run_test "${HEADLESS_DIR}/test-gateway.sh"
+    run_test "${HEADLESS_DIR}/test-cleanup.sh"
 fi
 
 # ============================================================================
