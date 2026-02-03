@@ -43,9 +43,33 @@ impl NmMonitor {
     /// This runs in a loop and sends events via the channel.
     /// Should be spawned as a background task.
     pub async fn run(self) -> Result<(), zbus::Error> {
+        use tokio::time::{timeout, Duration};
+
         info!("Starting NetworkManager D-Bus monitor");
 
-        let connection = Connection::system().await?;
+        // HARDENING: Add timeout to D-Bus connection to prevent hanging
+        // if D-Bus is unavailable (e.g., container environments)
+        const DBUS_CONNECT_TIMEOUT_SECS: u64 = 10;
+
+        let connection = match timeout(
+            Duration::from_secs(DBUS_CONNECT_TIMEOUT_SECS),
+            Connection::system(),
+        )
+        .await
+        {
+            Ok(Ok(conn)) => conn,
+            Ok(Err(e)) => {
+                error!("D-Bus connection failed: {}", e);
+                return Err(e);
+            }
+            Err(_) => {
+                error!(
+                    "D-Bus connection timed out after {}s - is dbus-daemon running?",
+                    DBUS_CONNECT_TIMEOUT_SECS
+                );
+                return Err(zbus::Error::Failure("D-Bus connection timeout".into()));
+            }
+        };
         info!("Connected to system D-Bus");
 
         // Create a message stream to receive all signals

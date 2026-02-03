@@ -580,8 +580,13 @@ impl KillSwitch {
         s
     }
 
+    /// Timeout for sudo/iptables commands (seconds)
+    /// Long enough for normal operations, short enough to detect hangs
+    const SUDO_CMD_TIMEOUT_SECS: u64 = 30;
+
     async fn run_single_script(&self, script: &str) -> Result<(), KillSwitchError> {
         use tokio::process::Command;
+        use tokio::time::{timeout, Duration};
 
         for raw_line in script.lines() {
             let mut line = raw_line.trim().to_string();
@@ -612,12 +617,28 @@ impl KillSwitch {
                 }
             }
 
-            let output = Command::new("sudo")
-                .arg(cmd)
-                .args(&parts[1..])
-                .output()
-                .await
-                .map_err(KillSwitchError::Spawn)?;
+            // HARDENING: Add timeout to sudo commands to prevent hanging
+            // on password prompts or frozen iptables kernel modules
+            let output = match timeout(
+                Duration::from_secs(Self::SUDO_CMD_TIMEOUT_SECS),
+                Command::new("sudo")
+                    .arg("-n") // non-interactive: fail immediately if password needed
+                    .arg(cmd)
+                    .args(&parts[1..])
+                    .output(),
+            )
+            .await
+            {
+                Ok(Ok(output)) => output,
+                Ok(Err(e)) => return Err(KillSwitchError::Spawn(e)),
+                Err(_) => {
+                    return Err(KillSwitchError::Command(format!(
+                        "Command timed out after {}s (possible sudo prompt or frozen kernel module): {}",
+                        Self::SUDO_CMD_TIMEOUT_SECS,
+                        line
+                    )));
+                }
+            };
 
             if !output.status.success() && !ignore_error {
                 let code = output.status.code().unwrap_or(-1);
@@ -635,12 +656,27 @@ impl KillSwitch {
                     && (parts[0].ends_with("iptables") || parts[0].ends_with("ip6tables"))
                 {
                     if let Some(legacy_cmd) = Self::legacy_variant(parts[0]).await {
-                        let legacy_output = Command::new("sudo")
-                            .arg(legacy_cmd)
-                            .args(&parts[1..])
-                            .output()
-                            .await
-                            .map_err(KillSwitchError::Spawn)?;
+                        // HARDENING: Add timeout to legacy fallback as well
+                        let legacy_output = match timeout(
+                            Duration::from_secs(Self::SUDO_CMD_TIMEOUT_SECS),
+                            Command::new("sudo")
+                                .arg("-n")
+                                .arg(legacy_cmd)
+                                .args(&parts[1..])
+                                .output(),
+                        )
+                        .await
+                        {
+                            Ok(Ok(output)) => output,
+                            Ok(Err(e)) => return Err(KillSwitchError::Spawn(e)),
+                            Err(_) => {
+                                return Err(KillSwitchError::Command(format!(
+                                    "Legacy command timed out after {}s: {}",
+                                    Self::SUDO_CMD_TIMEOUT_SECS,
+                                    line
+                                )));
+                            }
+                        };
 
                         if legacy_output.status.success() {
                             continue;

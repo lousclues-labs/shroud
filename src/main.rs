@@ -61,10 +61,57 @@ use crate::tray::{SharedState, VpnTray};
 // Main
 // ============================================================================
 
+/// Install a panic hook that performs emergency cleanup
+///
+/// This ensures that kill switch rules are cleaned up even if Shroud panics.
+/// Without this, a panic could leave iptables rules in place, locking out
+/// the user from all network access.
+fn install_panic_hook() {
+    use killswitch::CleanupResult;
+
+    let default_hook = std::panic::take_hook();
+
+    std::panic::set_hook(Box::new(move |info| {
+        // Best-effort cleanup - don't panic again if this fails
+        eprintln!("\n!!! SHROUD PANIC - attempting emergency cleanup !!!");
+
+        // Try to clean up kill switch rules
+        match killswitch::cleanup_with_fallback() {
+            CleanupResult::Cleaned => {
+                eprintln!("Kill switch rules cleaned up successfully.");
+            }
+            CleanupResult::NothingToClean => {
+                eprintln!("No kill switch rules to clean up.");
+            }
+            CleanupResult::Failed(msg) => {
+                eprintln!("Emergency kill switch cleanup failed: {}", msg);
+                eprintln!("If you're locked out, manually run:");
+                eprintln!("  sudo iptables -F SHROUD_KILLSWITCH");
+                eprintln!("  sudo iptables -D OUTPUT -j SHROUD_KILLSWITCH");
+                eprintln!("  sudo iptables -X SHROUD_KILLSWITCH");
+            }
+        }
+
+        // Clean up socket file
+        let socket_path = ipc::protocol::socket_path();
+        let _ = std::fs::remove_file(&socket_path);
+
+        // Release lock
+        daemon::release_instance_lock();
+
+        // Call the default panic hook for the actual panic output
+        default_hook(info);
+    }));
+}
+
 /// Run daemon mode - start the tray application
 async fn run_daemon_mode(args: cli::Args) {
     // Print startup banner FIRST (before any async/logging setup)
     println!("Shroud daemon starting... (use Ctrl+C to stop)");
+
+    // HARDENING: Install panic hook for emergency cleanup
+    // This ensures kill switch rules are cleaned up even on panic
+    install_panic_hook();
 
     // Convert CLI args to logging args format
     let log_args = logging::Args {

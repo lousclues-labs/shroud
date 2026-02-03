@@ -1,0 +1,18 @@
+
+╔════════════════════════════════════════════════════════════════════╗
+║           [1mSHROUD CHAOS ENGINEERING TESTS[0m                          ║
+╠════════════════════════════════════════════════════════════════════╣
+║  ⚠️  Some tests modify system state                                ║
+║  ⚠️  Run in a VM or container for safety                           ║
+╚════════════════════════════════════════════════════════════════════╝
+
+[0;34mℹ INFO[0m: Log file: /home/ghost/src/shroud/tests/chaos/results/chaos-20260202-230933.log
+[0;34mℹ INFO[0m: Shroud binary: /home/ghost/src/shroud/target/release/shroud
+
+[0;34mℹ INFO[0m: Installing netcat for IPC tests...
+[0;34mℹ INFO[0m: Cleaning up...
+
+[1m━━━ CONFIGURATION CHAOS ━━━[0m
+[0;31m💥 CHAOS[0m: Corrupting config file with garbage data
+[0;32m✓ SURVIVED[0m: Handled corrupted config (version check works)
+[0;34mℹ INFO[0m: Cleaning up...

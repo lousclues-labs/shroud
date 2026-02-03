@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.5] - 2026-02-02
+
+### Added
+- **Chaos Engineering Test Suite** - Comprehensive chaos tests in `tests/chaos/` that systematically test resilience against failure modes: config corruption, IPC flood, signal storms, rapid state transitions, crash recovery, and resource exhaustion.
+- **Panic Hook for Emergency Cleanup** - If Shroud panics, a panic hook now attempts to clean up kill switch rules before exiting, preventing user lockout.
+- **RESILIENCE.md Documentation** - New documentation in `docs/RESILIENCE.md` describing failure modes, recovery procedures, and hardening patterns.
+
+### Fixed
+- **D-Bus Connection Timeout** - Added 10-second timeout to D-Bus connection. Previously, if D-Bus was unavailable (container environments, frozen daemon), Shroud would hang forever. Now fails fast with clear error message.
+- **sudo/iptables Command Timeout** - Added 30-second timeout to all sudo iptables commands with `-n` (non-interactive) flag. Prevents hanging on password prompts or frozen kernel modules.
+
+### Changed
+- **sudo Commands Use -n Flag** - All iptables commands now use `sudo -n` to fail immediately if password is required instead of hanging. This ensures timeout protection works correctly.
+
 ## [1.8.4] - 2026-02-01
 
 ### Fixed
