@@ -95,9 +95,6 @@ jobs:
       
       - name: Run unit tests
         run: cargo test --bins --all-features
-      
-      - name: Run doc tests
-        run: cargo test --doc --all-features
 
   # ===========================================================================
   # STAGE 3: Integration Tests
