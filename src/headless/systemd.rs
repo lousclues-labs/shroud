@@ -6,7 +6,7 @@
 //! - STATUS=...: Human-readable status
 //! - WATCHDOG=1: Watchdog keep-alive
 //!
-//! Reference: https://www.freedesktop.org/software/systemd/man/sd_notify.html
+//! Reference: <https://www.freedesktop.org/software/systemd/man/sd_notify.html>
 
 use log::{debug, trace};
 use std::env;

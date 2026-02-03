@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 use crate::common::init_test_logging;
 
 /// Command type (mirrors what tray sends to supervisor)
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 enum VpnCommand {
     Connect(String),
@@ -240,11 +241,9 @@ fn test_concurrent_send_receive() {
     // Start receiver first
     let receiver = rt.spawn(async move {
         let mut received = Vec::new();
-        loop {
-            match tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
-                Ok(Some(cmd)) => received.push(cmd),
-                _ => break,
-            }
+        while let Ok(Some(cmd)) = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await
+        {
+            received.push(cmd);
         }
         received.len()
     });

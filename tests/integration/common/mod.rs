@@ -15,7 +15,7 @@ static INIT: Once = Once::new();
 pub fn init_test_logging() {
     INIT.call_once(|| {
         // Use simple stderr logging for tests
-        let _ = std::env::set_var("RUST_LOG", "debug");
+        std::env::set_var("RUST_LOG", "debug");
     });
 }
 

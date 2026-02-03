@@ -12,8 +12,10 @@ mod state_transitions {
     use super::*;
 
     /// Simulated state for testing (mirrors VpnState without crate dependency)
-    #[derive(Debug, Clone, PartialEq)]
+    #[allow(dead_code)]
+    #[derive(Debug, Clone, PartialEq, Default)]
     enum TestState {
+        #[default]
         Disconnected,
         Connecting(String),
         Connected(String),
@@ -22,13 +24,8 @@ mod state_transitions {
         Failed(String),
     }
 
-    impl Default for TestState {
-        fn default() -> Self {
-            TestState::Disconnected
-        }
-    }
-
     /// Simulated events
+    #[allow(dead_code)]
     #[derive(Debug, Clone)]
     enum TestEvent {
         UserConnect(String),
