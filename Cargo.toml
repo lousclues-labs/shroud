@@ -78,3 +78,7 @@ panic = "abort"
 
 [dev-dependencies]
 tempfile = "3"
+
+[[test]]
+name = "integration"
+path = "tests/integration/mod.rs"
