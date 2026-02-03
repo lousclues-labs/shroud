@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - **D-Bus Connection Timeout** - Added 10-second timeout to D-Bus connection. Previously, if D-Bus was unavailable (container environments, frozen daemon), Shroud would hang forever. Now fails fast with clear error message.
 - **sudo/iptables Command Timeout** - Added 30-second timeout to all sudo iptables commands with `-n` (non-interactive) flag. Prevents hanging on password prompts or frozen kernel modules.
+- **Kill Switch Checkbox Inverted in Tray** - The tray menu checkbox now correctly reflects the actual iptables state, not just the config setting. Previously, the checkbox could show the opposite of reality if rules were cleaned up externally.
+- **Restart Command Breaks Daemon** - Fixed `shroud restart` leaving users without a running daemon. The new process is now properly detached using `setsid()` to create a new session, and resources are cleaned up before spawning.
+- **Multiple Restarts Required to Stabilize** - Added stale lock file detection that checks if the locking PID is still running. Dead process locks are now automatically cleaned up.
+- **Corrupted Config Not Cleaned Up** - Corrupted config files are now backed up to `config.toml.corrupted` and a fresh default config is written, instead of just logging a warning.
+- **Config Loaded Twice on Startup** - Removed duplicate config loading from main.rs; VpnSupervisor now loads config once.
+- **XDG_RUNTIME_DIR Panic** - Lock file path now uses fallback `/tmp/shroud-{uid}` if XDG_RUNTIME_DIR is not set, instead of panicking.
 
 ### Changed
 - **sudo Commands Use -n Flag** - All iptables commands now use `sudo -n` to fail immediately if password is required instead of hanging. This ensures timeout protection works correctly.

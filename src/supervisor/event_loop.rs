@@ -19,10 +19,13 @@ impl super::VpnSupervisor {
         info!("VPN supervisor starting with formal state machine");
 
         // Sync config to shared state on startup
+        // IMPORTANT: Use actual iptables state for kill_switch, not just config
         {
             let mut state = self.shared_state.write().await;
             state.auto_reconnect = self.app_config.auto_reconnect;
-            state.kill_switch = self.app_config.kill_switch_enabled;
+            // Use actual kill switch state from iptables, not config
+            // The kill_switch was already synced in VpnSupervisor::new()
+            state.kill_switch = self.kill_switch.is_enabled();
         }
 
         // Initial connection refresh and state sync - do this BEFORE enabling kill switch
@@ -36,11 +39,18 @@ impl super::VpnSupervisor {
                 info!("Restoring kill switch from config (VPN already connected)");
                 if let Err(e) = self.kill_switch.enable().await {
                     warn!("Failed to enable kill switch on startup: {}", e);
+                } else {
+                    // Update shared state after successfully enabling
+                    let mut state = self.shared_state.write().await;
+                    state.kill_switch = true;
                 }
             } else {
                 info!("Kill switch enabled in config but VPN not connected - will enable when VPN connects");
             }
         }
+
+        // Update tray with initial state
+        self.update_tray();
 
         if self.is_first_run && !crate::autostart::Autostart::is_enabled() {
             info!("First run detected and autostart not enabled");

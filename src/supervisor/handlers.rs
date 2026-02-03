@@ -745,6 +745,8 @@ impl super::VpnSupervisor {
 
     /// Restart the application by re-executing the binary
     pub(crate) async fn handle_restart(&mut self) {
+        use std::os::unix::process::CommandExt;
+
         info!("Restart requested");
         self.show_notification("VPN Manager", "Restarting...");
 
@@ -765,20 +767,48 @@ impl super::VpnSupervisor {
         };
 
         info!("Spawning new daemon instance: {:?}", exe_path);
-        let spawn_result = std::process::Command::new(&exe_path)
-            .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn();
 
-        match spawn_result {
-            Ok(_) => {
-                self.should_exit = true;
-                self.exit_reason = Some("restart".to_string());
+        // Clean up resources BEFORE spawning to avoid conflicts
+        release_instance_lock();
+        let socket_path = crate::ipc::protocol::socket_path();
+        let _ = std::fs::remove_file(&socket_path);
+
+        // Give time for socket to be released
+        sleep(Duration::from_millis(100)).await;
+
+        // Spawn detached process that will outlive us
+        let mut cmd = std::process::Command::new(&exe_path);
+        cmd.stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+
+        // CRITICAL: Create new session to fully detach from parent
+        // This prevents the child from dying when we exit
+        unsafe {
+            cmd.pre_exec(|| {
+                // Create new session (detach from controlling terminal)
+                libc::setsid();
+                Ok(())
+            });
+        }
+
+        match cmd.spawn() {
+            Ok(child) => {
+                info!("Spawned new daemon (PID: {})", child.id());
+
+                // Give child time to start and bind socket
+                sleep(Duration::from_millis(500)).await;
+
+                // Now exit
+                info!("Old daemon exiting for restart");
+                std::process::exit(0);
             }
             Err(e) => {
                 error!("Failed to spawn new instance: {}", e);
                 self.show_notification("Restart Failed", &format!("Error: {}", e));
+                // Re-acquire lock since spawn failed
+                // Note: We can't easily re-acquire, so just warn
+                warn!("Lock and socket were released but spawn failed - may need manual restart");
             }
         }
     }

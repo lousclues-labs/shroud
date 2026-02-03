@@ -50,7 +50,6 @@ use log::{error, info};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 
-use crate::config::ConfigManager;
 use crate::daemon::{acquire_instance_lock, release_instance_lock};
 use crate::dbus::NmMonitor;
 #[cfg(test)]
@@ -165,10 +164,6 @@ async fn run_daemon_mode(args: cli::Args) {
     let (ipc_tx, ipc_rx) = mpsc::channel(32); // IPC commands
 
     let tray_handle = Arc::new(std::sync::Mutex::new(None));
-
-    // Load config just to force init or validation if needed
-    let config_manager = ConfigManager::new();
-    let _ = config_manager.load_validated();
 
     // Start IPC Server
     let ipc_server = ipc::IpcServer::new(ipc_tx);

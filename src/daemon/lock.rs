@@ -11,9 +11,37 @@ use std::path::PathBuf;
 
 /// Get the path to the lock file
 pub fn get_lock_file_path() -> PathBuf {
-    let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
-        .expect("XDG_RUNTIME_DIR not set - cannot safely create lock file");
-    PathBuf::from(runtime_dir).join("shroud.lock")
+    // HARDENING: Use fallback instead of panic if XDG_RUNTIME_DIR not set
+    let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
+        // Fall back to /tmp with uid-based path for isolation
+        let uid = unsafe { libc::getuid() };
+        format!("/tmp/shroud-{}", uid)
+    });
+
+    let path = PathBuf::from(&runtime_dir);
+
+    // Ensure directory exists
+    if !path.exists() {
+        let _ = std::fs::create_dir_all(&path);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
+        }
+    }
+
+    path.join("shroud.lock")
+}
+
+/// Check if a process with the given PID is still running
+fn is_process_running(pid: u32) -> bool {
+    // Use kill(pid, 0) to check if process exists
+    let result = unsafe { libc::kill(pid as i32, 0) };
+    if result == 0 {
+        return true;
+    }
+    // ESRCH means process doesn't exist
+    std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 /// Acquire an exclusive instance lock
@@ -43,16 +71,30 @@ pub fn acquire_instance_lock() -> Result<File, String> {
     if result != 0 {
         let errno = std::io::Error::last_os_error();
         if errno.raw_os_error() == Some(libc::EWOULDBLOCK) {
+            // Lock is held - but check if the holding process is actually running
             let mut contents = String::new();
             if let Ok(mut f) = File::open(&lock_path) {
                 let _ = f.read_to_string(&mut contents);
             }
-            let pid_info = contents
-                .trim()
-                .parse::<u32>()
-                .map(|pid| format!(" (PID {})", pid))
-                .unwrap_or_default();
-            return Err(format!("Another instance is already running{}", pid_info));
+
+            if let Ok(pid) = contents.trim().parse::<u32>() {
+                if !is_process_running(pid) {
+                    // Process is dead - this is a stale lock!
+                    warn!("Stale lock file from dead process (PID {}), removing", pid);
+                    drop(file); // Release our non-exclusive handle
+
+                    // Remove the stale lock file and retry
+                    if let Err(e) = fs::remove_file(&lock_path) {
+                        return Err(format!("Failed to remove stale lock: {}", e));
+                    }
+
+                    // Recursive call to retry acquisition
+                    return acquire_instance_lock();
+                }
+                return Err(format!("Another instance is already running (PID {})", pid));
+            }
+
+            return Err("Another instance is already running".to_string());
         }
         return Err(format!("Failed to acquire lock: {}", errno));
     }

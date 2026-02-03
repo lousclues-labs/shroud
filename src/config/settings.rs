@@ -502,7 +502,27 @@ impl ConfigManager {
                 }
             }
             Err(e) => {
-                warn!("Failed to parse config file: {}. Using defaults.", e);
+                warn!(
+                    "Config file corrupted: {}. Backing up and using defaults.",
+                    e
+                );
+
+                // Backup corrupted config file
+                let backup_path = self.config_path.with_extension("toml.corrupted");
+                if let Err(backup_err) = fs::rename(&self.config_path, &backup_path) {
+                    warn!("Failed to backup corrupted config: {}", backup_err);
+                } else {
+                    info!("Corrupted config backed up to {:?}", backup_path);
+
+                    // Write fresh defaults so user has a valid starting point
+                    let default_config = Config::default();
+                    if let Err(write_err) = self.save(&default_config) {
+                        warn!("Failed to write default config: {}", write_err);
+                    } else {
+                        info!("Fresh default config written");
+                    }
+                }
+
                 Config::default()
             }
         }
