@@ -1,8 +1,8 @@
 //! Common utilities for security tests
 
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
 use std::thread;
+use std::time::{Duration, Instant};
 
 /// Run a shroud CLI command
 pub fn shroud(args: &[&str]) -> std::process::Output {
