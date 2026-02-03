@@ -168,10 +168,7 @@ impl super::VpnSupervisor {
 
             // We're in failed state but VPN is now active
             (VpnState::Failed { .. }, Some(ref conn)) => {
-                info!(
-                    "State sync: VPN '{}' recovered from failed state",
-                    conn
-                );
+                info!("State sync: VPN '{}' recovered from failed state", conn);
                 self.dispatch(Event::NmVpnUp {
                     server: conn.clone(),
                 });
