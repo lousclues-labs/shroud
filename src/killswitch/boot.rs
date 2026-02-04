@@ -119,7 +119,9 @@ fn insert_boot_chain_jump() -> Result<(), KillSwitchError> {
 }
 
 fn run_iptables(args: &[&str]) -> Result<(), KillSwitchError> {
+    // Use sudo -n to avoid password prompts that would cause hangs
     let output = Command::new("sudo")
+        .arg("-n")
         .arg(iptables())
         .args(args)
         .output()
@@ -138,7 +140,9 @@ fn run_iptables(args: &[&str]) -> Result<(), KillSwitchError> {
 }
 
 fn run_ip6tables(args: &[&str]) -> Result<(), KillSwitchError> {
+    // Use sudo -n to avoid password prompts that would cause hangs
     let output = Command::new("sudo")
+        .arg("-n")
         .arg(ip6tables())
         .args(args)
         .output()

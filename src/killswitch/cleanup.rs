@@ -39,8 +39,9 @@ pub enum CleanupResult {
 
 /// Check if SHROUD_KILLSWITCH chain exists in iptables
 pub fn rules_exist() -> Result<bool, CleanupError> {
-    let output = Command::new(iptables())
-        .args(["-L", "SHROUD_KILLSWITCH", "-n"])
+    // Use sudo -n to check without password prompt
+    let output = Command::new("sudo")
+        .args(["-n", iptables(), "-L", "SHROUD_KILLSWITCH", "-n"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -57,8 +58,9 @@ pub fn rules_exist() -> Result<bool, CleanupError> {
 
 /// Check if IPv6 SHROUD_KILLSWITCH chain exists
 pub fn rules_exist_ipv6() -> Result<bool, CleanupError> {
-    let output = Command::new(ip6tables())
-        .args(["-L", "SHROUD_KILLSWITCH", "-n"])
+    // Use sudo -n to check without password prompt
+    let output = Command::new("sudo")
+        .args(["-n", ip6tables(), "-L", "SHROUD_KILLSWITCH", "-n"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -74,13 +76,14 @@ pub fn rules_exist_ipv6() -> Result<bool, CleanupError> {
 }
 
 fn run_cleanup_command() -> Result<(), CleanupError> {
+    // Use sudo -n to avoid password prompts that would cause hangs
     let commands: Vec<Vec<&str>> = vec![
-        vec![iptables(), "-D", "OUTPUT", "-j", "SHROUD_KILLSWITCH"],
-        vec![iptables(), "-F", "SHROUD_KILLSWITCH"],
-        vec![iptables(), "-X", "SHROUD_KILLSWITCH"],
-        vec![ip6tables(), "-D", "OUTPUT", "-j", "SHROUD_KILLSWITCH"],
-        vec![ip6tables(), "-F", "SHROUD_KILLSWITCH"],
-        vec![ip6tables(), "-X", "SHROUD_KILLSWITCH"],
+        vec!["-n", iptables(), "-D", "OUTPUT", "-j", "SHROUD_KILLSWITCH"],
+        vec!["-n", iptables(), "-F", "SHROUD_KILLSWITCH"],
+        vec!["-n", iptables(), "-X", "SHROUD_KILLSWITCH"],
+        vec!["-n", ip6tables(), "-D", "OUTPUT", "-j", "SHROUD_KILLSWITCH"],
+        vec!["-n", ip6tables(), "-F", "SHROUD_KILLSWITCH"],
+        vec!["-n", ip6tables(), "-X", "SHROUD_KILLSWITCH"],
     ];
 
     for command in commands {
@@ -93,7 +96,7 @@ fn run_cleanup_command() -> Result<(), CleanupError> {
     }
 
     let _ = Command::new("sudo")
-        .args([nft(), "delete", "table", "inet", "shroud_killswitch"])
+        .args(["-n", nft(), "delete", "table", "inet", "shroud_killswitch"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -228,13 +231,14 @@ pub fn cleanup_all() -> Result<(), CleanupError> {
     let _ = cleanup_with_timeout(CLEANUP_TIMEOUT);
 
     // Clean boot kill switch chain
+    // Use sudo -n to avoid password prompts that would cause hangs
     let boot_commands: Vec<Vec<&str>> = vec![
-        vec![iptables(), "-D", "OUTPUT", "-j", "SHROUD_BOOT_KS"],
-        vec![iptables(), "-F", "SHROUD_BOOT_KS"],
-        vec![iptables(), "-X", "SHROUD_BOOT_KS"],
-        vec![ip6tables(), "-D", "OUTPUT", "-j", "SHROUD_BOOT_KS"],
-        vec![ip6tables(), "-F", "SHROUD_BOOT_KS"],
-        vec![ip6tables(), "-X", "SHROUD_BOOT_KS"],
+        vec!["-n", iptables(), "-D", "OUTPUT", "-j", "SHROUD_BOOT_KS"],
+        vec!["-n", iptables(), "-F", "SHROUD_BOOT_KS"],
+        vec!["-n", iptables(), "-X", "SHROUD_BOOT_KS"],
+        vec!["-n", ip6tables(), "-D", "OUTPUT", "-j", "SHROUD_BOOT_KS"],
+        vec!["-n", ip6tables(), "-F", "SHROUD_BOOT_KS"],
+        vec!["-n", ip6tables(), "-X", "SHROUD_BOOT_KS"],
     ];
 
     for command in boot_commands {

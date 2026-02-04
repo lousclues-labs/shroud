@@ -188,7 +188,7 @@ impl KillSwitch {
         self.ipv6_mode = ipv6_mode;
     }
 
-    /// Check if iptables is available
+    /// Check if iptables is available (version check doesn't need sudo)
     pub async fn is_available() -> bool {
         Command::new(iptables())
             .arg("--version")
@@ -201,10 +201,13 @@ impl KillSwitch {
     }
 
     /// Check if we have permission to modify iptables
+    ///
+    /// Uses sudo -n to avoid password prompts. Returns false if sudo
+    /// access is not configured (NOPASSWD not set for iptables).
     pub async fn has_permission() -> bool {
-        // Try to list filter table - this will fail if we don't have permission
-        Command::new(iptables())
-            .args(["-t", "filter", "-nL", "OUTPUT"])
+        // Try to list filter table with sudo -n (non-interactive)
+        Command::new("sudo")
+            .args(["-n", iptables(), "-t", "filter", "-nL", "OUTPUT"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -238,27 +241,46 @@ impl KillSwitch {
     }
 
     /// Check actual state of rules, not just our flag
+    ///
+    /// Note: This requires sudo access for iptables. If we can't check
+    /// (permission denied), we return the current internal state rather
+    /// than incorrectly reporting disabled.
     pub fn is_actually_enabled(&self) -> bool {
         use std::process::{Command, Stdio};
 
         match self.backend {
             FirewallBackend::Iptables => {
-                let result = Command::new(iptables())
-                    .args(["-C", "OUTPUT", "-j", CHAIN_NAME])
+                // Must use sudo to check iptables rules
+                let result = Command::new("sudo")
+                    .args(["-n", iptables(), "-C", "OUTPUT", "-j", CHAIN_NAME])
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status();
 
-                matches!(result, Ok(status) if status.success())
+                match result {
+                    Ok(status) => status.success(),
+                    Err(_) => {
+                        // If we can't run sudo -n (no password), fall back to internal state
+                        // This prevents flickering when we can't verify
+                        debug!("Cannot check iptables state (sudo required), using internal state");
+                        self.enabled
+                    }
+                }
             }
             FirewallBackend::Nftables => {
                 let result = Command::new("sudo")
-                    .args([nft(), "list", "table", "inet", NFT_TABLE])
+                    .args(["-n", nft(), "list", "table", "inet", NFT_TABLE])
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
                     .status();
 
-                matches!(result, Ok(status) if status.success())
+                match result {
+                    Ok(status) => status.success(),
+                    Err(_) => {
+                        debug!("Cannot check nftables state (sudo required), using internal state");
+                        self.enabled
+                    }
+                }
             }
         }
     }
@@ -870,8 +892,9 @@ impl KillSwitch {
     /// Verify our rules are actually in place
     async fn verify_rules_exist(&self) -> bool {
         // Check if our chain exists and has the jump rule
-        let output = Command::new(iptables())
-            .args(["-C", "OUTPUT", "-j", CHAIN_NAME])
+        // Use sudo -n to avoid password prompts
+        let output = Command::new("sudo")
+            .args(["-n", iptables(), "-C", "OUTPUT", "-j", CHAIN_NAME])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -882,7 +905,7 @@ impl KillSwitch {
 
     async fn verify_nft_rules_exist(&self) -> bool {
         let output = Command::new("sudo")
-            .args([nft(), "list", "table", "inet", NFT_TABLE])
+            .args(["-n", nft(), "list", "table", "inet", NFT_TABLE])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -1009,12 +1032,19 @@ impl KillSwitch {
         }
     }
 
+    /// Timeout for nft commands (same as iptables)
+    const NFT_CMD_TIMEOUT_SECS: u64 = 30;
+
     async fn run_nft(
         &self,
         args: &[&str],
         stdin_data: Option<&str>,
     ) -> Result<(), KillSwitchError> {
+        use tokio::time::timeout;
+        use std::time::Duration;
+
         let mut cmd = Command::new("sudo");
+        cmd.arg("-n"); // Non-interactive to avoid password prompts
         cmd.arg(nft());
         cmd.args(args);
 
@@ -1024,28 +1054,45 @@ impl KillSwitch {
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
-        let mut child = cmd.spawn().map_err(KillSwitchError::Spawn)?;
+        let result = timeout(
+            Duration::from_secs(Self::NFT_CMD_TIMEOUT_SECS),
+            async {
+                let mut child = cmd.spawn().map_err(KillSwitchError::Spawn)?;
 
-        if let Some(data) = stdin_data {
-            use tokio::io::AsyncWriteExt;
-            if let Some(mut stdin) = child.stdin.take() {
-                stdin
-                    .write_all(data.as_bytes())
+                if let Some(data) = stdin_data {
+                    use tokio::io::AsyncWriteExt;
+                    if let Some(mut stdin) = child.stdin.take() {
+                        stdin
+                            .write_all(data.as_bytes())
+                            .await
+                            .map_err(KillSwitchError::Write)?;
+                    }
+                }
+
+                child
+                    .wait_with_output()
                     .await
-                    .map_err(KillSwitchError::Write)?;
+                    .map_err(KillSwitchError::Wait)
             }
-        }
+        ).await;
 
-        let output = child
-            .wait_with_output()
-            .await
-            .map_err(KillSwitchError::Wait)?;
-
-        if output.status.success() {
-            Ok(())
-        } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            Err(KillSwitchError::Command(stderr.trim().to_string()))
+        match result {
+            Ok(Ok(output)) => {
+                if output.status.success() {
+                    Ok(())
+                } else {
+                    let stderr = String::from_utf8_lossy(&output.stderr);
+                    Err(KillSwitchError::Command(stderr.trim().to_string()))
+                }
+            }
+            Ok(Err(e)) => Err(e),
+            Err(_) => {
+                warn!("nft command timed out after {}s", Self::NFT_CMD_TIMEOUT_SECS);
+                Err(KillSwitchError::Command(format!(
+                    "nft command timed out after {}s",
+                    Self::NFT_CMD_TIMEOUT_SECS
+                )))
+            }
         }
     }
 

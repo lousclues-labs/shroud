@@ -5,10 +5,83 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.8.7] - 2026-02-04
 
 ### Fixed
+
+- **CRITICAL: Kill Switch State Flicker and Incorrect State Reporting**
+
+  The kill switch would flicker between enabled/disabled states, and the tray UI would incorrectly show the kill switch as disabled even when firewall rules were active and blocking traffic.
+
+  **Symptoms:**
+  - Tray menu showing kill switch disabled when it was actually enabled
+  - Kill switch checkbox flickering every ~30 seconds
+  - State desync between what Shroud reports and actual iptables rules
+  - Potential false sense of security if user believes kill switch is off when it's on
+  - Potential leak vulnerability if user believes kill switch is on when it's off
+
+  **Root Cause Analysis:**
+
+  The bug stemmed from a **privilege escalation oversight** in three critical functions that check iptables state. These functions ran iptables commands directly without `sudo`, causing "Permission denied" errors:
+
+  | Function | File | Problem |
+  |----------|------|---------|
+  | `is_actually_enabled()` | `killswitch/firewall.rs` | Ran `iptables -C OUTPUT -j SHROUD_KILLSWITCH` |
+  | `verify_rules_exist()` | `killswitch/firewall.rs` | Ran `iptables -C OUTPUT -j SHROUD_KILLSWITCH` |
+  | `rules_exist()` | `killswitch/cleanup.rs` | Ran `iptables -L SHROUD_KILLSWITCH -n` |
+  | `rules_exist_ipv6()` | `killswitch/cleanup.rs` | Ran `ip6tables -L SHROUD_KILLSWITCH -n` |
+
+  **The Failure Chain:**
+
+  1. Every 30 seconds, `run_health_check()` calls `sync_killswitch_state()`
+  2. `sync_killswitch_state()` calls `kill_switch.sync_state()`
+  3. `sync_state()` calls `is_actually_enabled()` to verify rules exist
+  4. `is_actually_enabled()` runs `iptables -C` **without sudo**
+  5. iptables returns exit code 4: `Fatal: can't open lock file /run/xtables.lock: Permission denied`
+  6. Function interprets this as "rules don't exist" and returns `false`
+  7. `sync_state()` sets `enabled = false`
+  8. `sync_killswitch_state()` updates `shared_state.kill_switch = false`
+  9. Tray UI shows kill switch as disabled
+  10. Next tick, actual rules are detected, state flips back — causing flicker
+
+  **Why This Was Missed:**
+
+  - The nftables path in `is_actually_enabled()` **did** use `sudo`, creating an inconsistency
+  - The `enable()` and `disable()` functions correctly used `sudo` via `run_single_script()`
+  - Testing was done with root permissions or with sudoers configured
+  - The iptables lock file permission error is silent (stderr was piped to null)
+
+  **The Fix:**
+
+  1. All iptables state-checking functions now use `sudo -n` (non-interactive)
+  2. If `sudo -n` fails (no NOPASSWD configured), functions fall back to the current internal state rather than incorrectly resetting to `false`
+  3. Added consistent `-n` flag to nftables commands for parity
+  4. This preserves state integrity when sudo access is unavailable
+
+  **Files Changed:**
+  - `src/killswitch/firewall.rs` - `is_actually_enabled()`, `verify_rules_exist()`, `verify_nft_rules_exist()`
+  - `src/killswitch/cleanup.rs` - `rules_exist()`, `rules_exist_ipv6()`
+
+  **Resilience Pattern:** Fail-safe state preservation. When we cannot verify external state, preserve internal state rather than assuming a dangerous default.
+
 - **Log Timestamps Off by ~15 Days** - Debug log timestamps showed dates roughly 15 days in the future (e.g., Feb 18 instead of Feb 3). The `chrono_lite_timestamp()` function used naive date math (`days / 365`) that ignored leap years, causing ~1 day drift per 4 years since 1970. Fixed by properly iterating through years and months accounting for leap years.
+
+### Changed
+
+- **Consistent `sudo -n` Usage Across Entire Kill Switch Module** - Following the principle of defensive consistency, all sudo invocations across the kill switch subsystem now use the `-n` (non-interactive) flag:
+
+  | File | Functions Updated |
+  |------|-------------------|
+  | `killswitch/firewall.rs` | `has_permission()`, `run_nft()` |
+  | `killswitch/cleanup.rs` | `run_cleanup_command()`, `cleanup_all()` |
+  | `killswitch/boot.rs` | `run_iptables()`, `run_ip6tables()` |
+
+  This prevents:
+  - Password prompt hangs during cleanup
+  - Supervisor blocking on boot-time kill switch operations
+  - Inconsistent behavior between state checking and rule application
+
+- **nftables Command Timeout Protection** - `run_nft()` now has a 30-second timeout wrapper (matching iptables behavior). Previously, nftables commands could block indefinitely if the kernel module froze or sudo hung.
 
 ## [1.8.6] - 2026-02-02
 
