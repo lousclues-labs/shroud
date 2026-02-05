@@ -1,6 +1,7 @@
 //! Supervisor reconnection logic
 
 use log::{debug, error, info, warn};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
 
@@ -12,6 +13,14 @@ use crate::state::{Event, TransitionReason, VpnState};
 use crate::tray::VpnCommand;
 
 use super::{CONNECTION_VERIFY_DELAY_SECS, RECONNECT_BASE_DELAY_SECS, RECONNECT_MAX_DELAY_SECS};
+
+/// Debounce period between reconnect attempts (seconds)
+/// Prevents rapid reconnect thrashing
+const RECONNECT_DEBOUNCE_SECS: u64 = 5;
+
+/// Static flag to track if a reconnect is currently in progress
+/// Uses atomic to be safe across async boundaries
+static RECONNECT_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 impl super::VpnSupervisor {
     /// Check actual NetworkManager state before reconnecting
@@ -61,6 +70,30 @@ impl super::VpnSupervisor {
 
     /// Attempt to reconnect with exponential backoff (triggered by connection drop)
     pub(crate) async fn attempt_reconnect(&mut self, connection_name: &str) {
+        // RACE PREVENTION: Check if reconnect is already in progress
+        if RECONNECT_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+            debug!("Reconnect already in progress, ignoring duplicate request");
+            return;
+        }
+
+        // Ensure we clear the flag when we exit (success or failure)
+        let _guard = scopeguard::guard((), |_| {
+            RECONNECT_IN_PROGRESS.store(false, Ordering::SeqCst);
+        });
+
+        // DEBOUNCE: Check if we recently attempted a reconnect
+        if let Some(last_time) = self.last_reconnect_time {
+            let elapsed = last_time.elapsed().as_secs();
+            if elapsed < RECONNECT_DEBOUNCE_SECS {
+                debug!(
+                    "Reconnect debounce active ({}/{}s), skipping",
+                    elapsed, RECONNECT_DEBOUNCE_SECS
+                );
+                return;
+            }
+        }
+        self.last_reconnect_time = Some(Instant::now());
+
         // Clear any previous cancellation flag
         self.reconnect_cancelled = false;
 

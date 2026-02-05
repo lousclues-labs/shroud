@@ -58,6 +58,8 @@ pub struct HealthChecker {
     config: HealthConfig,
     consecutive_failures: u32,
     consecutive_degraded: u32,
+    /// When set, health checks are suspended until this instant
+    suspended_until: Option<std::time::Instant>,
 }
 
 impl HealthChecker {
@@ -72,6 +74,7 @@ impl HealthChecker {
             config,
             consecutive_failures: 0,
             consecutive_degraded: 0,
+            suspended_until: None,
         }
     }
 
@@ -79,6 +82,38 @@ impl HealthChecker {
     pub fn reset(&mut self) {
         self.consecutive_failures = 0;
         self.consecutive_degraded = 0;
+        self.suspended_until = None;
+    }
+
+    /// Suspend health checks for a duration
+    ///
+    /// Used during system wake or other events that may cause transient failures.
+    /// Health checks will return Healthy immediately while suspended.
+    pub fn suspend(&mut self, duration: Duration) {
+        let until = std::time::Instant::now() + duration;
+        debug!("Suspending health checks for {:?}", duration);
+        self.suspended_until = Some(until);
+        // Reset failure counters to avoid false positives after resume
+        self.consecutive_failures = 0;
+        self.consecutive_degraded = 0;
+    }
+
+    /// Resume health checks (cancel suspension)
+    #[allow(dead_code)]
+    pub fn resume(&mut self) {
+        if self.suspended_until.is_some() {
+            debug!("Resuming health checks");
+            self.suspended_until = None;
+        }
+    }
+
+    /// Check if health checks are currently suspended
+    pub fn is_suspended(&self) -> bool {
+        if let Some(until) = self.suspended_until {
+            std::time::Instant::now() < until
+        } else {
+            false
+        }
     }
 
     /// Perform a health check
@@ -86,7 +121,14 @@ impl HealthChecker {
     /// Returns the health status of the VPN tunnel.
     /// Only returns Degraded after consecutive_degraded threshold is reached
     /// to avoid false positives during temporary system load (builds, updates).
+    /// Returns Healthy immediately if checks are suspended.
     pub async fn check(&mut self) -> HealthResult {
+        // Check if suspended (e.g., during system wake)
+        if self.is_suspended() {
+            debug!("Health check skipped - suspended");
+            return HealthResult::Healthy;
+        }
+
         for endpoint in &self.config.endpoints {
             match self.check_endpoint(endpoint).await {
                 Ok(latency_ms) => {

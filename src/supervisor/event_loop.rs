@@ -13,6 +13,17 @@ pub const NM_POLL_INTERVAL_SECS: u64 = 2;
 /// Health check interval when connected (seconds)
 pub const HEALTH_CHECK_INTERVAL_SECS: u64 = 30;
 
+/// Threshold for detecting a time jump (e.g., resume from sleep)
+/// If more than 3x the poll interval has passed, we consider it a time jump
+pub const TIME_JUMP_THRESHOLD_SECS: u64 = NM_POLL_INTERVAL_SECS * 3;
+
+/// Cooldown period after a time jump event (prevents thrashing)
+/// Only one wake event per cooldown window
+pub const TIME_JUMP_COOLDOWN_SECS: u64 = 5;
+
+/// Delay before dispatching wake event (allows system to stabilize)
+pub const WAKE_EVENT_DELAY_MS: u64 = 2000;
+
 impl super::VpnSupervisor {
     /// Run the supervisor's main loop
     pub async fn run(mut self) {
@@ -133,14 +144,34 @@ impl super::VpnSupervisor {
                 // Poll NetworkManager state periodically (fallback/backup)
                 _ = nm_poll_interval.tick() => {
                     let elapsed = self.last_poll_time.elapsed();
-                    if elapsed > Duration::from_secs(NM_POLL_INTERVAL_SECS * 3) {
-                        // Time jump detected - dispatch Wake event
-                        warn!(
-                            "Time jump detected ({:.1}s since last poll), dispatching Wake event",
-                            elapsed.as_secs_f32()
-                        );
-                        self.dispatch(Event::Wake);
-                        self.force_state_resync().await;
+                    if elapsed > Duration::from_secs(TIME_JUMP_THRESHOLD_SECS) {
+                        // Time jump detected - check if we're in cooldown period
+                        let should_dispatch = match self.last_wake_event {
+                            Some(last) => last.elapsed().as_secs() >= TIME_JUMP_COOLDOWN_SECS,
+                            None => true,
+                        };
+
+                        if should_dispatch {
+                            warn!(
+                                "Time jump detected ({:.1}s since last poll), dispatching Wake event after delay",
+                                elapsed.as_secs_f32()
+                            );
+
+                            // Delay before dispatching to let system stabilize
+                            tokio::time::sleep(Duration::from_millis(WAKE_EVENT_DELAY_MS)).await;
+
+                            // Suspend health checks during wake to avoid false positives
+                            self.health_checker.suspend(Duration::from_secs(10));
+
+                            self.dispatch(Event::Wake);
+                            self.last_wake_event = Some(Instant::now());
+                            self.force_state_resync().await;
+                        } else {
+                            debug!(
+                                "Time jump detected but in cooldown ({:.1}s since last wake event)",
+                                self.last_wake_event.unwrap().elapsed().as_secs_f32()
+                            );
+                        }
                     } else {
                         // Regular poll - check for multiple VPNs and sync state
                         self.poll_nm_state().await;

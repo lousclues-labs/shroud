@@ -31,6 +31,8 @@
 use log::{debug, info, warn};
 use std::net::IpAddr;
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 use thiserror::Error;
 use tokio::process::Command;
 
@@ -42,6 +44,13 @@ const CHAIN_NAME: &str = "SHROUD_KILLSWITCH";
 
 /// Name of the nftables table for the kill switch
 const NFT_TABLE: &str = "shroud_killswitch";
+
+/// Minimum cooldown between kill switch toggles (milliseconds)
+/// Prevents race conditions from rapid enable/disable
+const TOGGLE_COOLDOWN_MS: u64 = 500;
+
+/// Static flag to prevent concurrent toggle operations
+static TOGGLE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FirewallBackend {
@@ -136,6 +145,8 @@ pub struct KillSwitch {
     backend: FirewallBackend,
     /// Prefer iptables-legacy over iptables-nft
     use_legacy: bool,
+    /// Timestamp of last toggle operation (for cooldown)
+    last_toggle_time: Option<Instant>,
 }
 
 impl KillSwitch {
@@ -151,6 +162,7 @@ impl KillSwitch {
             ipv6_mode: Ipv6Mode::default(),
             backend: FirewallBackend::Iptables,
             use_legacy: false,
+            last_toggle_time: None,
         }
     }
 
@@ -171,6 +183,7 @@ impl KillSwitch {
             ipv6_mode,
             backend: FirewallBackend::Iptables,
             use_legacy: false,
+            last_toggle_time: None,
         }
     }
 
@@ -290,8 +303,39 @@ impl KillSwitch {
         self.enabled = self.is_actually_enabled();
     }
 
+    /// Check and enforce toggle cooldown
+    ///
+    /// Returns true if we can proceed with the toggle, false if in cooldown
+    fn check_toggle_cooldown(&mut self) -> bool {
+        if let Some(last_time) = self.last_toggle_time {
+            let elapsed_ms = last_time.elapsed().as_millis() as u64;
+            if elapsed_ms < TOGGLE_COOLDOWN_MS {
+                debug!(
+                    "Kill switch toggle in cooldown ({}/{}ms)",
+                    elapsed_ms, TOGGLE_COOLDOWN_MS
+                );
+                return false;
+            }
+        }
+        true
+    }
+
     /// Enable the kill switch
     pub async fn enable(&mut self) -> Result<(), KillSwitchError> {
+        // RACE PREVENTION: Acquire toggle lock
+        if TOGGLE_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+            debug!("Kill switch toggle already in progress, skipping enable");
+            return Ok(());
+        }
+        let _guard = scopeguard::guard((), |_| {
+            TOGGLE_IN_PROGRESS.store(false, Ordering::SeqCst);
+        });
+
+        // Check cooldown
+        if !self.check_toggle_cooldown() {
+            return Ok(());
+        }
+
         if self.enabled {
             let rules_exist = match self.backend {
                 FirewallBackend::Iptables => self.verify_rules_exist().await,
@@ -304,6 +348,7 @@ impl KillSwitch {
         }
 
         info!("Enabling VPN kill switch");
+        self.last_toggle_time = Some(Instant::now());
 
         // Detect VPN server IPs first
         let vpn_server_ips = Self::detect_all_vpn_server_ips().await;
@@ -916,7 +961,22 @@ impl KillSwitch {
 
     /// Disable the kill switch
     pub async fn disable(&mut self) -> Result<(), KillSwitchError> {
+        // RACE PREVENTION: Acquire toggle lock
+        if TOGGLE_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+            debug!("Kill switch toggle already in progress, skipping disable");
+            return Ok(());
+        }
+        let _guard = scopeguard::guard((), |_| {
+            TOGGLE_IN_PROGRESS.store(false, Ordering::SeqCst);
+        });
+
+        // Check cooldown
+        if !self.check_toggle_cooldown() {
+            return Ok(());
+        }
+
         info!("Disabling VPN kill switch");
+        self.last_toggle_time = Some(Instant::now());
 
         if matches!(self.backend, FirewallBackend::Iptables) {
             if let Err(err) = Self::check_sudo_access() {

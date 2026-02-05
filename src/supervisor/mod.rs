@@ -108,6 +108,10 @@ pub struct VpnSupervisor {
     pub(crate) switching_from: Option<String>,
     /// Timestamp when switch completed (to ignore late D-Bus events)
     pub(crate) switch_completed_time: Option<Instant>,
+    /// Timestamp of last wake event dispatch (for debounce)
+    pub(crate) last_wake_event: Option<Instant>,
+    /// Timestamp of last reconnect attempt start (for debounce)
+    pub(crate) last_reconnect_time: Option<Instant>,
     /// Flag to cancel ongoing reconnection attempts
     pub(crate) reconnect_cancelled: bool,
     /// Whether this is the first run (config file did not exist)
@@ -175,6 +179,8 @@ impl VpnSupervisor {
             switching_target: None,
             switching_from: None,
             switch_completed_time: None,
+            last_wake_event: None,
+            last_reconnect_time: None,
             reconnect_cancelled: false,
             is_first_run,
             should_exit: false,

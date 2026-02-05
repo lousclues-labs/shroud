@@ -69,6 +69,9 @@ thiserror = "1"
 # Random number generation (for jitter in exponential backoff)
 rand = "0.9"
 
+# Scope-based cleanup for reconnect guard
+scopeguard = "1"
+
 [profile.release]
 lto = true
 codegen-units = 1
@@ -111,3 +114,8 @@ path = "tests/e2e.rs"
 [[test]]
 name = "chaos"
 path = "tests/chaos.rs"
+
+# Stability tests - race condition and event handling tests
+[[test]]
+name = "stability"
+path = "tests/stability.rs"
