@@ -34,7 +34,7 @@ impl std::fmt::Display for VpnType {
 
 /// Get all VPN connections with their types
 pub async fn list_vpn_connections_with_types() -> Vec<VpnConnection> {
-    let output = Command::new(&nmcli_command())
+    let output = Command::new(nmcli_command())
         .args(["-t", "-f", "NAME,TYPE,UUID", "connection", "show"])
         .output()
         .await;
@@ -71,7 +71,7 @@ pub async fn list_vpn_connections_with_types() -> Vec<VpnConnection> {
 
 /// Get VPN type for a specific connection
 pub async fn get_vpn_type(name: &str) -> VpnType {
-    let output = Command::new(&nmcli_command())
+    let output = Command::new(nmcli_command())
         .args(["-t", "-f", "connection.type", "connection", "show", name])
         .output()
         .await;
