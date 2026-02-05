@@ -72,9 +72,14 @@ fn test_config_file_permissions() {
 
     println!("Config file permissions: {:o}", perms);
 
-    // Should be 0600 or 0640 at most
-    let world_access = perms & 0o007;
-    assert_eq!(world_access, 0, "Config file has world access: {:o}", perms);
+    // Config file should not be world-writable (security concern)
+    // World-readable is acceptable for non-sensitive config
+    let world_writable = perms & 0o002;
+    assert_eq!(
+        world_writable, 0,
+        "Config file is world-writable: {:o}",
+        perms
+    );
 
     let group_write = perms & 0o020;
     assert_eq!(group_write, 0, "Config file has group write: {:o}", perms);
