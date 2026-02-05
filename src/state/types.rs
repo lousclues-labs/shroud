@@ -303,4 +303,141 @@ mod tests {
         }
         .is_busy());
     }
+
+    #[test]
+    fn test_vpn_state_name() {
+        assert_eq!(VpnState::Disconnected.name(), "Disconnected");
+        assert_eq!(VpnState::Connecting { server: "s".into() }.name(), "Connecting");
+        assert_eq!(VpnState::Connected { server: "s".into() }.name(), "Connected");
+        assert_eq!(VpnState::Degraded { server: "s".into() }.name(), "Degraded");
+        assert_eq!(VpnState::Reconnecting { server: "s".into(), attempt: 1, max_attempts: 5 }.name(), "Reconnecting");
+        assert_eq!(VpnState::Failed { server: "s".into(), reason: "r".into() }.name(), "Failed");
+    }
+
+    #[test]
+    fn test_vpn_state_display() {
+        let state = VpnState::Connected { server: "my-vpn".into() };
+        let display = format!("{}", state);
+        assert!(display.contains("Connected"));
+        assert!(display.contains("my-vpn"));
+
+        let state = VpnState::Reconnecting { server: "s".into(), attempt: 3, max_attempts: 10 };
+        let display = format!("{}", state);
+        assert!(display.contains("3"));
+        assert!(display.contains("10"));
+    }
+
+    #[test]
+    fn test_vpn_state_clone() {
+        let state = VpnState::Connected { server: "test".into() };
+        let cloned = state.clone();
+        assert_eq!(state, cloned);
+    }
+
+    #[test]
+    fn test_vpn_state_equality() {
+        let s1 = VpnState::Connected { server: "a".into() };
+        let s2 = VpnState::Connected { server: "a".into() };
+        let s3 = VpnState::Connected { server: "b".into() };
+        assert_eq!(s1, s2);
+        assert_ne!(s1, s3);
+    }
+
+    #[test]
+    fn test_event_display() {
+        let event = Event::UserEnable { server: "vpn".into() };
+        let display = format!("{}", event);
+        assert!(display.contains("UserEnable"));
+        assert!(display.contains("vpn"));
+
+        let event = Event::ConnectionFailed { reason: "timeout".into() };
+        let display = format!("{}", event);
+        assert!(display.contains("ConnectionFailed"));
+        assert!(display.contains("timeout"));
+    }
+
+    #[test]
+    fn test_event_clone() {
+        let event = Event::NmVpnUp { server: "test".into() };
+        let cloned = event.clone();
+        assert!(matches!(cloned, Event::NmVpnUp { server } if server == "test"));
+    }
+
+    #[test]
+    fn test_transition_reason_display() {
+        let reason = TransitionReason::UserRequested;
+        assert_eq!(format!("{}", reason), "user_requested");
+
+        let reason = TransitionReason::VpnEstablished;
+        assert_eq!(format!("{}", reason), "vpn_established");
+
+        let reason = TransitionReason::RetriesExhausted;
+        assert_eq!(format!("{}", reason), "retries_exhausted");
+    }
+
+    #[test]
+    fn test_nm_vpn_state_display() {
+        assert_eq!(format!("{}", NmVpnState::Activating), "activating");
+        assert_eq!(format!("{}", NmVpnState::Activated), "activated");
+        assert_eq!(format!("{}", NmVpnState::Deactivating), "deactivating");
+        assert_eq!(format!("{}", NmVpnState::Inactive), "inactive");
+    }
+
+    #[test]
+    fn test_nm_vpn_state_equality() {
+        assert_eq!(NmVpnState::Activated, NmVpnState::Activated);
+        assert_ne!(NmVpnState::Activated, NmVpnState::Activating);
+    }
+
+    #[test]
+    fn test_active_vpn_info() {
+        let info = ActiveVpnInfo {
+            name: "my-vpn".to_string(),
+            state: NmVpnState::Activated,
+        };
+        assert_eq!(info.name, "my-vpn");
+        assert_eq!(info.state, NmVpnState::Activated);
+    }
+
+    #[test]
+    fn test_all_event_variants() {
+        // Ensure all event variants can be constructed
+        let events = vec![
+            Event::UserEnable { server: "s".into() },
+            Event::UserDisable,
+            Event::NmVpnUp { server: "s".into() },
+            Event::NmVpnDown,
+            Event::NmVpnChanged { server: "s".into() },
+            Event::NmDeviceChanged,
+            Event::HealthOk,
+            Event::HealthDegraded,
+            Event::HealthDead,
+            Event::Sleep,
+            Event::Wake,
+            Event::Timeout,
+            Event::ConnectionFailed { reason: "r".into() },
+            Event::EndpointFailed { reason: "r".into() },
+        ];
+        assert_eq!(events.len(), 14);
+    }
+
+    #[test]
+    fn test_all_transition_reasons() {
+        let reasons = vec![
+            TransitionReason::UserRequested,
+            TransitionReason::VpnEstablished,
+            TransitionReason::VpnLost,
+            TransitionReason::VpnReestablished,
+            TransitionReason::HealthCheckFailed,
+            TransitionReason::HealthCheckDead,
+            TransitionReason::Timeout,
+            TransitionReason::Retrying,
+            TransitionReason::RetriesExhausted,
+            TransitionReason::ConnectionFailed,
+            TransitionReason::WakeResync,
+            TransitionReason::ExternalChange,
+            TransitionReason::Unknown,
+        ];
+        assert_eq!(reasons.len(), 13);
+    }
 }

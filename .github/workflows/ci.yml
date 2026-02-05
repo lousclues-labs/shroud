@@ -95,6 +95,17 @@ jobs:
       
       - name: Run unit tests
         run: cargo test --bins --all-features
+      
+      - name: Run regression tests
+        run: cargo test --test regression --all-features
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-results
+          path: target/test-results/
+          if-no-files-found: ignore
 
   # ===========================================================================
   # STAGE 3: Integration Tests

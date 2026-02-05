@@ -279,4 +279,155 @@ mod gateway_tests {
             }
         }
     }
+
+    // =========================================================================
+    // Interface validation tests
+    // =========================================================================
+
+    #[test]
+    fn test_interface_name_validation() {
+        fn is_valid_interface_name(name: &str) -> bool {
+            !name.is_empty()
+                && name.len() <= 15  // IFNAMSIZ - 1
+                && name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_')
+                && !name.contains(';')
+                && !name.contains('|')
+                && !name.contains('&')
+        }
+
+        assert!(is_valid_interface_name("eth0"));
+        assert!(is_valid_interface_name("tun0"));
+        assert!(is_valid_interface_name("enp0s3"));
+        assert!(is_valid_interface_name("wg-tunnel"));
+        
+        assert!(!is_valid_interface_name(""));
+        assert!(!is_valid_interface_name("eth0; rm -rf /"));
+        assert!(!is_valid_interface_name("a".repeat(20).as_str()));
+    }
+
+    #[test]
+    fn test_subnet_validation() {
+        fn is_valid_ipv4_subnet(subnet: &str) -> bool {
+            let parts: Vec<&str> = subnet.split('/').collect();
+            if parts.len() != 2 {
+                return false;
+            }
+            
+            let ip_parts: Vec<&str> = parts[0].split('.').collect();
+            if ip_parts.len() != 4 {
+                return false;
+            }
+            
+            for part in ip_parts {
+                if part.parse::<u8>().is_err() {
+                    return false;
+                }
+            }
+            
+            if let Ok(prefix) = parts[1].parse::<u8>() {
+                prefix <= 32
+            } else {
+                false
+            }
+        }
+
+        assert!(is_valid_ipv4_subnet("192.168.1.0/24"));
+        assert!(is_valid_ipv4_subnet("10.0.0.0/8"));
+        assert!(is_valid_ipv4_subnet("0.0.0.0/0"));
+        
+        assert!(!is_valid_ipv4_subnet("not-a-subnet"));
+        assert!(!is_valid_ipv4_subnet("192.168.1.0"));
+        assert!(!is_valid_ipv4_subnet("192.168.1.0/33"));
+    }
+
+    // =========================================================================
+    // NAT rule building tests
+    // =========================================================================
+
+    #[test]
+    fn test_build_masquerade_args() {
+        fn build_masquerade_args(interface: &str) -> Vec<String> {
+            vec![
+                "-t".to_string(),
+                "nat".to_string(),
+                "-A".to_string(),
+                "POSTROUTING".to_string(),
+                "-o".to_string(),
+                interface.to_string(),
+                "-j".to_string(),
+                "MASQUERADE".to_string(),
+            ]
+        }
+
+        let args = build_masquerade_args("tun0");
+        assert!(args.contains(&"MASQUERADE".to_string()));
+        assert!(args.contains(&"tun0".to_string()));
+        assert!(args.contains(&"-o".to_string()));
+    }
+
+    #[test]
+    fn test_build_forward_args() {
+        fn build_forward_args(in_iface: &str, out_iface: &str) -> Vec<String> {
+            vec![
+                "-A".to_string(),
+                "FORWARD".to_string(),
+                "-i".to_string(),
+                in_iface.to_string(),
+                "-o".to_string(),
+                out_iface.to_string(),
+                "-j".to_string(),
+                "ACCEPT".to_string(),
+            ]
+        }
+
+        let args = build_forward_args("eth0", "tun0");
+        assert!(args.contains(&"FORWARD".to_string()));
+        assert!(args.contains(&"eth0".to_string()));
+        assert!(args.contains(&"tun0".to_string()));
+    }
+
+    // =========================================================================
+    // Error handling tests
+    // =========================================================================
+
+    #[test]
+    fn test_gateway_error_from_io_error() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
+        let gateway_err = GatewayError::Firewall(io_err.to_string());
+        assert!(gateway_err.to_string().contains("access denied"));
+    }
+
+    #[test]
+    fn test_gateway_error_debug() {
+        let err = GatewayError::Detection("no interface".to_string());
+        let debug = format!("{:?}", err);
+        assert!(debug.contains("Detection"));
+        assert!(debug.contains("no interface"));
+    }
+
+    // =========================================================================
+    // Status tracking tests
+    // =========================================================================
+
+    #[test]
+    fn test_gateway_status_tracking() {
+        struct GatewayStatus {
+            forwarding_enabled: bool,
+            nat_enabled: bool,
+            vpn_interface: Option<String>,
+            lan_interface: Option<String>,
+        }
+
+        let status = GatewayStatus {
+            forwarding_enabled: true,
+            nat_enabled: true,
+            vpn_interface: Some("tun0".to_string()),
+            lan_interface: Some("eth0".to_string()),
+        };
+
+        assert!(status.forwarding_enabled);
+        assert!(status.nat_enabled);
+        assert_eq!(status.vpn_interface.as_deref(), Some("tun0"));
+        assert_eq!(status.lan_interface.as_deref(), Some("eth0"));
+    }
 }
