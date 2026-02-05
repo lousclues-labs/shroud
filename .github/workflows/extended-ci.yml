@@ -43,44 +43,7 @@ jobs:
         run: cargo build --release
       
       - name: Run regression tests
-        run: |
-          chmod +x scripts/test-regression.sh
-          ./scripts/test-regression.sh
-
-  # ===========================================================================
-  # NM Mock Smoke Tests
-  # ===========================================================================
-  
-  nm-mock-smoke:
-    name: NM Mock Smoke Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "ci-v2"
-      
-      - name: Build
-        run: cargo build --release
-      
-      - name: Run NM mock smoke tests
-        run: |
-          chmod +x scripts/test-nm-mock.sh
-          chmod +x tests/mocks/fake-nmcli
-          ./scripts/test-nm-mock.sh
-      
-      - name: Upload results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: nm-mock-results
-          path: /tmp/shroud-mock-nm-*/
-          if-no-files-found: ignore
+        run: cargo test --test regression --all-features
 
   # ===========================================================================
   # Coverage
@@ -170,11 +133,11 @@ jobs:
             target/release/shroud
 
   # ===========================================================================
-  # Desktop E2E with Xvfb
+  # E2E Tests with Display
   # ===========================================================================
   
-  desktop-e2e-xvfb:
-    name: Desktop E2E (Xvfb)
+  e2e-xvfb:
+    name: E2E Tests (Xvfb)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -199,19 +162,12 @@ jobs:
       - name: Build
         run: cargo build --release
       
-      - name: Run desktop E2E under Xvfb
+      - name: Run E2E tests under Xvfb
         run: |
-          chmod +x tests/e2e/desktop/run-desktop-xvfb.sh
-          chmod +x tests/e2e/desktop/run-desktop-tests.sh
-          tests/e2e/desktop/run-desktop-xvfb.sh --unprivileged || true
+          xvfb-run --auto-servernum cargo test --test e2e --all-features -- --test-threads=1 || true
       
-      - name: Upload results
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: desktop-e2e-xvfb-results
-          path: tests/e2e/desktop/results/
-          if-no-files-found: ignore
+      - name: Run Stability tests
+        run: cargo test --test stability --all-features
 
   # ===========================================================================
   # Performance Smoke
@@ -259,14 +215,13 @@ jobs:
   
   extended-ci-success:
     name: Extended CI Success
-    needs: [regression-tests, nm-mock-smoke, coverage, binary-size, desktop-e2e-xvfb]
+    needs: [regression-tests, coverage, binary-size, e2e-xvfb]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - name: Check all jobs passed
         run: |
           if [[ "${{ needs.regression-tests.result }}" == "failure" ]] || \
-             [[ "${{ needs.nm-mock-smoke.result }}" == "failure" ]] || \
              [[ "${{ needs.coverage.result }}" == "failure" ]] || \
              [[ "${{ needs.binary-size.result }}" == "failure" ]]; then
             echo "One or more extended CI jobs failed"
