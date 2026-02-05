@@ -920,6 +920,14 @@ impl super::VpnSupervisor {
         let current_enabled = self.app_config.kill_switch_enabled;
         let new_enabled = !current_enabled;
 
+        // Optimistically update shared state immediately so tray shows new state
+        // This prevents the "flicker" where tray briefly shows old state
+        {
+            let mut state = self.shared_state.write().await;
+            state.kill_switch = new_enabled;
+        }
+        self.update_tray();
+
         let result = if new_enabled {
             self.kill_switch.enable().await
         } else {
@@ -928,12 +936,6 @@ impl super::VpnSupervisor {
 
         match result {
             Ok(()) => {
-                // Update shared state for tray
-                {
-                    let mut state = self.shared_state.write().await;
-                    state.kill_switch = new_enabled;
-                }
-
                 // Save to persistent config
                 self.app_config.kill_switch_enabled = new_enabled;
                 if let Err(e) = self.config_manager.save(&self.app_config) {
@@ -941,7 +943,6 @@ impl super::VpnSupervisor {
                 }
 
                 info!("Kill switch toggled to: {}", new_enabled);
-                self.update_tray();
                 self.show_notification(
                     "Kill Switch",
                     if new_enabled {
@@ -952,6 +953,13 @@ impl super::VpnSupervisor {
                 );
             }
             Err(e) => {
+                // Rollback optimistic state update on failure
+                {
+                    let mut state = self.shared_state.write().await;
+                    state.kill_switch = current_enabled; // Revert to original
+                }
+                self.update_tray();
+
                 if !new_enabled {
                     if let crate::killswitch::firewall::KillSwitchError::Command(msg) = &e {
                         let msg_lower = msg.to_lowercase();

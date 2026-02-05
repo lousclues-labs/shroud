@@ -12,6 +12,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.8.9] - 2026-02-04
+
+### Fixed
+
+- **Kill Switch Toggle Race Condition** - When clicking the kill switch toggle in the tray menu, the checkbox would briefly show the old state before updating. Now uses optimistic UI update: the tray immediately shows the new state while the async iptables operation runs in the background. On failure, the state rolls back.
+
+---
+
 ## [1.8.8] - 2026-02-04
 
 ### Fixed
