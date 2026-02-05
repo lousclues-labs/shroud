@@ -74,12 +74,17 @@ elif ! $HTML_ONLY; then
     OUTPUT_ARGS="$OUTPUT_ARGS --out xml"
 fi
 
+# Exclude tests that require system resources (D-Bus, iptables) since they're
+# unreliable in CI/coverage environments and can hang or panic
+EXCLUDE_ARGS="--exclude-files tests/e2e.rs --exclude-files tests/chaos.rs"
+
 cargo tarpaulin \
     --verbose \
     --all-features \
     --workspace \
     --timeout 300 \
     $OUTPUT_ARGS \
+    $EXCLUDE_ARGS \
     --skip-clean \
     --engine llvm \
     2>&1 | tee coverage/tarpaulin.log || echo "Tarpaulin completed with warnings"

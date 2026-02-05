@@ -350,6 +350,10 @@ impl KillSwitch {
         info!("Enabling VPN kill switch");
         self.last_toggle_time = Some(Instant::now());
 
+        // CRITICAL: First clean up any existing rules to prevent duplicates
+        // This handles race conditions where enable is called multiple times
+        self.robust_iptables_cleanup().await;
+
         // Detect VPN server IPs first
         let vpn_server_ips = Self::detect_all_vpn_server_ips().await;
         if !vpn_server_ips.is_empty() {
@@ -396,23 +400,8 @@ impl KillSwitch {
     fn build_complete_script(&self, vpn_ips: &[IpAddr]) -> String {
         let mut s = String::new();
 
-        // Cleanup (always runs, errors ignored)
-        s.push_str(&format!(
-            "{} -D OUTPUT -j SHROUD_KILLSWITCH 2>/dev/null || true\n",
-            iptables()
-        ));
-        s.push_str(&format!(
-            "{} -F SHROUD_KILLSWITCH 2>/dev/null || true\n",
-            iptables()
-        ));
-        s.push_str(&format!(
-            "{} -X SHROUD_KILLSWITCH 2>/dev/null || true\n",
-            iptables()
-        ));
-        s.push_str(&format!(
-            "{} delete table inet shroud_killswitch 2>/dev/null || true\n",
-            nft()
-        ));
+        // Note: Cleanup is handled by robust_iptables_cleanup() before this is called
+        // We just need to create the chain and add rules
 
         // Create chain
         s.push_str(&format!("{} -N SHROUD_KILLSWITCH\n", iptables()));
@@ -1002,40 +991,14 @@ impl KillSwitch {
             }
         }
 
-        // We run cleanup regardless of enabled status to ensuring we don't leave
+        // We run cleanup regardless of enabled status to ensure we don't leave
         // the user stranded if the internal state is out of sync.
-
-        let script = format!(
-            r#"
-{iptables} -D OUTPUT -j SHROUD_KILLSWITCH 2>/dev/null || true
-{iptables} -F SHROUD_KILLSWITCH 2>/dev/null || true
-{iptables} -X SHROUD_KILLSWITCH 2>/dev/null || true
-{ip6tables} -D OUTPUT -j DROP 2>/dev/null || true
-{ip6tables} -D OUTPUT -o lo -j ACCEPT 2>/dev/null || true
-{ip6tables} -D OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT 2>/dev/null || true
-{ip6tables} -D OUTPUT -o tun+ -j ACCEPT 2>/dev/null || true
-{ip6tables} -D OUTPUT -d fe80::/10 -j ACCEPT 2>/dev/null || true
-{nft} delete table inet shroud_killswitch 2>/dev/null || true
-"#,
-            iptables = iptables(),
-            ip6tables = ip6tables(),
-            nft = nft()
-        );
+        // Use robust cleanup that removes ALL duplicate rules.
 
         match self.backend {
-            FirewallBackend::Iptables => match self.run_single_script(&script).await {
-                Ok(()) => {}
-                Err(err) if Self::should_fallback_to_nft(&err) => {
-                    if Self::nft_is_available().await {
-                        warn!("iptables failed during disable; falling back to nftables");
-                        self.backend = FirewallBackend::Nftables;
-                        self.disable_nft().await?;
-                    } else {
-                        warn!("iptables failed during disable and nft is unavailable; proceeding best-effort");
-                    }
-                }
-                Err(err) => return Err(err),
-            },
+            FirewallBackend::Iptables => {
+                self.robust_iptables_cleanup().await;
+            }
             FirewallBackend::Nftables => {
                 self.disable_nft().await?;
             }
@@ -1044,6 +1007,111 @@ impl KillSwitch {
         self.enabled = false;
         info!("VPN kill switch disabled");
         Ok(())
+    }
+
+    /// Robust cleanup that removes ALL duplicate rules (handles race conditions)
+    async fn robust_iptables_cleanup(&self) {
+        // Remove ALL duplicate SHROUD_KILLSWITCH jump rules from OUTPUT chain
+        for _ in 0..100 {
+            // Safety limit
+            let output = Command::new("sudo")
+                .args(["-n", iptables(), "-D", "OUTPUT", "-j", CHAIN_NAME])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await;
+            if !matches!(output, Ok(s) if s.success()) {
+                break;
+            }
+        }
+
+        // Flush and delete the chain
+        let _ = Command::new("sudo")
+            .args(["-n", iptables(), "-F", CHAIN_NAME])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        let _ = Command::new("sudo")
+            .args(["-n", iptables(), "-X", CHAIN_NAME])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        // IPv6: Remove ALL duplicate rules inserted by Block/Tunnel modes
+        // These are direct OUTPUT rules, not a chain
+        let ipv6_rules_to_remove = [
+            vec!["-D", "OUTPUT", "-j", "DROP"],
+            vec!["-D", "OUTPUT", "-o", "lo", "-j", "ACCEPT"],
+            vec![
+                "-D",
+                "OUTPUT",
+                "-m",
+                "conntrack",
+                "--ctstate",
+                "ESTABLISHED,RELATED",
+                "-j",
+                "ACCEPT",
+            ],
+            vec!["-D", "OUTPUT", "-o", "tun+", "-j", "ACCEPT"],
+            vec!["-D", "OUTPUT", "-d", "fe80::/10", "-j", "ACCEPT"],
+        ];
+
+        for rule in &ipv6_rules_to_remove {
+            // Remove ALL duplicates of each rule
+            for _ in 0..100 {
+                let mut cmd = Command::new("sudo");
+                cmd.arg("-n").arg(ip6tables());
+                for arg in rule {
+                    cmd.arg(arg);
+                }
+                let output = cmd
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .await;
+                if !matches!(output, Ok(s) if s.success()) {
+                    break;
+                }
+            }
+        }
+
+        // Also try to clean up IPv6 SHROUD_KILLSWITCH chain if it exists
+        for _ in 0..100 {
+            let output = Command::new("sudo")
+                .args(["-n", ip6tables(), "-D", "OUTPUT", "-j", CHAIN_NAME])
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await;
+            if !matches!(output, Ok(s) if s.success()) {
+                break;
+            }
+        }
+
+        let _ = Command::new("sudo")
+            .args(["-n", ip6tables(), "-F", CHAIN_NAME])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        let _ = Command::new("sudo")
+            .args(["-n", ip6tables(), "-X", CHAIN_NAME])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
+
+        // Clean up nftables table too
+        let _ = Command::new("sudo")
+            .args(["-n", nft(), "delete", "table", "inet", NFT_TABLE])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await;
     }
 
     /// Update the kill switch rules (e.g., when VPN interface changes)
@@ -1546,11 +1614,13 @@ mod tests {
     fn test_build_complete_script() {
         let ks = KillSwitch::new();
         let script = ks.build_complete_script(&[]);
+        // Script creates the chain and adds rules
         assert!(script.contains("iptables -N SHROUD_KILLSWITCH"));
         assert!(script.contains("iptables -I OUTPUT 1 -j SHROUD_KILLSWITCH"));
-        assert!(script.contains("nft delete table inet shroud_killswitch"));
-        // Check for cleanup commands at start
-        assert!(script.contains("iptables -X SHROUD_KILLSWITCH 2>/dev/null || true"));
+        // Note: Cleanup is now done by robust_iptables_cleanup() before script runs
+        // so the script itself doesn't include cleanup commands
+        assert!(script.contains("-o lo -j ACCEPT"));
+        assert!(script.contains("-j DROP"));
     }
 
     #[test]

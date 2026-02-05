@@ -12,6 +12,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.9.1] - 2026-02-05
+
+### Fixed
+
+- **Critical: Duplicate iptables Rules Causing Network Lockout** - Race conditions during rapid kill switch toggles or crashes would leave stale/duplicate iptables rules that block network access. Root cause: `iptables -D` only removes ONE matching rule, but race conditions can create multiple identical rules. Previous cleanup only attempted to delete one rule, leaving the rest blocking traffic.
+
+  - Boot kill switch (`boot.rs`): `insert_boot_chain_jump()` now removes ALL existing jump rules before inserting; `disable_boot_killswitch()` now loops to remove ALL duplicate jump rules (up to 100).
+  
+  - Cleanup module (`cleanup.rs`): `run_cleanup_command()` now loops to remove ALL duplicate jump rules for both SHROUD_KILLSWITCH and boot chains (iptables and ip6tables); `cleanup_all()` now uses loop-based removal for boot chain rules; `cleanup_stale_on_startup()` now also detects and cleans boot chain rules; added `boot_chain_exists()` helper function.
+  
+  - Firewall module (`firewall.rs`): Added `robust_iptables_cleanup()` that removes ALL duplicate rules (loops to remove all SHROUD_KILLSWITCH jump rules from OUTPUT, loops to remove all IPv6 direct rules, cleans up both IPv4 and IPv6 chains); `enable()` now calls `robust_iptables_cleanup()` BEFORE adding new rules; `disable()` now uses `robust_iptables_cleanup()` instead of script-based cleanup.
+
+- **Coverage Tests Burning CI Minutes** - E2E tests requiring D-Bus session (`test_socket_cleanup_on_exit`) and chaos tests would hang or panic during tarpaulin coverage runs, burning 60+ CI minutes. Now excluded from coverage runs via `--exclude-files tests/e2e.rs --exclude-files tests/chaos.rs`.
+
+### Changed
+
+- **Coverage Script** - Added `EXCLUDE_ARGS` to exclude E2E and chaos tests that require system resources (D-Bus, iptables) and are unreliable in CI/coverage environments.
+
+- **Scheduled Workflow** - Tarpaulin now excludes `tests/e2e.rs` and `tests/chaos.rs` from coverage runs.
+
+### Technical Details
+
+#### Root Cause Analysis
+
+When the kill switch was enabled/disabled rapidly (either through user clicks or system events), the following sequence could occur:
+
+1. Enable starts: cleanup runs (removes 1 rule), adds new rules
+2. Disable starts: cleanup runs (removes 1 rule), state shows disabled
+3. Enable starts again before step 2 fully completes
+4. Result: Multiple identical rules in OUTPUT chain
+
+Observed in production: 44+ duplicate `SHROUD_BOOT_KS` jump rules in ip6tables OUTPUT chain, causing complete IPv6 blockage even after "disabling" the kill switch.
+
+#### New Functions
+
+| Function | Module | Purpose |
+|----------|--------|---------|
+| `robust_iptables_cleanup()` | `firewall.rs` | Async cleanup that loops to remove ALL duplicates |
+| `boot_chain_exists()` | `cleanup.rs` | Check if boot kill switch chain exists |
+
+---
+
 ## [1.9.0] - 2026-02-05
 
 ### Added

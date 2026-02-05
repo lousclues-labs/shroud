@@ -77,23 +77,62 @@ pub fn rules_exist_ipv6() -> Result<bool, CleanupError> {
 
 fn run_cleanup_command() -> Result<(), CleanupError> {
     // Use sudo -n to avoid password prompts that would cause hangs
-    let commands: Vec<Vec<&str>> = vec![
-        vec!["-n", iptables(), "-D", "OUTPUT", "-j", "SHROUD_KILLSWITCH"],
-        vec!["-n", iptables(), "-F", "SHROUD_KILLSWITCH"],
-        vec!["-n", iptables(), "-X", "SHROUD_KILLSWITCH"],
-        vec!["-n", ip6tables(), "-D", "OUTPUT", "-j", "SHROUD_KILLSWITCH"],
-        vec!["-n", ip6tables(), "-F", "SHROUD_KILLSWITCH"],
-        vec!["-n", ip6tables(), "-X", "SHROUD_KILLSWITCH"],
-    ];
-
-    for command in commands {
-        let _ = Command::new("sudo")
-            .args(&command)
+    
+    // CRITICAL: Remove ALL duplicate jump rules (race conditions can create many)
+    // Loop until -D fails (meaning no more rules to delete)
+    for _ in 0..100 {
+        // Safety limit
+        let status = Command::new("sudo")
+            .args(["-n", iptables(), "-D", "OUTPUT", "-j", "SHROUD_KILLSWITCH"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
+        if !matches!(status, Ok(s) if s.success()) {
+            break;
+        }
     }
+
+    for _ in 0..100 {
+        let status = Command::new("sudo")
+            .args(["-n", ip6tables(), "-D", "OUTPUT", "-j", "SHROUD_KILLSWITCH"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        if !matches!(status, Ok(s) if s.success()) {
+            break;
+        }
+    }
+
+    // Now flush and delete the chains
+    let _ = Command::new("sudo")
+        .args(["-n", iptables(), "-F", "SHROUD_KILLSWITCH"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    let _ = Command::new("sudo")
+        .args(["-n", iptables(), "-X", "SHROUD_KILLSWITCH"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    let _ = Command::new("sudo")
+        .args(["-n", ip6tables(), "-F", "SHROUD_KILLSWITCH"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    let _ = Command::new("sudo")
+        .args(["-n", ip6tables(), "-X", "SHROUD_KILLSWITCH"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 
     let _ = Command::new("sudo")
         .args(["-n", nft(), "delete", "table", "inet", "shroud_killswitch"])
@@ -180,8 +219,9 @@ pub fn cleanup_with_fallback() -> CleanupResult {
 pub fn cleanup_stale_on_startup() {
     let ipv4_exists = rules_exist().unwrap_or(false);
     let ipv6_exists = rules_exist_ipv6().unwrap_or(false);
+    let boot_exists = boot_chain_exists().unwrap_or(false);
 
-    if !ipv4_exists && !ipv6_exists {
+    if !ipv4_exists && !ipv6_exists && !boot_exists {
         return;
     }
 
@@ -193,20 +233,32 @@ pub fn cleanup_stale_on_startup() {
     warn!("Attempting cleanup...");
     warn!("");
 
-    match cleanup_with_timeout(CLEANUP_TIMEOUT) {
-        Ok(CleanupResult::Cleaned) => {
+    // Use cleanup_all which handles both kill switch and boot chain
+    match cleanup_all() {
+        Ok(()) => {
             info!("Stale rules cleaned up successfully");
         }
-        Ok(CleanupResult::NothingToClean) => {
-            debug!("No stale rules to clean");
-        }
-        Ok(CleanupResult::Failed(msg)) | Err(CleanupError::CommandFailed(msg)) => {
-            error!("Failed to clean stale rules: {}", msg);
+        Err(e) => {
+            error!("Failed to clean stale rules: {}", e);
             log_manual_cleanup_instructions();
         }
-        Err(CleanupError::Timeout(_)) => {
-            warn!("Cleanup timed out. You may need to enter your password.");
-            log_manual_cleanup_instructions();
+    }
+}
+
+/// Check if boot kill switch chain exists
+fn boot_chain_exists() -> Result<bool, CleanupError> {
+    let output = Command::new("sudo")
+        .args(["-n", iptables(), "-L", "SHROUD_BOOT_KS", "-n"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    match output {
+        Ok(status) => Ok(status.success()),
+        Err(e) => {
+            debug!("Could not check boot chain: {}", e);
+            Ok(false)
         }
     }
 }
@@ -231,24 +283,59 @@ pub fn cleanup_all() -> Result<(), CleanupError> {
     let _ = cleanup_with_timeout(CLEANUP_TIMEOUT);
 
     // Clean boot kill switch chain
-    // Use sudo -n to avoid password prompts that would cause hangs
-    let boot_commands: Vec<Vec<&str>> = vec![
-        vec!["-n", iptables(), "-D", "OUTPUT", "-j", "SHROUD_BOOT_KS"],
-        vec!["-n", iptables(), "-F", "SHROUD_BOOT_KS"],
-        vec!["-n", iptables(), "-X", "SHROUD_BOOT_KS"],
-        vec!["-n", ip6tables(), "-D", "OUTPUT", "-j", "SHROUD_BOOT_KS"],
-        vec!["-n", ip6tables(), "-F", "SHROUD_BOOT_KS"],
-        vec!["-n", ip6tables(), "-X", "SHROUD_BOOT_KS"],
-    ];
-
-    for command in boot_commands {
-        let _ = Command::new("sudo")
-            .args(&command)
+    // CRITICAL: Remove ALL duplicate jump rules (race conditions can create many)
+    for _ in 0..100 {
+        let status = Command::new("sudo")
+            .args(["-n", iptables(), "-D", "OUTPUT", "-j", "SHROUD_BOOT_KS"])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status();
+        if !matches!(status, Ok(s) if s.success()) {
+            break;
+        }
     }
+
+    for _ in 0..100 {
+        let status = Command::new("sudo")
+            .args(["-n", ip6tables(), "-D", "OUTPUT", "-j", "SHROUD_BOOT_KS"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        if !matches!(status, Ok(s) if s.success()) {
+            break;
+        }
+    }
+
+    // Flush and delete the boot chains
+    let _ = Command::new("sudo")
+        .args(["-n", iptables(), "-F", "SHROUD_BOOT_KS"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    let _ = Command::new("sudo")
+        .args(["-n", iptables(), "-X", "SHROUD_BOOT_KS"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    let _ = Command::new("sudo")
+        .args(["-n", ip6tables(), "-F", "SHROUD_BOOT_KS"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+
+    let _ = Command::new("sudo")
+        .args(["-n", ip6tables(), "-X", "SHROUD_BOOT_KS"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
 
     Ok(())
 }

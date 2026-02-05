@@ -98,6 +98,8 @@ jobs:
             --output-dir coverage \
             --skip-clean \
             --engine llvm \
+            --exclude-files tests/e2e.rs \
+            --exclude-files tests/chaos.rs \
             || echo "Tarpaulin completed with warnings"
       
       - name: Upload coverage to Codecov

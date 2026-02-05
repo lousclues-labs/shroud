@@ -31,11 +31,25 @@ pub fn enable_boot_killswitch(allow_lan: bool) -> Result<(), KillSwitchError> {
 /// Disable the boot kill switch.
 ///
 /// Called when the full runtime kill switch takes over.
+/// Uses loop to remove ALL duplicate jump rules that may have accumulated.
 pub fn disable_boot_killswitch() -> Result<(), KillSwitchError> {
     info!("Disabling boot kill switch");
 
-    let _ = run_iptables(&["-D", "OUTPUT", "-j", BOOT_CHAIN]);
-    let _ = run_ip6tables(&["-D", "OUTPUT", "-j", BOOT_CHAIN]);
+    // Remove ALL jump rules (there may be duplicates from crashes/race conditions)
+    // Loop until -D fails (meaning no more rules to delete)
+    for _ in 0..100 {
+        // Safety limit
+        if run_iptables(&["-D", "OUTPUT", "-j", BOOT_CHAIN]).is_err() {
+            break;
+        }
+    }
+    for _ in 0..100 {
+        if run_ip6tables(&["-D", "OUTPUT", "-j", BOOT_CHAIN]).is_err() {
+            break;
+        }
+    }
+
+    // Now flush and delete the chains
     let _ = run_iptables(&["-F", BOOT_CHAIN]);
     let _ = run_iptables(&["-X", BOOT_CHAIN]);
     let _ = run_ip6tables(&["-F", BOOT_CHAIN]);
@@ -113,6 +127,20 @@ fn add_boot_rules(allow_lan: bool) -> Result<(), KillSwitchError> {
 }
 
 fn insert_boot_chain_jump() -> Result<(), KillSwitchError> {
+    // CRITICAL: First remove any existing jump rules to prevent duplicates
+    // This handles race conditions where enable is called multiple times
+    for _ in 0..10 {
+        if run_iptables(&["-D", "OUTPUT", "-j", BOOT_CHAIN]).is_err() {
+            break;
+        }
+    }
+    for _ in 0..10 {
+        if run_ip6tables(&["-D", "OUTPUT", "-j", BOOT_CHAIN]).is_err() {
+            break;
+        }
+    }
+
+    // Now insert fresh jump rules
     run_iptables(&["-I", "OUTPUT", "1", "-j", BOOT_CHAIN])?;
     let _ = run_ip6tables(&["-I", "OUTPUT", "1", "-j", BOOT_CHAIN]);
     Ok(())
