@@ -324,7 +324,7 @@ mod cleanup {
     }
 
     /// Test that socket is cleaned up on exit
-    /// 
+    ///
     /// Note: This test requires a proper system environment with D-Bus.
     /// In CI, the daemon may fail to start due to missing D-Bus session.
     #[tokio::test]
@@ -341,7 +341,7 @@ mod cleanup {
         assert!(socket.exists(), "Socket should exist while running");
 
         shroud.stop().await.expect("Failed to stop");
-        
+
         // Give more time for cleanup - socket removal is async
         tokio::time::sleep(Duration::from_secs(2)).await;
 

@@ -439,7 +439,7 @@ fn test_scopeguard_cleanup_on_early_return() {
         });
 
         // Early return
-        return true;
+        true
     }
 
     inner(Arc::clone(&cleanup_called));

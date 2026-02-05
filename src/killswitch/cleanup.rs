@@ -77,7 +77,7 @@ pub fn rules_exist_ipv6() -> Result<bool, CleanupError> {
 
 fn run_cleanup_command() -> Result<(), CleanupError> {
     // Use sudo -n to avoid password prompts that would cause hangs
-    
+
     // CRITICAL: Remove ALL duplicate jump rules (race conditions can create many)
     // Loop until -D fails (meaning no more rules to delete)
     for _ in 0..100 {
