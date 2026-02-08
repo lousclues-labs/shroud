@@ -410,7 +410,10 @@ mod tests {
     #[test]
     fn test_health_result_equality() {
         assert_eq!(HealthResult::Healthy, HealthResult::Healthy);
-        assert_ne!(HealthResult::Healthy, HealthResult::Dead { reason: "x".into() });
+        assert_ne!(
+            HealthResult::Healthy,
+            HealthResult::Dead { reason: "x".into() }
+        );
 
         assert_eq!(
             HealthResult::Degraded { latency_ms: 100 },
@@ -427,7 +430,12 @@ mod tests {
         let healthy = format!("{:?}", HealthResult::Healthy);
         assert!(healthy.contains("Healthy"));
 
-        let dead = format!("{:?}", HealthResult::Dead { reason: "timeout".into() });
+        let dead = format!(
+            "{:?}",
+            HealthResult::Dead {
+                reason: "timeout".into()
+            }
+        );
         assert!(dead.contains("Dead"));
         assert!(dead.contains("timeout"));
     }
@@ -444,7 +452,10 @@ mod tests {
     #[test]
     fn test_default_config_has_multiple_endpoints() {
         let config = HealthConfig::default();
-        assert!(config.endpoints.len() >= 2, "Should have fallback endpoints");
+        assert!(
+            config.endpoints.len() >= 2,
+            "Should have fallback endpoints"
+        );
     }
 
     #[test]

@@ -16,11 +16,11 @@ pub const LAN_SUBNETS: &[&str] = &[
 
 /// Well-known DoH provider IPs to block.
 pub const DOH_PROVIDERS: &[&str] = &[
-    "1.1.1.1",      // Cloudflare
-    "1.0.0.1",      // Cloudflare
-    "8.8.8.8",      // Google
-    "8.8.4.4",      // Google
-    "9.9.9.9",      // Quad9
+    "1.1.1.1",         // Cloudflare
+    "1.0.0.1",         // Cloudflare
+    "8.8.8.8",         // Google
+    "8.8.4.4",         // Google
+    "9.9.9.9",         // Quad9
     "149.112.112.112", // Quad9
     "208.67.222.222",  // OpenDNS
     "208.67.220.220",  // OpenDNS
@@ -69,10 +69,7 @@ pub fn is_doh_provider(ip: &str) -> bool {
 
 /// Build an iptables rule string for allowing a specific VPN server.
 pub fn build_server_allow_rule(server_ip: &IpAddr, chain: &str) -> String {
-    format!(
-        "iptables -A {} -d {} -j ACCEPT",
-        chain, server_ip
-    )
+    format!("iptables -A {} -d {} -j ACCEPT", chain, server_ip)
 }
 
 /// Build loopback allow rule.
@@ -200,7 +197,10 @@ pub fn validate_chain_name(name: &str) -> Result<(), String> {
     if name.len() > 28 {
         return Err("Chain name too long (max 28 chars)".into());
     }
-    if !name.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+    if !name
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
+    {
         return Err("Chain name contains invalid characters".into());
     }
     Ok(())
@@ -241,7 +241,12 @@ mod tests {
         fn test_private_lan() {
             for addr in &["10.0.0.1", "172.16.0.1", "192.168.1.1"] {
                 let ip: IpAddr = addr.parse().unwrap();
-                assert_eq!(classify_ip(&ip), IpClass::PrivateLan, "Expected {} to be PrivateLan", addr);
+                assert_eq!(
+                    classify_ip(&ip),
+                    IpClass::PrivateLan,
+                    "Expected {} to be PrivateLan",
+                    addr
+                );
             }
         }
 
@@ -249,7 +254,12 @@ mod tests {
         fn test_public() {
             for addr in &["8.8.8.8", "1.1.1.1", "203.0.113.50"] {
                 let ip: IpAddr = addr.parse().unwrap();
-                assert_eq!(classify_ip(&ip), IpClass::Public, "Expected {} to be Public", addr);
+                assert_eq!(
+                    classify_ip(&ip),
+                    IpClass::Public,
+                    "Expected {} to be Public",
+                    addr
+                );
             }
         }
 
@@ -345,17 +355,25 @@ mod tests {
         fn test_tunnel_mode_allows_vpn_dns() {
             let rules = build_dns_tunnel_rules(CHAIN);
             // Should allow DNS on each VPN interface
-            assert!(rules.iter().any(|r| r.contains("tun+") && r.contains("udp") && r.contains("ACCEPT")));
-            assert!(rules.iter().any(|r| r.contains("wg+") && r.contains("udp") && r.contains("ACCEPT")));
+            assert!(rules
+                .iter()
+                .any(|r| r.contains("tun+") && r.contains("udp") && r.contains("ACCEPT")));
+            assert!(rules
+                .iter()
+                .any(|r| r.contains("wg+") && r.contains("udp") && r.contains("ACCEPT")));
         }
 
         #[test]
         fn test_tunnel_mode_blocks_other_dns() {
             let rules = build_dns_tunnel_rules(CHAIN);
             // Should have DROP rules for port 53
-            assert!(rules.iter().any(|r| r.contains("--dport 53") && r.contains("DROP")));
+            assert!(rules
+                .iter()
+                .any(|r| r.contains("--dport 53") && r.contains("DROP")));
             // Should block DNS-over-TLS
-            assert!(rules.iter().any(|r| r.contains("--dport 853") && r.contains("DROP")));
+            assert!(rules
+                .iter()
+                .any(|r| r.contains("--dport 853") && r.contains("DROP")));
         }
 
         #[test]
@@ -364,20 +382,29 @@ mod tests {
             // ACCEPT rules should come before DROP rules
             let first_accept = rules.iter().position(|r| r.contains("ACCEPT")).unwrap();
             let first_drop = rules.iter().position(|r| r.contains("DROP")).unwrap();
-            assert!(first_accept < first_drop, "ACCEPT rules must come before DROP rules");
+            assert!(
+                first_accept < first_drop,
+                "ACCEPT rules must come before DROP rules"
+            );
         }
 
         #[test]
         fn test_localhost_mode_allows_loopback_dns() {
             let rules = build_dns_localhost_rules(CHAIN);
-            assert!(rules.iter().any(|r| r.contains("127.0.0.0/8") && r.contains("ACCEPT")));
+            assert!(rules
+                .iter()
+                .any(|r| r.contains("127.0.0.0/8") && r.contains("ACCEPT")));
         }
 
         #[test]
         fn test_localhost_mode_blocks_other_dns() {
             let rules = build_dns_localhost_rules(CHAIN);
-            assert!(rules.iter().any(|r| r.contains("--dport 53") && r.contains("DROP")));
-            assert!(rules.iter().any(|r| r.contains("--dport 853") && r.contains("DROP")));
+            assert!(rules
+                .iter()
+                .any(|r| r.contains("--dport 53") && r.contains("DROP")));
+            assert!(rules
+                .iter()
+                .any(|r| r.contains("--dport 853") && r.contains("DROP")));
         }
 
         #[test]
@@ -451,7 +478,10 @@ mod tests {
         fn test_ipv6_rules_use_ip6tables() {
             let rules = build_ipv6_block_rules(CHAIN);
             for rule in &rules {
-                assert!(rule.starts_with("ip6tables"), "IPv6 rules must use ip6tables");
+                assert!(
+                    rule.starts_with("ip6tables"),
+                    "IPv6 rules must use ip6tables"
+                );
             }
         }
     }

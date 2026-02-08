@@ -46,8 +46,7 @@ pub fn validate_subnet(subnet: &str) -> Result<(IpAddr, u8), String> {
         return Err("Invalid subnet format (expected IP/prefix)".into());
     }
 
-    let ip =
-        IpAddr::from_str(parts[0]).map_err(|e| format!("Invalid IP address: {}", e))?;
+    let ip = IpAddr::from_str(parts[0]).map_err(|e| format!("Invalid IP address: {}", e))?;
 
     let prefix: u8 = parts[1]
         .parse()
@@ -67,7 +66,9 @@ pub fn validate_subnet(subnet: &str) -> Result<(IpAddr, u8), String> {
 
 /// Check if an interface name looks like a VPN tunnel.
 pub fn is_vpn_interface(name: &str) -> bool {
-    let vpn_prefixes = ["tun", "tap", "wg", "ppp", "vpn", "proton", "mullvad", "nordlynx"];
+    let vpn_prefixes = [
+        "tun", "tap", "wg", "ppp", "vpn", "proton", "mullvad", "nordlynx",
+    ];
     vpn_prefixes.iter().any(|p| name.starts_with(p))
 }
 
@@ -118,18 +119,11 @@ pub fn build_masquerade_rule(out_interface: &str) -> String {
 
 /// Build an iptables FORWARD rule string.
 pub fn build_forward_rule(in_iface: &str, out_iface: &str, action: &str) -> String {
-    format!(
-        "-A FORWARD -i {} -o {} -j {}",
-        in_iface, out_iface, action
-    )
+    format!("-A FORWARD -i {} -o {} -j {}", in_iface, out_iface, action)
 }
 
 /// Build iptables FORWARD rules for a list of allowed source IPs.
-pub fn build_client_rules(
-    in_iface: &str,
-    out_iface: &str,
-    allowed_ips: &[String],
-) -> Vec<String> {
+pub fn build_client_rules(in_iface: &str, out_iface: &str, allowed_ips: &[String]) -> Vec<String> {
     allowed_ips
         .iter()
         .map(|ip| {

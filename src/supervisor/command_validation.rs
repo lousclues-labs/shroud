@@ -149,7 +149,10 @@ mod tests {
         fn test_valid_connect() {
             let vpns = vec!["vpn1".into(), "vpn2".into()];
             let state = VpnState::Disconnected;
-            assert_eq!(validate_connect("vpn1", &vpns, &state), CommandValidation::Valid);
+            assert_eq!(
+                validate_connect("vpn1", &vpns, &state),
+                CommandValidation::Valid
+            );
         }
 
         #[test]

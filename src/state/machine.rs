@@ -797,11 +797,15 @@ mod tests {
         let mut sm = StateMachine::with_config(config);
 
         // Disconnected -> Connecting
-        sm.handle_event(Event::UserEnable { server: "vpn".into() });
+        sm.handle_event(Event::UserEnable {
+            server: "vpn".into(),
+        });
         assert!(matches!(sm.state, VpnState::Connecting { .. }));
 
         // Connecting -> Connected
-        sm.handle_event(Event::NmVpnUp { server: "vpn".into() });
+        sm.handle_event(Event::NmVpnUp {
+            server: "vpn".into(),
+        });
         assert!(matches!(sm.state, VpnState::Connected { .. }));
 
         // Connected -> Degraded
@@ -813,7 +817,9 @@ mod tests {
         assert!(matches!(sm.state, VpnState::Reconnecting { .. }));
 
         // Reconnecting -> Connected
-        sm.handle_event(Event::NmVpnUp { server: "vpn".into() });
+        sm.handle_event(Event::NmVpnUp {
+            server: "vpn".into(),
+        });
         assert!(matches!(sm.state, VpnState::Connected { .. }));
 
         // Connected -> Disconnected
