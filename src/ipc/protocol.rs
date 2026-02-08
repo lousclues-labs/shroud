@@ -227,6 +227,8 @@ pub struct VpnConnectionInfo {
 mod tests {
     use super::*;
 
+    // ----- Serialization -----
+
     #[test]
     fn test_command_serialize_connect() {
         let cmd = IpcCommand::Connect {
@@ -263,8 +265,309 @@ mod tests {
 
     #[test]
     fn test_socket_path_uses_xdg() {
-        // This test verifies the function doesn't panic
         let path = socket_path();
         assert!(path.to_string_lossy().contains("shroud"));
+    }
+
+    // ----- Command roundtrip serialization -----
+
+    #[test]
+    fn test_roundtrip_disconnect() {
+        let cmd = IpcCommand::Disconnect;
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: IpcCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, IpcCommand::Disconnect);
+    }
+
+    #[test]
+    fn test_roundtrip_status() {
+        let cmd = IpcCommand::Status;
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: IpcCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, IpcCommand::Status);
+    }
+
+    #[test]
+    fn test_roundtrip_list_no_filter() {
+        let cmd = IpcCommand::List { vpn_type: None };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: IpcCommand = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, IpcCommand::List { vpn_type: None }));
+    }
+
+    #[test]
+    fn test_roundtrip_list_with_filter() {
+        let cmd = IpcCommand::List {
+            vpn_type: Some("wireguard".into()),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: IpcCommand = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            back,
+            IpcCommand::List { vpn_type: Some(t) } if t == "wireguard"
+        ));
+    }
+
+    #[test]
+    fn test_roundtrip_killswitch_enable() {
+        let cmd = IpcCommand::KillSwitch { enable: true };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: IpcCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, IpcCommand::KillSwitch { enable: true });
+    }
+
+    #[test]
+    fn test_roundtrip_killswitch_disable() {
+        let cmd = IpcCommand::KillSwitch { enable: false };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: IpcCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, IpcCommand::KillSwitch { enable: false });
+    }
+
+    #[test]
+    fn test_roundtrip_ping() {
+        let cmd = IpcCommand::Ping;
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: IpcCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, IpcCommand::Ping);
+    }
+
+    #[test]
+    fn test_roundtrip_quit() {
+        let cmd = IpcCommand::Quit;
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: IpcCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, IpcCommand::Quit);
+    }
+
+    #[test]
+    fn test_roundtrip_reconnect() {
+        let cmd = IpcCommand::Reconnect;
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: IpcCommand = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, IpcCommand::Reconnect);
+    }
+
+    #[test]
+    fn test_roundtrip_switch() {
+        let cmd = IpcCommand::Switch {
+            name: "vpn2".into(),
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let back: IpcCommand = serde_json::from_str(&json).unwrap();
+        assert!(matches!(back, IpcCommand::Switch { name } if name == "vpn2"));
+    }
+
+    // ----- Response roundtrip -----
+
+    #[test]
+    fn test_roundtrip_response_status() {
+        let resp = IpcResponse::Status {
+            connected: true,
+            vpn_name: Some("my-vpn".into()),
+            vpn_type: Some("wireguard".into()),
+            state: "Connected".into(),
+            kill_switch_enabled: true,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let back: IpcResponse = serde_json::from_str(&json).unwrap();
+        assert!(matches!(
+            back,
+            IpcResponse::Status {
+                connected: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_roundtrip_response_connections() {
+        let resp = IpcResponse::Connections {
+            connections: vec![
+                VpnConnectionInfo {
+                    name: "vpn1".into(),
+                    vpn_type: "wireguard".into(),
+                    status: "active".into(),
+                },
+                VpnConnectionInfo {
+                    name: "vpn2".into(),
+                    vpn_type: "openvpn".into(),
+                    status: "inactive".into(),
+                },
+            ],
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let back: IpcResponse = serde_json::from_str(&json).unwrap();
+        match back {
+            IpcResponse::Connections { connections } => {
+                assert_eq!(connections.len(), 2);
+                assert_eq!(connections[0].name, "vpn1");
+            }
+            _ => panic!("Expected Connections"),
+        }
+    }
+
+    #[test]
+    fn test_roundtrip_pong() {
+        let resp = IpcResponse::Pong;
+        let json = serde_json::to_string(&resp).unwrap();
+        let back: IpcResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, IpcResponse::Pong);
+    }
+
+    // ----- Validation -----
+
+    #[test]
+    fn test_validate_connect_valid() {
+        let cmd = IpcCommand::Connect {
+            name: "my-vpn".into(),
+        };
+        assert!(cmd.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_connect_empty() {
+        let cmd = IpcCommand::Connect { name: "".into() };
+        assert!(cmd.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_switch_valid() {
+        let cmd = IpcCommand::Switch {
+            name: "vpn2".into(),
+        };
+        assert!(cmd.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_switch_empty() {
+        let cmd = IpcCommand::Switch { name: "".into() };
+        assert!(cmd.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_list_valid_type() {
+        let cmd = IpcCommand::List {
+            vpn_type: Some("wireguard".into()),
+        };
+        assert!(cmd.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_list_invalid_type() {
+        let cmd = IpcCommand::List {
+            vpn_type: Some("invalid".into()),
+        };
+        assert!(cmd.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_list_no_type() {
+        let cmd = IpcCommand::List { vpn_type: None };
+        assert!(cmd.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_other_commands() {
+        assert!(IpcCommand::Status.validate().is_ok());
+        assert!(IpcCommand::Disconnect.validate().is_ok());
+        assert!(IpcCommand::Ping.validate().is_ok());
+        assert!(IpcCommand::Quit.validate().is_ok());
+    }
+
+    // ----- Response helpers -----
+
+    #[test]
+    fn test_response_is_ok() {
+        assert!(IpcResponse::Ok.is_ok());
+        assert!(IpcResponse::Pong.is_ok());
+        assert!(IpcResponse::OkMessage {
+            message: "done".into()
+        }
+        .is_ok());
+    }
+
+    #[test]
+    fn test_response_is_not_ok_for_error() {
+        assert!(!IpcResponse::Error {
+            message: "fail".into()
+        }
+        .is_ok());
+    }
+
+    #[test]
+    fn test_error_message() {
+        let resp = IpcResponse::Error {
+            message: "boom".into(),
+        };
+        assert_eq!(resp.error_message(), Some("boom"));
+    }
+
+    #[test]
+    fn test_error_message_none_for_ok() {
+        assert_eq!(IpcResponse::Ok.error_message(), None);
+        assert_eq!(IpcResponse::Pong.error_message(), None);
+    }
+
+    // ----- Description -----
+
+    #[test]
+    fn test_command_descriptions() {
+        assert_eq!(
+            IpcCommand::Connect { name: "x".into() }.description(),
+            "connect to VPN"
+        );
+        assert_eq!(IpcCommand::Disconnect.description(), "disconnect from VPN");
+        assert_eq!(IpcCommand::Status.description(), "query status");
+        assert_eq!(IpcCommand::Ping.description(), "ping daemon");
+        assert_eq!(IpcCommand::Quit.description(), "shutdown daemon");
+        assert_eq!(
+            IpcCommand::KillSwitch { enable: true }.description(),
+            "enable kill switch"
+        );
+        assert_eq!(
+            IpcCommand::KillSwitch { enable: false }.description(),
+            "disable kill switch"
+        );
+    }
+
+    // ----- VpnConnectionInfo -----
+
+    #[test]
+    fn test_vpn_connection_info_serialize() {
+        let info = VpnConnectionInfo {
+            name: "vpn1".into(),
+            vpn_type: "wireguard".into(),
+            status: "active".into(),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("vpn1"));
+        assert!(json.contains("wireguard"));
+    }
+
+    #[test]
+    fn test_vpn_connection_info_roundtrip() {
+        let info = VpnConnectionInfo {
+            name: "vpn1".into(),
+            vpn_type: "openvpn".into(),
+            status: "inactive".into(),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        let back: VpnConnectionInfo = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, info);
+    }
+
+    // ----- Deserialize errors -----
+
+    #[test]
+    fn test_deserialize_invalid_json() {
+        let result = serde_json::from_str::<IpcCommand>("not json");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_deserialize_empty_object() {
+        let result = serde_json::from_str::<IpcCommand>("{}");
+        assert!(result.is_err());
     }
 }

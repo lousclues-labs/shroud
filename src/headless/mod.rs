@@ -7,6 +7,8 @@
 //! - Auto-connect on startup
 //! - Infinite reconnection attempts
 
+#[allow(dead_code)]
+pub mod config;
 pub mod runtime;
 pub mod systemd;
 

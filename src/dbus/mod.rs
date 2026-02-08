@@ -4,6 +4,8 @@
 //! replacing polling-based state detection for faster response times.
 
 pub mod monitor;
+#[allow(dead_code)]
+pub mod types;
 
 #[cfg(test)]
 mod tests;

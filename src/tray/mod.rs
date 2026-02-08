@@ -4,6 +4,8 @@
 
 pub mod icons;
 pub mod service;
+#[allow(dead_code)]
+pub mod state;
 
 #[cfg(test)]
 mod tests;

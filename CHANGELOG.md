@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.9.3] - 2026-02-07
+
+### Added
+
+- **Test Coverage Push (468 → 605 unit tests)** — Added 137 new unit tests targeting the lowest-coverage modules: tray (1%), dbus (4%), headless (5%), supervisor (5%), and ipc (30%).
+
+- **New Module: `tray::state`** — Pure-logic tray state management: `TrayIcon` enum with icon name/tooltip generation, `MenuItem` builder pattern, `build_menu()` for constructing menus from `VpnState`, and `handle_menu_action()` for mapping menu ids to actions. 40+ tests across 4 submodules.
+
+- **New Module: `dbus::types`** — D-Bus type conversions and state mapping: `NmVpnState` (8 variants with activating/active/failed/disconnected queries), `NmActiveState` (5 variants), `NmDeviceState` (13 variants), D-Bus path parsing utilities, connection type classification, and VPN failure reason codes. 30+ tests across 6 submodules.
+
+- **New Module: `headless::config`** — Headless mode configuration helpers: `StdinCommand` parser with 8 command types + shortcuts, `LogLevel` enum with case-insensitive parsing, watchdog interval validation, auto-connect validation, and systemd notification message builders. 30+ tests across 5 submodules.
+
+- **Expanded IPC Protocol Tests** — 35+ new tests in `ipc::protocol`: roundtrip serialization for all command/response variants, validation tests for connect/switch/list commands, response helper methods (`is_ok`, `error_message`), command descriptions, `VpnConnectionInfo` serialization, and deserialization error handling.
+
+- **Expanded Supervisor Tests** — 10 new tests covering all `VpnCommand` and `IpcCommand` variant construction, `IpcResponse` variants (`OkMessage`, `Pong`, `Status`, `KillSwitchStatus`, `AutoReconnectStatus`, `DebugInfo`).
+
+---
+
 ## [1.9.2] - 2026-02-07
 
 ### Added

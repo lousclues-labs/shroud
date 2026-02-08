@@ -163,4 +163,94 @@ mod handler_tests {
             assert_eq!(message, "Failed");
         }
     }
+
+    #[test]
+    fn test_all_vpn_command_variants() {
+        let commands: Vec<VpnCommand> = vec![
+            VpnCommand::Connect("vpn".into()),
+            VpnCommand::Disconnect,
+            VpnCommand::ToggleAutoReconnect,
+            VpnCommand::ToggleKillSwitch,
+            VpnCommand::ToggleAutostart,
+            VpnCommand::ToggleDebugLogging,
+            VpnCommand::OpenLogFile,
+            VpnCommand::RefreshConnections,
+            VpnCommand::Restart,
+        ];
+        assert_eq!(commands.len(), 9);
+    }
+
+    #[test]
+    fn test_all_ipc_command_variants_constructable() {
+        let commands: Vec<IpcCommand> = vec![
+            IpcCommand::Connect { name: "v".into() },
+            IpcCommand::Disconnect,
+            IpcCommand::Switch { name: "v".into() },
+            IpcCommand::Status,
+            IpcCommand::List { vpn_type: None },
+            IpcCommand::Reconnect,
+            IpcCommand::KillSwitch { enable: true },
+            IpcCommand::KillSwitchToggle,
+            IpcCommand::KillSwitchStatus,
+            IpcCommand::AutoReconnect { enable: true },
+            IpcCommand::AutoReconnectToggle,
+            IpcCommand::AutoReconnectStatus,
+            IpcCommand::Debug { enable: true },
+            IpcCommand::DebugLogPath,
+            IpcCommand::DebugDump,
+            IpcCommand::Ping,
+            IpcCommand::Refresh,
+            IpcCommand::Quit,
+            IpcCommand::Restart,
+            IpcCommand::Reload,
+        ];
+        assert_eq!(commands.len(), 20);
+    }
+
+    #[test]
+    fn test_ipc_response_ok_message() {
+        let resp = IpcResponse::OkMessage {
+            message: "done".into(),
+        };
+        assert!(resp.is_ok());
+    }
+
+    #[test]
+    fn test_ipc_response_pong() {
+        let resp = IpcResponse::Pong;
+        assert!(resp.is_ok());
+    }
+
+    #[test]
+    fn test_ipc_response_status() {
+        let resp = IpcResponse::Status {
+            connected: true,
+            vpn_name: Some("my-vpn".into()),
+            vpn_type: None,
+            state: "Connected".into(),
+            kill_switch_enabled: false,
+        };
+        assert!(resp.is_ok());
+    }
+
+    #[test]
+    fn test_ipc_response_ks_status() {
+        let resp = IpcResponse::KillSwitchStatus { enabled: true };
+        assert!(resp.is_ok());
+    }
+
+    #[test]
+    fn test_ipc_response_ar_status() {
+        let resp = IpcResponse::AutoReconnectStatus { enabled: false };
+        assert!(resp.is_ok());
+    }
+
+    #[test]
+    fn test_ipc_response_debug_info() {
+        let resp = IpcResponse::DebugInfo {
+            log_path: Some("/tmp/shroud.log".into()),
+            debug_enabled: true,
+        };
+        assert!(resp.is_ok());
+    }
 }
