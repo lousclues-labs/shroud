@@ -12,6 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.11.2] - 2026-02-08
+
+### Added
+
+- **`shroud update` restored** — Thin CLI wrapper that locates and runs `scripts/update.sh` (build, install, restart). Falls back to inline `cargo install` if script not found. No build tooling logic in the binary itself.
+
+- **`shroud version --check` restored** — Quick binary staleness check comparing binary mtime vs `Cargo.toml` and `src/main.rs`. No `walkdir` dependency — just two file stats.
+
+### Fixed
+
+- **Raw nmcli output leaking into debug log** — Multi-line nmcli stdout was passed to `debug!()` with embedded newlines, causing connection lines (`Wired connection 1:802-3-ethernet:activated`, `lo:loopback:activated`) to appear without log prefixes. Now joined with ` | ` separator so all output stays on one properly-prefixed log line.
+
+---
+
 ## [1.11.1] - 2026-02-08
 
 ### Fixed
