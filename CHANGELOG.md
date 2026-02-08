@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.11.8] - 2026-02-08
+
+### Improved
+
+- **`verify-killswitch`** human output now uses colored symbols (✅/⚠/❌) and padded alignment for readability.
+- Shows a friendly tip when the kill switch appears off (`shroud killswitch on`).
+
+---
+
 ## [1.11.7] - 2026-02-08
 
 ### Fixed

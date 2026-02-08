@@ -408,16 +408,28 @@ async fn handle_verify_killswitch_command(json: bool, verbose: bool) -> i32 {
 }
 
 fn print_human_verification_report(report: &verify::VerificationReport, verbose: bool) {
+    const GREEN: &str = "\x1b[32m";
+    const RED: &str = "\x1b[31m";
+    const YELLOW: &str = "\x1b[33m";
+    const RESET: &str = "\x1b[0m";
+
     println!("=== Kill Switch Verification ===\n");
     println!("Backend: {}\n", report.backend);
 
     for check in &report.checks {
-        let sym = match check.verdict {
-            verify::Verdict::Pass => "✓",
-            verify::Verdict::Warn => "⚠",
-            verify::Verdict::Fail => "✗",
+        let (sym, color) = match check.verdict {
+            verify::Verdict::Pass => ("✓", GREEN),
+            verify::Verdict::Warn => ("⚠", YELLOW),
+            verify::Verdict::Fail => ("✗", RED),
         };
-        println!("{} {} {}", sym, check.description, check.detail);
+        println!(
+            "{color}{sym}{RESET} {:<45} {}",
+            check.description,
+            check.detail,
+            color = color,
+            sym = sym,
+            RESET = RESET
+        );
         if verbose {
             if let Some(raw) = &check.raw {
                 for line in raw.lines() {
@@ -428,19 +440,41 @@ fn print_human_verification_report(report: &verify::VerificationReport, verbose:
     }
 
     println!(
-        "\nResult: {} ({})",
+        "\nResult: {}{}{} ({})",
+        match report.overall {
+            verify::Verdict::Pass => GREEN,
+            verify::Verdict::Warn => YELLOW,
+            verify::Verdict::Fail => RED,
+        },
         match report.overall {
             verify::Verdict::Pass => "PASS",
             verify::Verdict::Warn => "WARN",
             verify::Verdict::Fail => "FAIL",
         },
+        RESET,
         report.summary
     );
+
+    // Friendly tip if kill switch appears off
+    let chain_missing = report
+        .checks
+        .iter()
+        .find(|c| c.name == "chain_exists")
+        .map_or(false, |c| matches!(c.verdict, verify::Verdict::Fail));
+    let jump_missing = report
+        .checks
+        .iter()
+        .find(|c| c.name == "jump_rule_exists")
+        .map_or(false, |c| matches!(c.verdict, verify::Verdict::Fail));
 
     match report.overall {
         verify::Verdict::Pass => println!("\nYour kill switch is working. Non-VPN traffic is blocked."),
         verify::Verdict::Warn => println!("\nKill switch protections are in place, but there are warnings."),
         verify::Verdict::Fail => println!("\n⚠ WARNING: Your kill switch is NOT protecting you.\nTraffic may be leaking outside the VPN tunnel.\n\nTo fix: shroud killswitch on"),
+    }
+
+    if chain_missing && jump_missing {
+        println!("\n💡 Tip: Kill switch appears OFF. Enable it with: shroud killswitch on");
     }
 }
 
