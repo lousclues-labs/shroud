@@ -98,4 +98,47 @@ mod tests {
         assert!(ip6tables_path().is_absolute());
         assert!(nft_path().is_absolute());
     }
+
+    #[test]
+    fn test_iptables_path_contains_iptables() {
+        let path = iptables();
+        assert!(
+            path.contains("iptables"),
+            "iptables path should contain 'iptables': {}",
+            path
+        );
+    }
+
+    #[test]
+    fn test_ip6tables_path_contains_ip6tables() {
+        let path = ip6tables();
+        assert!(
+            path.contains("ip6tables"),
+            "ip6tables path should contain 'ip6tables': {}",
+            path
+        );
+    }
+
+    #[test]
+    fn test_nft_path_contains_nft() {
+        let path = nft();
+        assert!(
+            path.contains("nft"),
+            "nft path should contain 'nft': {}",
+            path
+        );
+    }
+
+    #[test]
+    fn test_paths_not_empty() {
+        assert!(!iptables().is_empty());
+        assert!(!ip6tables().is_empty());
+        assert!(!nft().is_empty());
+    }
+
+    #[test]
+    fn test_log_detected_paths_does_not_panic() {
+        // Just verify it doesn't panic
+        log_detected_paths();
+    }
 }

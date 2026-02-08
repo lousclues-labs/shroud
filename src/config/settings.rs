@@ -1057,4 +1057,182 @@ kill_switch_enabled = true
         assert_eq!(original.enabled, deserialized.enabled);
         assert_eq!(original.allowed_clients, deserialized.allowed_clients);
     }
+
+    // --- DnsMode Display ---
+
+    #[test]
+    fn test_dns_mode_display() {
+        assert_eq!(DnsMode::Tunnel.to_string(), "tunnel");
+        assert_eq!(DnsMode::Strict.to_string(), "strict");
+        assert_eq!(DnsMode::Localhost.to_string(), "localhost");
+        assert_eq!(DnsMode::Any.to_string(), "any");
+    }
+
+    #[test]
+    fn test_dns_mode_default() {
+        assert_eq!(DnsMode::default(), DnsMode::Tunnel);
+    }
+
+    // --- Config validation ---
+
+    #[test]
+    fn test_validate_valid_config() {
+        let config = Config::default();
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_valid_last_server() {
+        let config = Config {
+            last_server: Some("my-vpn".into()),
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_empty_last_server() {
+        let config = Config {
+            last_server: Some("".into()),
+            ..Default::default()
+        };
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_no_last_server() {
+        let config = Config {
+            last_server: None,
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+    }
+
+    // --- load_validated ---
+
+    #[test]
+    fn test_load_validated_returns_defaults_for_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("nonexistent").join("config.toml");
+        let manager = ConfigManager::with_path(config_path);
+        let config = manager.load_validated();
+        assert!(config.auto_reconnect);
+    }
+
+    #[test]
+    fn test_load_validated_rejects_invalid_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let manager = ConfigManager::with_path(config_path.clone());
+
+        // Write config with invalid last_server (empty name)
+        let bad_config = r#"
+            version = 1
+            auto_reconnect = false
+            last_server = ""
+        "#;
+        std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+        std::fs::write(&config_path, bad_config).unwrap();
+
+        let loaded = manager.load_validated();
+        // Should fall back to defaults because validation fails
+        assert!(loaded.auto_reconnect);
+        assert!(loaded.last_server.is_none());
+    }
+
+    // --- HeadlessConfig ---
+
+    #[test]
+    fn test_headless_config_default() {
+        let hc = HeadlessConfig::default();
+        assert!(!hc.auto_connect);
+        assert!(hc.startup_server.is_none());
+        assert_eq!(hc.max_reconnect_attempts, 0);
+        assert!(hc.kill_switch_on_boot);
+        assert!(hc.require_kill_switch);
+        assert!(!hc.persist_kill_switch);
+    }
+
+    #[test]
+    fn test_headless_config_serialize_roundtrip() {
+        let hc = HeadlessConfig {
+            auto_connect: true,
+            startup_server: Some("vpn1".into()),
+            max_reconnect_attempts: 5,
+            reconnect_delay_secs: 10,
+            kill_switch_on_boot: false,
+            require_kill_switch: false,
+            persist_kill_switch: true,
+        };
+        let s = toml::to_string(&hc).unwrap();
+        let parsed: HeadlessConfig = toml::from_str(&s).unwrap();
+        assert!(parsed.auto_connect);
+        assert_eq!(parsed.startup_server, Some("vpn1".into()));
+        assert_eq!(parsed.max_reconnect_attempts, 5);
+        assert!(parsed.persist_kill_switch);
+    }
+
+    // --- KillSwitchConfig ---
+
+    #[test]
+    fn test_killswitch_config_default() {
+        let kc = KillSwitchConfig::default();
+        assert!(kc.allow_lan);
+    }
+
+    #[test]
+    fn test_killswitch_config_roundtrip() {
+        let kc = KillSwitchConfig { allow_lan: false };
+        let s = toml::to_string(&kc).unwrap();
+        let parsed: KillSwitchConfig = toml::from_str(&s).unwrap();
+        assert!(!parsed.allow_lan);
+    }
+
+    // --- AllowedClients single-IP edge case ---
+
+    #[test]
+    fn test_allowed_clients_single_ip_string() {
+        let toml = r#"
+            enabled = false
+            allowed_clients = "192.168.1.50"
+            kill_switch_forwarding = true
+            enable_ipv6 = false
+        "#;
+        let config: GatewayConfig = toml::from_str(toml).expect("should parse");
+        assert_eq!(
+            config.allowed_clients,
+            AllowedClients::List(vec!["192.168.1.50".to_string()])
+        );
+    }
+
+    // --- ConfigError Display ---
+
+    #[test]
+    fn test_config_error_display() {
+        let err = ConfigError::Write(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "denied",
+        ));
+        assert!(err.to_string().contains("write"));
+
+        let err = ConfigError::Directory(std::io::Error::other("missing"));
+        assert!(err.to_string().contains("directory"));
+
+        let err = ConfigError::Rename(std::io::Error::other("rename fail"));
+        assert!(err.to_string().contains("atomic rename"));
+    }
+
+    // --- GatewayConfig defaults ---
+
+    #[test]
+    fn test_gateway_config_default() {
+        let gc = GatewayConfig::default();
+        assert!(!gc.enabled);
+        assert!(!gc.required);
+        assert!(gc.lan_interface.is_none());
+        assert_eq!(gc.allowed_clients, AllowedClients::All);
+        assert!(gc.kill_switch_forwarding);
+        assert!(!gc.persist_ip_forward);
+        assert!(!gc.enable_ipv6);
+    }
 }

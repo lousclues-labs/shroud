@@ -12,6 +12,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.9.7] - 2026-02-07
+
+### Added
+
+- **Test Coverage Push (803 → 845 unit tests)** — Added 42 new unit tests expanding coverage in 6 partially-covered files.
+
+- **Expanded Config Tests** — 18 new tests in `config/settings.rs`: `DnsMode` Display, `Config::validate()` with valid/invalid/empty `last_server`, `load_validated()` fallback on validation failure, `HeadlessConfig` defaults and roundtrip, `KillSwitchConfig` roundtrip, `AllowedClients` single-IP edge case, `ConfigError` Display variants, `GatewayConfig` defaults.
+
+- **Expanded Kill Switch Tests** — 7 new tests in `killswitch/sudo_check.rs`: `SudoAccessStatus` equality, inequality, clone, debug, `check_sudo_access_with_message()`. 5 new tests in `killswitch/paths.rs`: binary path content checks, non-empty validation, `log_detected_paths()`.
+
+- **New NM Connection Tests** — 10 new tests in `nm/connections.rs` (previously 0%): `VpnType` Display/equality/clone/debug, `VpnConnection` struct/clone, `nmcli_command()` default and env override.
+
+- **Expanded IPC Tests** — 7 new tests: `ipc/server.rs` empty line handling, validation failure path, Status command roundtrip, multiple commands per connection. `ipc/client.rs` error variant display coverage.
+
+---
+
 ## [1.9.6] - 2026-02-07
 
 ### Added

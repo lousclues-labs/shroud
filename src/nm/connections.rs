@@ -89,3 +89,81 @@ pub async fn get_vpn_type(name: &str) -> VpnType {
         VpnType::Unknown
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_vpn_type_display_wireguard() {
+        assert_eq!(VpnType::WireGuard.to_string(), "wireguard");
+    }
+
+    #[test]
+    fn test_vpn_type_display_openvpn() {
+        assert_eq!(VpnType::OpenVpn.to_string(), "openvpn");
+    }
+
+    #[test]
+    fn test_vpn_type_display_unknown() {
+        assert_eq!(VpnType::Unknown.to_string(), "unknown");
+    }
+
+    #[test]
+    fn test_vpn_type_equality() {
+        assert_eq!(VpnType::WireGuard, VpnType::WireGuard);
+        assert_ne!(VpnType::WireGuard, VpnType::OpenVpn);
+        assert_ne!(VpnType::OpenVpn, VpnType::Unknown);
+    }
+
+    #[test]
+    fn test_vpn_type_clone() {
+        let t = VpnType::WireGuard;
+        let cloned = t;
+        assert_eq!(t, cloned);
+    }
+
+    #[test]
+    fn test_vpn_type_debug() {
+        let debug = format!("{:?}", VpnType::OpenVpn);
+        assert!(debug.contains("OpenVpn"));
+    }
+
+    #[test]
+    fn test_vpn_connection_struct() {
+        let conn = VpnConnection {
+            name: "my-vpn".into(),
+            vpn_type: VpnType::WireGuard,
+            uuid: "abc-123".into(),
+        };
+        assert_eq!(conn.name, "my-vpn");
+        assert_eq!(conn.vpn_type, VpnType::WireGuard);
+        assert_eq!(conn.uuid, "abc-123");
+    }
+
+    #[test]
+    fn test_vpn_connection_clone() {
+        let conn = VpnConnection {
+            name: "vpn1".into(),
+            vpn_type: VpnType::OpenVpn,
+            uuid: "uuid-1".into(),
+        };
+        let cloned = conn.clone();
+        assert_eq!(cloned.name, "vpn1");
+        assert_eq!(cloned.vpn_type, VpnType::OpenVpn);
+    }
+
+    #[test]
+    fn test_nmcli_command_default() {
+        // When SHROUD_NMCLI is not set, should default to "nmcli"
+        std::env::remove_var("SHROUD_NMCLI");
+        assert_eq!(nmcli_command(), "nmcli");
+    }
+
+    #[test]
+    fn test_nmcli_command_override() {
+        std::env::set_var("SHROUD_NMCLI", "/custom/nmcli");
+        assert_eq!(nmcli_command(), "/custom/nmcli");
+        std::env::remove_var("SHROUD_NMCLI");
+    }
+}

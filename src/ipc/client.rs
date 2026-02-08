@@ -182,4 +182,41 @@ mod tests {
             other => panic!("Unexpected result: {:?}", other),
         }
     }
+
+    #[tokio::test]
+    async fn test_send_command_status_when_not_running() {
+        let result = send_command(IpcCommand::Status).await;
+        match result {
+            Ok(_) => {} // Daemon is actually running
+            Err(ClientError::DaemonNotRunning) | Err(ClientError::Connection(_)) => {}
+            other => panic!("Unexpected result: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_connect_to_daemon_error() {
+        // With no daemon running, connect should fail gracefully
+        let result = connect_to_daemon().await;
+        match result {
+            Ok(_) => {} // Daemon happens to be running
+            Err(ClientError::DaemonNotRunning) | Err(ClientError::Connection(_)) => {}
+            other => panic!("Unexpected error: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_all_client_error_variants_display() {
+        let errors: Vec<ClientError> = vec![
+            ClientError::Connection(io::Error::other("test")),
+            ClientError::Send(io::Error::other("test")),
+            ClientError::Receive(io::Error::other("test")),
+            ClientError::Parse(serde_json::from_str::<IpcResponse>("x").unwrap_err()),
+            ClientError::DaemonNotRunning,
+        ];
+        for err in &errors {
+            let display = err.to_string();
+            assert!(!display.is_empty(), "Error display should not be empty");
+        }
+        assert_eq!(errors.len(), 5);
+    }
 }

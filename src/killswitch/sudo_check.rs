@@ -126,4 +126,59 @@ mod tests {
             | SudoAccessStatus::BinaryNotFound(_) => {}
         }
     }
+
+    #[test]
+    fn test_sudo_access_status_equality() {
+        assert_eq!(SudoAccessStatus::Ok, SudoAccessStatus::Ok);
+        assert_eq!(
+            SudoAccessStatus::RequiresPassword,
+            SudoAccessStatus::RequiresPassword
+        );
+        assert_eq!(
+            SudoAccessStatus::SudoNotFound,
+            SudoAccessStatus::SudoNotFound
+        );
+        assert_eq!(
+            SudoAccessStatus::BinaryNotFound("/usr/sbin/iptables".into()),
+            SudoAccessStatus::BinaryNotFound("/usr/sbin/iptables".into())
+        );
+    }
+
+    #[test]
+    fn test_sudo_access_status_inequality() {
+        assert_ne!(SudoAccessStatus::Ok, SudoAccessStatus::RequiresPassword);
+        assert_ne!(SudoAccessStatus::Ok, SudoAccessStatus::SudoNotFound);
+        assert_ne!(
+            SudoAccessStatus::BinaryNotFound("a".into()),
+            SudoAccessStatus::BinaryNotFound("b".into())
+        );
+    }
+
+    #[test]
+    fn test_sudo_access_status_clone() {
+        let status = SudoAccessStatus::BinaryNotFound("/sbin/iptables".into());
+        let cloned = status.clone();
+        assert_eq!(status, cloned);
+    }
+
+    #[test]
+    fn test_sudo_access_status_debug() {
+        let debug = format!("{:?}", SudoAccessStatus::Ok);
+        assert!(debug.contains("Ok"));
+
+        let debug = format!("{:?}", SudoAccessStatus::BinaryNotFound("x".into()));
+        assert!(debug.contains("BinaryNotFound"));
+    }
+
+    #[test]
+    fn test_check_sudo_access_with_message_returns_result() {
+        let result = check_sudo_access_with_message();
+        // Just verify it doesn't panic and returns a Result
+        match result {
+            Ok(()) => {} // sudo access works
+            Err(msg) => {
+                assert!(!msg.is_empty());
+            }
+        }
+    }
 }

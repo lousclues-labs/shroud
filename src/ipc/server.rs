@@ -295,4 +295,149 @@ mod tests {
         assert!(result.is_ok(), "handle_connection timed out");
         assert!(result.unwrap().unwrap().is_ok());
     }
+
+    #[tokio::test]
+    async fn test_handle_connection_empty_line() {
+        let (tx, _rx) = mpsc::channel(16);
+        let (client, server_stream) = tokio::net::UnixStream::pair().unwrap();
+
+        let handle =
+            tokio::spawn(async move { IpcServer::handle_connection(server_stream, tx).await });
+
+        let mut client = client;
+        // Send an empty line followed by EOF
+        client.write_all(b"\n").await.unwrap();
+        client.shutdown().await.unwrap();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_handle_connection_invalid_command_validation() {
+        let (tx, mut rx) = mpsc::channel::<(IpcCommand, mpsc::Sender<IpcResponse>)>(16);
+        let (client, server_stream) = tokio::net::UnixStream::pair().unwrap();
+
+        // No handler needed — validation should reject before reaching supervisor
+        let handle =
+            tokio::spawn(async move { IpcServer::handle_connection(server_stream, tx).await });
+
+        let (client_reader, mut client_writer) = client.into_split();
+        // Send a Connect with empty name (fails validation)
+        let cmd = IpcCommand::Connect { name: "".into() };
+        let json = serde_json::to_string(&cmd).unwrap();
+        client_writer
+            .write_all(format!("{}\n", json).as_bytes())
+            .await
+            .unwrap();
+        client_writer.shutdown().await.unwrap();
+
+        let mut reader = BufReader::new(client_reader);
+        let mut response = String::new();
+        reader.read_line(&mut response).await.unwrap();
+
+        let parsed: IpcResponse = serde_json::from_str(&response).unwrap();
+        assert!(
+            matches!(parsed, IpcResponse::Error { .. }),
+            "Expected validation error response"
+        );
+
+        // Supervisor should NOT have received anything
+        assert!(rx.try_recv().is_err());
+
+        drop(reader);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_handle_connection_status_command() {
+        let (tx, mut rx) = mpsc::channel::<(IpcCommand, mpsc::Sender<IpcResponse>)>(16);
+        let (client, server_stream) = tokio::net::UnixStream::pair().unwrap();
+
+        tokio::spawn(async move {
+            if let Some((cmd, responder)) = rx.recv().await {
+                assert!(matches!(cmd, IpcCommand::Status));
+                responder
+                    .send(IpcResponse::Status {
+                        connected: false,
+                        vpn_name: None,
+                        vpn_type: None,
+                        state: "Disconnected".into(),
+                        kill_switch_enabled: false,
+                    })
+                    .await
+                    .unwrap();
+            }
+        });
+
+        let handle =
+            tokio::spawn(async move { IpcServer::handle_connection(server_stream, tx).await });
+
+        let (client_reader, mut client_writer) = client.into_split();
+        let json = serde_json::to_string(&IpcCommand::Status).unwrap();
+        client_writer
+            .write_all(format!("{}\n", json).as_bytes())
+            .await
+            .unwrap();
+        client_writer.shutdown().await.unwrap();
+
+        let mut reader = BufReader::new(client_reader);
+        let mut response = String::new();
+        reader.read_line(&mut response).await.unwrap();
+
+        let parsed: IpcResponse = serde_json::from_str(&response).unwrap();
+        match parsed {
+            IpcResponse::Status {
+                connected, state, ..
+            } => {
+                assert!(!connected);
+                assert!(state.contains("Disconnected"));
+            }
+            _ => panic!("Expected Status response"),
+        }
+
+        drop(reader);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+    }
+
+    #[tokio::test]
+    async fn test_handle_connection_multiple_commands() {
+        let (tx, mut rx) = mpsc::channel::<(IpcCommand, mpsc::Sender<IpcResponse>)>(16);
+        let (client, server_stream) = tokio::net::UnixStream::pair().unwrap();
+
+        tokio::spawn(async move {
+            // Handle two commands
+            for _ in 0..2 {
+                if let Some((_cmd, responder)) = rx.recv().await {
+                    responder.send(IpcResponse::Pong).await.unwrap();
+                }
+            }
+        });
+
+        let handle =
+            tokio::spawn(async move { IpcServer::handle_connection(server_stream, tx).await });
+
+        let (client_reader, mut client_writer) = client.into_split();
+        let ping_json = serde_json::to_string(&IpcCommand::Ping).unwrap();
+        // Send two commands
+        client_writer
+            .write_all(format!("{}\n{}\n", ping_json, ping_json).as_bytes())
+            .await
+            .unwrap();
+        client_writer.shutdown().await.unwrap();
+
+        let mut reader = BufReader::new(client_reader);
+        let mut line1 = String::new();
+        reader.read_line(&mut line1).await.unwrap();
+        let mut line2 = String::new();
+        reader.read_line(&mut line2).await.unwrap();
+
+        let r1: IpcResponse = serde_json::from_str(&line1).unwrap();
+        let r2: IpcResponse = serde_json::from_str(&line2).unwrap();
+        assert!(matches!(r1, IpcResponse::Pong));
+        assert!(matches!(r2, IpcResponse::Pong));
+
+        drop(reader);
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+    }
 }
