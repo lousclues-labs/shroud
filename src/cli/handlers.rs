@@ -33,8 +33,11 @@ pub async fn run_client_mode(args: &Args) -> i32 {
         ParsedCommand::Cleanup => {
             return handle_cleanup_command(args).await;
         }
-        ParsedCommand::Version => {
-            return handle_version_command().await;
+        ParsedCommand::Version { check } => {
+            return handle_version_command(*check).await;
+        }
+        ParsedCommand::Update => {
+            return handle_update_command();
         }
         ParsedCommand::Doctor => {
             return handle_doctor_command();
@@ -222,7 +225,8 @@ fn args_to_command(cmd: &ParsedCommand) -> Option<IpcCommand> {
         ParsedCommand::Quit => Some(IpcCommand::Quit),
         ParsedCommand::Restart => Some(IpcCommand::Restart),
         ParsedCommand::Reload => Some(IpcCommand::Reload),
-        ParsedCommand::Version => None,
+        ParsedCommand::Version { .. } => None,
+        ParsedCommand::Update => None,
         ParsedCommand::Doctor => None,
         ParsedCommand::Gateway { .. } => None,
         ParsedCommand::Import { .. } => None,
@@ -679,9 +683,38 @@ async fn is_daemon_running() -> bool {
     send_command(IpcCommand::Ping).await.is_ok()
 }
 
-async fn handle_version_command() -> i32 {
+async fn handle_version_command(check: bool) -> i32 {
     let version = env!("CARGO_PKG_VERSION");
     println!("shroud {}", version);
+
+    if check {
+        // Quick staleness check: compare binary mtime vs Cargo.toml + src/main.rs
+        if let Ok(exe_path) = std::env::current_exe() {
+            if let Ok(exe_meta) = std::fs::metadata(&exe_path) {
+                if let Ok(exe_mtime) = exe_meta.modified() {
+                    let check_files = ["Cargo.toml", "src/main.rs", "Cargo.lock"];
+                    let mut newer = false;
+                    for file in &check_files {
+                        let path = std::path::Path::new(file);
+                        if let Ok(meta) = std::fs::metadata(path) {
+                            if let Ok(mtime) = meta.modified() {
+                                if mtime > exe_mtime {
+                                    newer = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if newer {
+                        println!("\n⚠ Source may be newer than binary");
+                        println!("  Run 'shroud update' to rebuild and install");
+                    } else {
+                        println!("\n✓ Binary appears up to date");
+                    }
+                }
+            }
+        }
+    }
 
     if let Ok(response) = send_command(IpcCommand::Ping).await {
         if let IpcResponse::Pong | IpcResponse::Ok = response {
@@ -692,6 +725,61 @@ async fn handle_version_command() -> i32 {
     }
 
     0
+}
+
+fn handle_update_command() -> i32 {
+    // Locate the update script relative to the binary or project
+    let script_candidates = [
+        // From project directory (most common during dev)
+        std::path::PathBuf::from("scripts/update.sh"),
+        // Relative to binary location
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|p| p.join("../scripts/update.sh")))
+            .unwrap_or_default(),
+        // Home directory project
+        dirs::home_dir()
+            .map(|h| h.join("src/shroud/scripts/update.sh"))
+            .unwrap_or_default(),
+    ];
+
+    for candidate in &script_candidates {
+        if candidate.exists() {
+            println!("Running {}...\n", candidate.display());
+            let status = std::process::Command::new("bash").arg(candidate).status();
+
+            return match status {
+                Ok(s) => s.code().unwrap_or(1),
+                Err(e) => {
+                    eprintln!("Failed to run update script: {}", e);
+                    1
+                }
+            };
+        }
+    }
+
+    // Fallback: run the commands inline
+    eprintln!("Update script not found, running inline...\n");
+    let status = std::process::Command::new("bash")
+        .arg("-c")
+        .arg(concat!(
+            "set -e && ",
+            "echo 'Building and installing...' && ",
+            "cargo install --path . --force && ",
+            "cp ~/.cargo/bin/shroud ~/.local/bin/shroud 2>/dev/null || true && ",
+            "echo 'Restarting daemon...' && ",
+            "shroud restart 2>/dev/null || echo 'Daemon not running' && ",
+            "echo '' && shroud --version && echo '✓ Update complete'"
+        ))
+        .status();
+
+    match status {
+        Ok(s) => s.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("Failed to run update: {}", e);
+            1
+        }
+    }
 }
 
 #[cfg(test)]
@@ -713,7 +801,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_handle_version_returns_zero() {
-        let exit_code = handle_version_command().await;
+        let exit_code = handle_version_command(false).await;
         assert_eq!(exit_code, 0);
     }
 
@@ -1013,7 +1101,8 @@ mod tests {
             })
             .is_none());
             assert!(args_to_command(&ParsedCommand::Cleanup).is_none());
-            assert!(args_to_command(&ParsedCommand::Version).is_none());
+            assert!(args_to_command(&ParsedCommand::Version { check: false }).is_none());
+            assert!(args_to_command(&ParsedCommand::Update).is_none());
             assert!(args_to_command(&ParsedCommand::Doctor).is_none());
             assert!(args_to_command(&ParsedCommand::Gateway {
                 action: GatewayAction::Status

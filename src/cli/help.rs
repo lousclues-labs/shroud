@@ -41,6 +41,7 @@ COMMANDS:
     restart              Restart the daemon
     reload               Reload configuration without restart
     doctor               Diagnose configuration issues
+    update               Build, install, and restart
     version              Show version information
     help <COMMAND>       Show help for a command
 
@@ -61,6 +62,8 @@ EXAMPLES:
     shroud cleanup                  Remove old systemd service and stale files
     shroud reload                   Reload configuration from disk
     shroud doctor                   Diagnose configuration issues
+    shroud update                   Build, install, and restart
+    shroud version --check          Check if binary is stale
 
 ALIASES:
     ls                   Alias for 'list'
@@ -416,10 +419,29 @@ the daemon."#
             r#"Show version information
 
 USAGE:
-    shroud version
+    shroud version [--check]
+
+OPTIONS:
+    --check    Check if source files are newer than the installed binary
 
 EXAMPLES:
-    shroud version"#
+    shroud version
+    shroud version --check"#
+        ),
+
+        "update" => println!(
+            r#"Build, install, and restart
+
+USAGE:
+    shroud update
+
+Runs scripts/update.sh which:
+  1. Builds a release binary (cargo install --path .)
+  2. Copies to ~/.local/bin/shroud
+  3. Restarts the daemon
+
+EXAMPLES:
+    shroud update"#
         ),
 
         _ => println!("No help available for '{}'", command),

@@ -107,7 +107,10 @@ pub enum ParsedCommand {
     Quit,
     Restart,
     Reload,
-    Version,
+    Update,
+    Version {
+        check: bool,
+    },
 
     // Development/maintenance
     Doctor,
@@ -299,7 +302,11 @@ fn parse_command(argv: &[String]) -> Result<ParsedCommand, String> {
             let action = parse_gateway_action(argv.get(1).map(|s| s.as_str()))?;
             Ok(ParsedCommand::Gateway { action })
         }
-        "version" => Ok(ParsedCommand::Version),
+        "version" => {
+            let check = argv.get(1).map(|s| s.as_str()) == Some("--check");
+            Ok(ParsedCommand::Version { check })
+        }
+        "update" => Ok(ParsedCommand::Update),
         "help" => Ok(ParsedCommand::Help {
             command: argv.get(1).cloned(),
         }),
