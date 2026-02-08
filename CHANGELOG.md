@@ -12,6 +12,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.11.4] - 2026-02-08
+
+### Fixed
+
+- **`shroud debug tail` auto-disables logging on exit** — Previously, `debug tail` enabled debug logging on the daemon but never disabled it when the user pressed Ctrl+C. The daemon would continue logging at DEBUG level indefinitely, flooding stderr in the terminal where it was launched. Now tracks whether it was the one that enabled logging: if so, sends `debug off` on exit; if logging was already on (user explicitly enabled it or via tray), leaves it alone.
+
+---
+
+## [1.11.4] - 2026-02-08
+
+### Fixed
+
+- **`shroud debug tail` auto-disables logging on exit** — Previously, `shroud debug tail` enabled debug logging on the daemon but never disabled it when the user pressed Ctrl+C. The daemon would continue logging at DEBUG level, flooding stderr in the terminal where it was launched. Now auto-sends `debug off` to the daemon when tail exits. Respects user intent: if logging was already enabled before tail started (via `shroud debug on` or tray toggle), it leaves it on.
+
+---
+
+## [1.11.4] - 2026-02-08
+
+### Fixed
+
+- **`shroud debug tail` auto-disables logging on exit** — Previously, `shroud debug tail` enabled debug logging on the daemon but never disabled it when the user pressed Ctrl+C. The daemon would continue logging at DEBUG level, flooding stderr in the terminal where it was launched. Now auto-sends `debug off` to the daemon when tail exits. Respects user intent: if logging was already enabled before tail started (via `shroud debug on` or tray toggle), it leaves it on.
+
+---
+
 ## [1.11.3] - 2026-02-08
 
 ### Added
