@@ -453,11 +453,11 @@ fn check_dhcp_allowed_iptables(snap: &IptablesSnapshot, verbose: bool) -> CheckR
     let allow67 = snap
         .ks_chain
         .lines()
-        .any(|l| l.contains(&format!("-A {} -p udp --dport 67 -j ACCEPT", CHAIN_NAME)));
+        .any(|l| l.contains("--dport 67") && l.contains("ACCEPT"));
     let allow68 = snap
         .ks_chain
         .lines()
-        .any(|l| l.contains(&format!("-A {} -p udp --sport 68 -j ACCEPT", CHAIN_NAME)));
+        .any(|l| l.contains("--sport 68") && l.contains("ACCEPT"));
     if allow67 && allow68 {
         CheckResult::pass(
             "dhcp_allowed",
@@ -544,15 +544,27 @@ fn check_dns_mode_match_iptables(
     let rules = &snap.ks_chain;
     match mode {
         DnsMode::Tunnel | DnsMode::Strict => {
-            let has_tunnel_allow =
-                rules.contains("-o tun+") || rules.contains("-o wg+") || rules.contains("-o tap+");
-            let has_drop_53 = rules.contains("-p udp --dport 53 -j DROP")
-                || rules.contains("-p tcp --dport 53 -j DROP");
-            if has_tunnel_allow && has_drop_53 {
+            let has_allow = rules.lines().any(|l| {
+                l.contains("--dport 53")
+                    && l.contains("ACCEPT")
+                    && (l.contains("-o tun+") || l.contains("-o wg+") || l.contains("-o tap+"))
+            });
+            let has_drop_53 = rules
+                .lines()
+                .any(|l| l.contains("--dport 53") && l.contains("-j DROP"));
+            let has_drop_dot = rules
+                .lines()
+                .any(|l| l.contains("--dport 853") && l.contains("-j DROP"));
+            if has_allow && has_drop_53 {
+                let detail = if matches!(mode, DnsMode::Strict) && !has_drop_dot {
+                    "tunnel rules present (DoT drop missing)".to_string()
+                } else {
+                    "tunnel/strict rules present".to_string()
+                };
                 CheckResult::pass(
                     "dns_mode_match",
                     "DNS leak protection matches configured mode",
-                    "tunnel/strict rules present",
+                    detail,
                     Some(rules.clone()).filter(|_| verbose),
                 )
             } else {
@@ -904,6 +916,7 @@ mod tests {
 -A SHROUD_KILLSWITCH -o tun+ -j ACCEPT
 -A SHROUD_KILLSWITCH -o wg+ -j ACCEPT
 -A SHROUD_KILLSWITCH -o tap+ -j ACCEPT
+-A SHROUD_KILLSWITCH -o tun+ -p udp --dport 53 -j ACCEPT
 -A SHROUD_KILLSWITCH -p udp --dport 67 -j ACCEPT
 -A SHROUD_KILLSWITCH -p udp --sport 68 -j ACCEPT
 -A SHROUD_KILLSWITCH -p udp --dport 53 -j DROP

@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.11.6] - 2026-02-08
+
+### Fixed
+
+- **`verify-killswitch`**: Tolerate `iptables -S` formatting for DHCP detection (matches `--dport 67/--sport 68` regardless of `-m udp`).
+- **`verify-killswitch`**: Improve DNS tunnel/strict detection; note DoT drop missing as detail; updated tests.
+
+---
+
 ## [1.11.5] - 2026-02-08
 
 ### Added
