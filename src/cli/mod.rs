@@ -7,6 +7,8 @@ pub mod handlers;
 pub mod help;
 pub mod import;
 pub mod install;
+#[allow(dead_code)]
+pub mod output;
 pub mod validation;
 
 #[allow(unused_imports)]

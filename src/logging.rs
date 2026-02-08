@@ -521,4 +521,134 @@ mod tests {
         let path = default_log_path();
         assert!(path.to_string_lossy().ends_with(".log"));
     }
+
+    // ----- Timestamp generation -----
+
+    #[test]
+    fn test_timestamp_format() {
+        let ts = chrono_lite_timestamp();
+        // Should look like 2026-02-07T12:34:56.789Z
+        assert!(ts.contains('T'));
+        assert!(ts.ends_with('Z'));
+        assert!(ts.len() >= 23);
+    }
+
+    #[test]
+    fn test_timestamp_contains_year() {
+        let ts = chrono_lite_timestamp();
+        // Current year should appear
+        assert!(
+            ts.starts_with("202") || ts.starts_with("203"),
+            "Timestamp doesn't start with expected year: {}",
+            ts
+        );
+    }
+
+    // ----- Leap year -----
+
+    #[test]
+    fn test_leap_year_known() {
+        assert!(is_leap_year(2000));
+        assert!(is_leap_year(2024));
+        assert!(!is_leap_year(1900));
+        assert!(!is_leap_year(2023));
+        assert!(is_leap_year(2400));
+    }
+
+    #[test]
+    fn test_leap_year_divisible_by_4() {
+        assert!(is_leap_year(2020));
+        assert!(is_leap_year(2016));
+    }
+
+    #[test]
+    fn test_leap_year_century_not_400() {
+        assert!(!is_leap_year(1900));
+        assert!(!is_leap_year(2100));
+        assert!(!is_leap_year(2200));
+    }
+
+    // ----- parse_level extended -----
+
+    #[test]
+    fn test_parse_level_all_variants() {
+        assert_eq!(parse_level("error"), Some(LevelFilter::Error));
+        assert_eq!(parse_level("warn"), Some(LevelFilter::Warn));
+        assert_eq!(parse_level("info"), Some(LevelFilter::Info));
+        assert_eq!(parse_level("debug"), Some(LevelFilter::Debug));
+        assert_eq!(parse_level("trace"), Some(LevelFilter::Trace));
+    }
+
+    #[test]
+    fn test_parse_level_case_insensitive() {
+        assert_eq!(parse_level("ERROR"), Some(LevelFilter::Error));
+        assert_eq!(parse_level("Warn"), Some(LevelFilter::Warn));
+        assert_eq!(parse_level("DEBUG"), Some(LevelFilter::Debug));
+    }
+
+    #[test]
+    fn test_parse_level_invalid() {
+        assert_eq!(parse_level(""), None);
+        assert_eq!(parse_level("warning"), None);
+        assert_eq!(parse_level("verbose"), None);
+        assert_eq!(parse_level("off"), None);
+    }
+
+    // ----- verbose_to_level extended -----
+
+    #[test]
+    fn test_verbose_to_level_boundary() {
+        assert_eq!(verbose_to_level(0), LevelFilter::Info);
+        assert_eq!(verbose_to_level(1), LevelFilter::Debug);
+        assert_eq!(verbose_to_level(2), LevelFilter::Trace);
+        assert_eq!(verbose_to_level(3), LevelFilter::Trace);
+        assert_eq!(verbose_to_level(u8::MAX), LevelFilter::Trace);
+    }
+
+    // ----- Args -----
+
+    #[test]
+    fn test_args_default() {
+        let args = Args::default();
+        assert_eq!(args.verbose, 0);
+        assert!(args.log_level.is_none());
+        assert!(args.log_file.is_none());
+        assert!(!args.help);
+        assert!(!args.version);
+    }
+
+    #[test]
+    fn test_args_debug_clone() {
+        let args = Args {
+            verbose: 2,
+            log_level: Some("debug".into()),
+            log_file: Some(PathBuf::from("/tmp/test.log")),
+            help: false,
+            version: true,
+        };
+        let cloned = args.clone();
+        assert_eq!(cloned.verbose, 2);
+        assert_eq!(cloned.log_level.as_deref(), Some("debug"));
+        assert_eq!(
+            cloned.log_file.as_ref().map(|p| p.display().to_string()),
+            Some("/tmp/test.log".to_string())
+        );
+    }
+
+    // ----- default_log_path -----
+
+    #[test]
+    fn test_default_log_path_under_shroud_dir() {
+        let path = default_log_path();
+        assert!(path.to_string_lossy().contains("shroud"));
+        assert!(path.file_name().unwrap().to_string_lossy().contains("log"));
+    }
+
+    // ----- log_directory -----
+
+    #[test]
+    fn test_log_directory_not_empty() {
+        let dir = log_directory();
+        assert!(!dir.to_string_lossy().is_empty());
+    }
 }

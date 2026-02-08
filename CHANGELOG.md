@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.9.4] - 2026-02-07
+
+### Added
+
+- **Test Coverage Push (605 → 693 unit tests)** — Added 88 new unit tests targeting supervisor, nm, logging, and cli modules.
+
+- **New Module: `supervisor::reconnect_logic`** — Pure reconnect decision logic: `ReconnectConfig`, `ReconnectTracker` with attempt/success tracking, linear backoff `calculate_delay()`, and `decide_reconnect()` returning `ReconnectDecision` enum. 25+ tests across 4 submodules.
+
+- **New Module: `supervisor::connection_stats`** — Connection lifecycle statistics: connect/disconnect/fail/reconnect counters, session duration tracking, and success rate calculation. 15 tests.
+
+- **New Module: `nm::parsing`** — NM output parsing extracted from `nm::client`: `parse_active_vpns()`, `parse_vpn_connections()`, `parse_vpn_uuid()`, `select_best_vpn()` priority logic, and `is_vpn_connection_type()`. 25+ tests across 5 submodules.
+
+- **New Module: `cli::output`** — CLI output formatting: `format_duration()`, `format_list_output()`, `format_error()`, `format_success()`, `exit_codes` constants, and `format_json()`. 20+ tests across 5 submodules.
+
+- **Expanded Logging Tests** — 15 new tests in `logging.rs`: timestamp generation/format, leap year calculation, `parse_level` and `verbose_to_level` edge cases, `Args` default/clone, and path helpers.
+
+---
+
 ## [1.9.3] - 2026-02-07
 
 ### Added

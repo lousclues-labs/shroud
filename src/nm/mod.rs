@@ -5,6 +5,8 @@
 
 pub mod client;
 pub mod connections;
+#[allow(dead_code)]
+pub mod parsing;
 
 pub use client::{
     connect, disconnect, get_active_vpn, get_active_vpn_with_state, get_all_active_vpns,

@@ -19,9 +19,13 @@
 
 #[allow(dead_code)]
 pub mod command_validation;
+#[allow(dead_code)]
+pub mod connection_stats;
 mod event_loop;
 mod handlers;
 mod reconnect;
+#[allow(dead_code)]
+pub mod reconnect_logic;
 mod state_sync;
 
 #[cfg(test)]
