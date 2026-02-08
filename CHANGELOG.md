@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.11.3] - 2026-02-08
+
+### Added
+
+- **`shroud debug tail` level filtering** — Default output now shows INFO, WARN, and ERROR only, filtering out the DEBUG-level noise (NM polling every 2s, health check pings, tray state updates). Use `shroud debug tail -v` or `--verbose` for the full firehose. Uses `grep --line-buffered` for real-time output through the filter pipe.
+
+### Fixed
+
+- **Update script ETXTBSY bug** — `scripts/update.sh` and the inline fallback in `shroud update` used `cp` to overwrite the running binary, which fails silently with "Text file busy" (ETXTBSY) on Linux. The error was swallowed by `2>/dev/null || true`, causing `shroud restart` to spawn the old binary. Fixed by `rm -f` before `cp` (unlinks the inode so the running process keeps its mapping while the new binary takes the path).
+
+- **Raw nmcli multiline log output** — nmcli stdout with embedded newlines was passed directly to `debug!()`, causing connection lines to appear without log prefixes. Now joined with ` | ` separator so all output stays on one properly-prefixed log line.
+
+### Changed
+
+- **Debug arg parsing refactored** — `parse_debug_args` now takes the full sub-argv slice instead of a single action string, enabling proper flag parsing for `tail -v`.
+
+---
+
 ## [1.11.2] - 2026-02-08
 
 ### Added
