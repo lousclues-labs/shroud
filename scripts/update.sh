@@ -10,7 +10,9 @@ echo "Building and installing shroud..."
 cargo install --path . --force "${@}"
 
 echo "Copying to ~/.local/bin..."
-cp ~/.cargo/bin/shroud ~/.local/bin/shroud 2>/dev/null || true
+# Must remove first — cp fails with ETXTBSY if daemon has the binary mapped
+rm -f ~/.local/bin/shroud 2>/dev/null || true
+cp ~/.cargo/bin/shroud ~/.local/bin/shroud
 
 echo "Restarting daemon..."
 shroud restart 2>/dev/null || echo "Daemon not running"

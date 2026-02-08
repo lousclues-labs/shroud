@@ -766,7 +766,8 @@ fn handle_update_command() -> i32 {
             "set -e && ",
             "echo 'Building and installing...' && ",
             "cargo install --path . --force && ",
-            "cp ~/.cargo/bin/shroud ~/.local/bin/shroud 2>/dev/null || true && ",
+            "rm -f ~/.local/bin/shroud 2>/dev/null || true && ",
+            "cp ~/.cargo/bin/shroud ~/.local/bin/shroud && ",
             "echo 'Restarting daemon...' && ",
             "shroud restart 2>/dev/null || echo 'Daemon not running' && ",
             "echo '' && shroud --version && echo '✓ Update complete'"
