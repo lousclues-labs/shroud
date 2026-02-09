@@ -31,6 +31,8 @@ pub enum VpnCommand {
     RefreshConnections,
     /// Restart the application
     Restart,
+    /// Request graceful shutdown
+    Quit,
 }
 
 /// Shared state between the tray and the VPN supervisor
@@ -100,7 +102,10 @@ impl Tray for VpnTray {
     }
 
     fn title(&self) -> String {
-        let state = self.cached_state.read().unwrap();
+        let state = self.cached_state.read().unwrap_or_else(|poisoned| {
+            log::warn!("Tray cached_state lock poisoned, recovering");
+            poisoned.into_inner()
+        });
         match &state.state {
             VpnState::Connected { server } => format!("🔒 {}", extract_short_name(server)),
             VpnState::Connecting { server } => format!("⏳ {}...", extract_short_name(server)),
@@ -121,7 +126,10 @@ impl Tray for VpnTray {
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-        let state = self.cached_state.read().unwrap();
+        let state = self.cached_state.read().unwrap_or_else(|poisoned| {
+            log::warn!("Tray cached_state lock poisoned, recovering");
+            poisoned.into_inner()
+        });
         match state.state {
             VpnState::Connected { .. } => get_status_icon(IconType::Connected),
             VpnState::Connecting { .. } | VpnState::Reconnecting { .. } => {
@@ -134,7 +142,10 @@ impl Tray for VpnTray {
     }
 
     fn tool_tip(&self) -> ksni::ToolTip {
-        let state = self.cached_state.read().unwrap();
+        let state = self.cached_state.read().unwrap_or_else(|poisoned| {
+            log::warn!("Tray cached_state lock poisoned, recovering");
+            poisoned.into_inner()
+        });
         let (title, description) = match &state.state {
             VpnState::Connected { server } => (
                 format!("🔒 Connected: {}", server),
@@ -172,7 +183,14 @@ impl Tray for VpnTray {
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
-        let state = self.cached_state.read().unwrap().clone();
+        let state = self
+            .cached_state
+            .read()
+            .unwrap_or_else(|poisoned| {
+                log::warn!("Tray cached_state lock poisoned, recovering");
+                poisoned.into_inner()
+            })
+            .clone();
         let mut items = Vec::new();
 
         // Status header with clear visual indicators
@@ -350,8 +368,8 @@ impl Tray for VpnTray {
             label: "Quit".to_string(),
             icon_name: "application-exit".to_string(),
             enabled: true,
-            activate: Box::new(|_| {
-                std::process::exit(0);
+            activate: Box::new(|tray: &mut Self| {
+                let _ = tray.tx.try_send(VpnCommand::Quit);
             }),
             ..Default::default()
         }));

@@ -31,18 +31,18 @@ impl super::VpnSupervisor {
 
         // CRITICAL: Ignore ALL D-Bus events while a VPN switch is in progress
         // handle_connect manages everything during a switch - D-Bus events only cause interference
-        if self.switching_in_progress {
+        if self.switch_ctx.in_progress {
             debug!("Ignoring D-Bus event during VPN switch: {:?}", event);
             return;
         }
 
         // CRITICAL: Ignore late deactivation events from VPN we recently switched FROM
         // D-Bus events can arrive after we've already connected to the new VPN
-        if let Some(ref from_server) = self.switching_from {
+        if let Some(ref from_server) = self.switch_ctx.from {
             if let NmEvent::VpnDeactivated { ref name } = event {
                 if name == from_server {
                     // Check if we're within the grace window after switch completed
-                    if let Some(completed) = self.switch_completed_time {
+                    if let Some(completed) = self.switch_ctx.completed_time {
                         if completed.elapsed().as_secs() < POST_DISCONNECT_GRACE_SECS {
                             info!(
                                 "Ignoring late deactivation event for switched-from VPN: {}",
@@ -52,8 +52,8 @@ impl super::VpnSupervisor {
                         }
                     }
                     // Clear the switching_from after processing
-                    self.switching_from = None;
-                    self.switch_completed_time = None;
+                    self.switch_ctx.from = None;
+                    self.switch_ctx.completed_time = None;
                 }
             }
         }
@@ -240,7 +240,7 @@ impl super::VpnSupervisor {
     /// Poll NetworkManager state and dispatch appropriate events
     pub(crate) async fn poll_nm_state(&mut self) {
         // CRITICAL: Skip polling entirely while a VPN switch is in progress
-        if self.switching_in_progress {
+        if self.switch_ctx.in_progress {
             debug!("Skipping NM poll during VPN switch");
             return;
         }
@@ -509,13 +509,13 @@ impl super::VpnSupervisor {
         info!("Connect requested: {}", connection_name);
 
         // CRITICAL: Set switching flag to prevent D-Bus events from interfering
-        self.switching_in_progress = true;
-        self.switching_target = Some(connection_name.to_string());
+        self.switch_ctx.in_progress = true;
+        self.switch_ctx.target = Some(connection_name.to_string());
 
         // Track the VPN we're switching FROM (to ignore late D-Bus events)
         if let Some(current) = self.machine.state.server_name() {
             if current != connection_name {
-                self.switching_from = Some(current.to_string());
+                self.switch_ctx.from = Some(current.to_string());
             }
         }
 
@@ -546,8 +546,8 @@ impl super::VpnSupervisor {
 
         // Also track any active VPNs as "switching from" to ignore their deactivation events
         for vpn in &all_active {
-            if vpn.name != connection_name && self.switching_from.is_none() {
-                self.switching_from = Some(vpn.name.clone());
+            if vpn.name != connection_name && self.switch_ctx.from.is_none() {
+                self.switch_ctx.from = Some(vpn.name.clone());
             }
         }
 
@@ -678,16 +678,16 @@ impl super::VpnSupervisor {
 
         // CRITICAL: Clear switching flags - we're done with the switch
         // BUT keep switching_from and set switch_completed_time to ignore late D-Bus events
-        self.switching_in_progress = false;
-        self.switching_target = None;
+        self.switch_ctx.in_progress = false;
+        self.switch_ctx.target = None;
         self.last_disconnect_time = None;
         // Set completion time so late D-Bus events for the old VPN are ignored
-        self.switch_completed_time = Some(Instant::now());
+        self.switch_ctx.completed_time = Some(Instant::now());
 
         if !connection_succeeded {
             // All attempts failed - also clear switching_from since there's nothing to ignore
-            self.switching_from = None;
-            self.switch_completed_time = None;
+            self.switch_ctx.from = None;
+            self.switch_ctx.completed_time = None;
             error!(
                 "Failed to connect to {} after {} attempts",
                 connection_name, MAX_CONNECT_ATTEMPTS
@@ -815,7 +815,7 @@ impl super::VpnSupervisor {
 
                 // Now exit
                 info!("Old daemon exiting for restart");
-                std::process::exit(0);
+                self.exit_state.request("Restart");
             }
             Err(e) => {
                 error!("Failed to spawn new instance: {}", e);
@@ -859,11 +859,11 @@ impl super::VpnSupervisor {
 
         info!("Shutdown complete");
 
-        // Clean up and exit the process
+        // Clean up and signal exit
         release_instance_lock();
         let socket_path = crate::ipc::protocol::socket_path();
         let _ = std::fs::remove_file(&socket_path);
-        std::process::exit(0);
+        self.exit_state.request("User quit");
     }
 
     pub(crate) async fn graceful_shutdown(&mut self) {
@@ -1372,8 +1372,7 @@ impl super::VpnSupervisor {
 
                 match spawn_result {
                     Ok(_) => {
-                        self.should_exit = true;
-                        self.exit_reason = Some("restart".to_string());
+                        self.exit_state.request("restart");
                         IpcResponse::OkMessage {
                             message: "Restarting daemon...".to_string(),
                         }
@@ -1409,7 +1408,7 @@ impl super::VpnSupervisor {
                 let auto_reconnect = state.auto_reconnect;
                 let debug_logging = crate::logging::is_debug_logging_enabled();
                 let connections = state.connections.clone();
-                let switching = self.switching_in_progress;
+                let switching = self.switch_ctx.in_progress;
                 let retries = self.machine.retries();
                 drop(state);
 

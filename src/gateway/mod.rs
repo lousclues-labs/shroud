@@ -26,6 +26,7 @@ mod tests;
 use crate::config::GatewayConfig;
 use log::{debug, info};
 use std::sync::atomic::{AtomicBool, Ordering};
+use thiserror::Error;
 
 pub use detect::{detect_lan_interface, detect_vpn_interface};
 pub use firewall::{
@@ -43,29 +44,24 @@ static GATEWAY_STATE: AtomicBool = AtomicBool::new(false);
 static ORIGINAL_FORWARDING_STATE: AtomicBool = AtomicBool::new(false);
 
 /// Error type for gateway operations
-#[derive(Debug)]
+#[derive(Error, Debug)]
 pub enum GatewayError {
+    #[error("IP forwarding error: {0}")]
     Forwarding(String),
+
+    #[error("NAT error: {0}")]
     Nat(String),
+
+    #[error("Firewall error: {0}")]
     Firewall(String),
+
+    #[error("Interface detection error: {0}")]
     Detection(String),
+
     #[allow(dead_code)]
+    #[error("Configuration error: {0}")]
     Config(String),
 }
-
-impl std::fmt::Display for GatewayError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            GatewayError::Forwarding(s) => write!(f, "IP forwarding error: {}", s),
-            GatewayError::Nat(s) => write!(f, "NAT error: {}", s),
-            GatewayError::Firewall(s) => write!(f, "Firewall error: {}", s),
-            GatewayError::Detection(s) => write!(f, "Interface detection error: {}", s),
-            GatewayError::Config(s) => write!(f, "Configuration error: {}", s),
-        }
-    }
-}
-
-impl std::error::Error for GatewayError {}
 
 /// Enable VPN gateway mode.
 pub async fn enable(config: &GatewayConfig) -> Result<(), GatewayError> {

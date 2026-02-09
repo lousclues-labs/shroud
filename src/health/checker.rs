@@ -4,10 +4,10 @@
 //! and checking for expected responses.
 
 use log::{debug, warn};
-use std::process::Stdio;
-use std::time::Duration;
-use tokio::process::Command;
+use std::time::{Duration, Instant};
+use tokio::task::spawn_blocking;
 use tokio::time::timeout;
+use ureq;
 
 /// Result of a health check
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -188,45 +188,43 @@ impl HealthChecker {
         }
     }
 
-    /// Check a single endpoint using curl
+    /// Check a single endpoint using native HTTP (ureq)
     ///
     /// Returns latency in milliseconds on success.
     async fn check_endpoint(&self, endpoint: &str) -> Result<u64, String> {
-        let start = std::time::Instant::now();
+        let url = endpoint.to_string();
+        let timeout_secs = self.config.timeout_secs;
 
         let result = timeout(
-            Duration::from_secs(self.config.timeout_secs),
-            Command::new("curl")
-                .args([
-                    "-s",
-                    "-o",
-                    "/dev/null",
-                    "-w",
-                    "%{http_code}",
-                    "--connect-timeout",
-                    "5",
-                    "--max-time",
-                    &self.config.timeout_secs.to_string(),
-                    endpoint,
-                ])
-                .stdout(Stdio::piped())
-                .stderr(Stdio::null())
-                .output(),
+            Duration::from_secs(timeout_secs + 2), // outer safety timeout
+            spawn_blocking(move || {
+                let start = Instant::now();
+
+                let config = ureq::Agent::config_builder()
+                    .timeout_global(Some(std::time::Duration::from_secs(timeout_secs)))
+                    .build();
+                let agent = ureq::Agent::new_with_config(config);
+
+                match agent.get(&url).call() {
+                    Ok(resp) => {
+                        let status = resp.status().as_u16();
+                        // Consume body to complete request
+                        let _ = resp.into_body().read_to_string();
+                        if (200..400).contains(&status) {
+                            Ok(start.elapsed().as_millis() as u64)
+                        } else {
+                            Err(format!("HTTP status: {}", status))
+                        }
+                    }
+                    Err(e) => Err(format!("HTTP error: {}", e)),
+                }
+            }),
         )
         .await;
 
         match result {
-            Ok(Ok(output)) => {
-                let elapsed = start.elapsed().as_millis() as u64;
-                let status = String::from_utf8_lossy(&output.stdout);
-
-                if status.starts_with('2') || status.starts_with('3') {
-                    Ok(elapsed)
-                } else {
-                    Err(format!("HTTP status: {}", status))
-                }
-            }
-            Ok(Err(e)) => Err(format!("curl error: {}", e)),
+            Ok(Ok(inner)) => inner,
+            Ok(Err(e)) => Err(format!("spawn_blocking error: {}", e)),
             Err(_) => Err("timeout".to_string()),
         }
     }

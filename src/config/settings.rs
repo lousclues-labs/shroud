@@ -571,12 +571,24 @@ impl ConfigManager {
             toml::Value::Integer(CONFIG_VERSION as i64),
         );
 
-        // Save migrated config
+        // Save migrated config atomically (temp file + rename)
         if let Ok(migrated_str) = toml::to_string_pretty(value) {
-            if let Err(e) = fs::write(&self.config_path, &migrated_str) {
-                warn!("Failed to save migrated config: {}", e);
-            } else {
-                info!("Saved migrated config to {:?}", self.config_path);
+            let tmp_path = self.config_path.with_extension("toml.tmp");
+            match fs::write(&tmp_path, &migrated_str) {
+                Ok(()) => {
+                    if let Err(e) = fs::rename(&tmp_path, &self.config_path) {
+                        warn!("Failed atomic rename during migration: {}", e);
+                        // Fallback: direct write
+                        if let Err(e2) = fs::write(&self.config_path, &migrated_str) {
+                            warn!("Failed to save migrated config: {}", e2);
+                        } else {
+                            info!("Saved migrated config to {:?}", self.config_path);
+                        }
+                    } else {
+                        info!("Saved migrated config to {:?}", self.config_path);
+                    }
+                }
+                Err(e) => warn!("Failed to save migrated config: {}", e),
             }
         }
     }

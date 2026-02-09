@@ -56,7 +56,7 @@ use crate::dbus::NmMonitor;
 #[cfg(test)]
 use crate::state::VpnState;
 use crate::supervisor::VpnSupervisor;
-use crate::tray::{SharedState, VpnTray};
+use crate::tray::{SharedState, VpnCommand, VpnTray};
 
 // Main
 // ============================================================================
@@ -141,26 +141,28 @@ async fn run_daemon_mode(args: cli::Args) {
     // Clean up any stale kill switch rules from previous crash
     killswitch::cleanup_stale_on_startup();
 
-    ctrlc::set_handler(move || {
-        info!("Shutdown signal received, cleaning up...");
-        // Non-blocking cleanup with timeout
-        let _ = killswitch::cleanup_with_fallback();
-        release_instance_lock();
-        // Clean up CLI socket
-        let socket_path = ipc::protocol::socket_path();
-        if socket_path.exists() {
-            let _ = std::fs::remove_file(&socket_path);
-        }
-        std::process::exit(0);
-    })
-    .expect("Error setting Ctrl-C handler");
-
-    info!("Starting Shroud VPN Manager");
-
     let shared_state = Arc::new(RwLock::new(SharedState::default()));
 
     // Channels
     let (tx, rx) = mpsc::channel(16); // Tray commands
+    let shutdown_tx = tx.clone();
+
+    ctrlc::set_handler(move || {
+        info!("Shutdown signal received");
+        if shutdown_tx.try_send(VpnCommand::Quit).is_err() {
+            info!("Supervisor not running, performing fallback cleanup");
+            let _ = killswitch::cleanup_with_fallback();
+            release_instance_lock();
+            let socket_path = ipc::protocol::socket_path();
+            if socket_path.exists() {
+                let _ = std::fs::remove_file(&socket_path);
+            }
+            std::process::exit(0);
+        }
+    })
+    .expect("Error setting Ctrl-C handler");
+
+    info!("Starting Shroud VPN Manager");
     let (dbus_tx, dbus_rx) = mpsc::channel(32); // NM events
     let (ipc_tx, ipc_rx) = mpsc::channel(32); // IPC commands
 
@@ -189,7 +191,7 @@ async fn run_daemon_mode(args: cli::Args) {
         dbus_rx,
         tray_handle.clone(),
     );
-    tokio::spawn(supervisor.run());
+    let supervisor_handle = tokio::spawn(supervisor.run());
 
     let tray_service = VpnTray::new(tx);
 
@@ -210,7 +212,9 @@ async fn run_daemon_mode(args: cli::Args) {
         }
     });
 
-    std::future::pending::<()>().await;
+    let _ = supervisor_handle.await;
+    info!("Supervisor exited, shutting down");
+    std::process::exit(0);
 }
 
 #[tokio::main]

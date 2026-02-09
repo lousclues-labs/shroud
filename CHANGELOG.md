@@ -12,6 +12,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.12.0] - 2026-02-09
+
+### Added / Improved
+- `verify-killswitch`: colored output, tip when KS off; missing-chain tolerant; relaxed detection; JSON and tests improved.
+- `tray`: recover from poisoned `cached_state` lock (no crash).
+- `gateway`: `GatewayError` now uses `thiserror`.
+- `logging`: flush error/warn logs to disk immediately.
+- `config`: migrations use atomic temp-file+rename.
+- `health`: HTTP checks no longer shell out to curl; use `ureq` with timeouts.
+- `supervisor`: graceful shutdown (no `process::exit`); tray quit uses channel.
+- `supervisor`: extracted `SwitchContext` and `ExitState` for clarity.
+- `README`: MSRV badge updated to 1.85.
+
+### Fixed
+- Clippy warnings (`is_some_and`).
+
+---
+
 ## [1.11.9] - 2026-02-08
 
 ### Fixed

@@ -78,6 +78,48 @@ pub(crate) const MAX_CONNECT_ATTEMPTS: u32 = 3;
 /// Wait after nmcli con up before verifying connection
 pub(crate) const CONNECTION_VERIFY_DELAY_SECS: u64 = 5;
 
+/// Tracks the state of an in-progress VPN switch operation.
+#[derive(Debug, Default)]
+pub(crate) struct SwitchContext {
+    pub(crate) in_progress: bool,
+    pub(crate) target: Option<String>,
+    pub(crate) from: Option<String>,
+    pub(crate) completed_time: Option<Instant>,
+}
+
+#[allow(dead_code)]
+impl SwitchContext {
+    pub(crate) fn start(&mut self, from: &str, to: &str) {
+        self.in_progress = true;
+        self.from = Some(from.to_string());
+        self.target = Some(to.to_string());
+        self.completed_time = None;
+    }
+
+    pub(crate) fn complete(&mut self) {
+        self.in_progress = false;
+        self.completed_time = Some(Instant::now());
+    }
+
+    pub(crate) fn reset(&mut self) {
+        *self = Self::default();
+    }
+}
+
+/// Tracks whether the supervisor should exit and why.
+#[derive(Debug, Default)]
+pub(crate) struct ExitState {
+    pub(crate) should_exit: bool,
+    pub(crate) reason: Option<String>,
+}
+
+impl ExitState {
+    pub(crate) fn request(&mut self, reason: &str) {
+        self.should_exit = true;
+        self.reason = Some(reason.to_string());
+    }
+}
+
 /// VPN Supervisor that manages VPN connections via NetworkManager
 ///
 /// Uses a formal state machine for all state transitions, ensuring:
@@ -109,14 +151,8 @@ pub struct VpnSupervisor {
     pub(crate) app_config: Config,
     /// Kill switch for blocking non-VPN traffic
     pub(crate) kill_switch: KillSwitch,
-    /// Flag to indicate a VPN switch is in progress (prevents D-Bus event interference)
-    pub(crate) switching_in_progress: bool,
-    /// The target server we're switching TO (to ignore deactivation events for old VPN)
-    pub(crate) switching_target: Option<String>,
-    /// The server we're switching FROM (to ignore late deactivation events)
-    pub(crate) switching_from: Option<String>,
-    /// Timestamp when switch completed (to ignore late D-Bus events)
-    pub(crate) switch_completed_time: Option<Instant>,
+    /// VPN switching context
+    pub(crate) switch_ctx: SwitchContext,
     /// Timestamp of last wake event dispatch (for debounce)
     pub(crate) last_wake_event: Option<Instant>,
     /// Timestamp of last reconnect attempt start (for debounce)
@@ -125,10 +161,8 @@ pub struct VpnSupervisor {
     pub(crate) reconnect_cancelled: bool,
     /// Whether this is the first run (config file did not exist)
     pub(crate) is_first_run: bool,
-    /// Flag to indicate daemon should exit after responding
-    pub(crate) should_exit: bool,
-    /// Reason for exit (restart/shutdown)
-    pub(crate) exit_reason: Option<String>,
+    /// Exit state
+    pub(crate) exit_state: ExitState,
     /// Notification manager for categorized, throttled desktop notifications
     pub(crate) notification_manager: NotificationManager,
 }
@@ -188,16 +222,12 @@ impl VpnSupervisor {
             config_manager,
             app_config,
             kill_switch,
-            switching_in_progress: false,
-            switching_target: None,
-            switching_from: None,
-            switch_completed_time: None,
+            switch_ctx: SwitchContext::default(),
             last_wake_event: None,
             last_reconnect_time: None,
             reconnect_cancelled: false,
             is_first_run,
-            should_exit: false,
-            exit_reason: None,
+            exit_state: ExitState::default(),
             notification_manager,
         }
     }

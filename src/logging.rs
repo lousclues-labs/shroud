@@ -274,6 +274,10 @@ impl log::Log for ShroudLogger {
             if let Ok(mut guard) = FILE_WRITER.lock() {
                 if let Some(ref mut writer) = *guard {
                     let _ = writer.write(line.as_bytes());
+                    // Flush immediately for error/warn to ensure crash logs are preserved
+                    if level <= log::Level::Warn {
+                        let _ = writer.file.sync_all();
+                    }
                 }
             }
         }
