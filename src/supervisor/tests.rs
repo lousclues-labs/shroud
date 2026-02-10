@@ -254,3 +254,175 @@ mod handler_tests {
         assert!(resp.is_ok());
     }
 }
+
+// === Behavioral integration tests with MockNmClient ===
+use crate::nm::{MockNmClient, NmCall, NmError};
+use crate::state::{Event, VpnState};
+use crate::supervisor::VpnSupervisor;
+use crate::tray::{SharedState, VpnCommand};
+use std::sync::Arc;
+use tokio::sync::{mpsc, RwLock};
+
+async fn make_supervisor(mock: MockNmClient) -> (VpnSupervisor, mpsc::Sender<VpnCommand>) {
+    let shared_state = Arc::new(RwLock::new(SharedState::default()));
+    let (tray_tx, tray_rx) = mpsc::channel(16);
+    let (_ipc_tx, ipc_rx) = mpsc::channel(16);
+    let (_dbus_tx, dbus_rx) = mpsc::channel(16);
+    let tray_handle = Arc::new(std::sync::Mutex::new(None));
+
+    let supervisor = VpnSupervisor::with_nm(
+        shared_state.clone(),
+        tray_rx,
+        ipc_rx,
+        dbus_rx,
+        tray_handle,
+        Box::new(mock.clone()),
+    );
+
+    (supervisor, tray_tx)
+}
+
+#[tokio::test]
+async fn connect_calls_nm_connect_and_transitions_to_connected() {
+    let mock = MockNmClient::new();
+    mock.add_vpn("ireland-42");
+
+    let (mut supervisor, _tx) = make_supervisor(mock.clone()).await;
+    supervisor.handle_connect("ireland-42").await;
+
+    assert!(mock.was_called(&NmCall::Connect("ireland-42".to_string())));
+    assert!(matches!(
+        supervisor.machine.state,
+        VpnState::Connected { ref server } if server == "ireland-42"
+    ));
+}
+
+#[tokio::test]
+async fn connect_to_nonexistent_vpn_stays_disconnected() {
+    let mock = MockNmClient::new();
+    let (mut supervisor, _tx) = make_supervisor(mock.clone()).await;
+    supervisor.handle_connect("ghost-vpn").await;
+
+    assert!(mock.was_called(&NmCall::Connect("ghost-vpn".to_string())));
+    assert!(!matches!(
+        supervisor.machine.state,
+        VpnState::Connected { .. }
+    ));
+}
+
+#[tokio::test]
+async fn connect_failure_leaves_state_machine_not_connected() {
+    let mock = MockNmClient::new();
+    mock.add_vpn("flaky-vpn");
+    mock.queue_error(NmError::Command("connection refused".into()));
+
+    let (mut supervisor, _tx) = make_supervisor(mock.clone()).await;
+    supervisor.handle_connect("flaky-vpn").await;
+
+    assert!(mock.was_called(&NmCall::Connect("flaky-vpn".to_string())));
+}
+
+#[tokio::test]
+async fn disconnect_calls_nm_disconnect_and_transitions_to_disconnected() {
+    let mock = MockNmClient::new();
+    mock.add_vpn("ireland-42");
+    mock.set_active("ireland-42");
+
+    let (mut supervisor, _tx) = make_supervisor(mock.clone()).await;
+    supervisor.dispatch(Event::NmVpnUp {
+        server: "ireland-42".to_string(),
+    });
+    supervisor.handle_disconnect().await;
+
+    assert!(mock.was_called(&NmCall::Disconnect("ireland-42".to_string())));
+    assert!(matches!(supervisor.machine.state, VpnState::Disconnected));
+}
+
+#[tokio::test]
+async fn state_sync_detects_external_vpn_connection() {
+    let mock = MockNmClient::new();
+    mock.add_vpn("external-vpn");
+    mock.set_active("external-vpn");
+
+    let (mut supervisor, _tx) = make_supervisor(mock.clone()).await;
+    let corrected = supervisor.sync_state_from_nm().await;
+
+    assert!(corrected);
+    assert!(matches!(
+        supervisor.machine.state,
+        VpnState::Connected { ref server } if server == "external-vpn"
+    ));
+}
+
+#[tokio::test]
+async fn state_sync_detects_external_vpn_switch() {
+    let mock = MockNmClient::new();
+    mock.add_vpn("vpn-a");
+    mock.add_vpn("vpn-b");
+    mock.set_active("vpn-b");
+
+    let (mut supervisor, _tx) = make_supervisor(mock.clone()).await;
+    supervisor.dispatch(Event::NmVpnUp {
+        server: "vpn-a".to_string(),
+    });
+
+    let corrected = supervisor.sync_state_from_nm().await;
+    assert!(corrected);
+}
+
+#[tokio::test]
+async fn state_sync_detects_external_disconnect() {
+    let mock = MockNmClient::new();
+    mock.add_vpn("vpn-a");
+
+    let (mut supervisor, _tx) = make_supervisor(mock.clone()).await;
+    supervisor.dispatch(Event::NmVpnUp {
+        server: "vpn-a".to_string(),
+    });
+
+    let corrected = supervisor.sync_state_from_nm().await;
+    assert!(corrected);
+    assert!(matches!(supervisor.machine.state, VpnState::Disconnected));
+}
+
+#[tokio::test]
+async fn reconnect_retries_on_failure_up_to_max_attempts() {
+    let mock = MockNmClient::new();
+    mock.add_vpn("unstable-vpn");
+    for _ in 0..5 {
+        mock.queue_error(NmError::Command("connection refused".into()));
+    }
+
+    let (mut supervisor, _tx) = make_supervisor(mock.clone()).await;
+    supervisor.attempt_reconnect("unstable-vpn").await;
+
+    assert!(mock.connect_count() > 1);
+}
+
+#[tokio::test]
+async fn reconnect_stops_if_vpn_already_connected() {
+    let mock = MockNmClient::new();
+    mock.add_vpn("vpn-a");
+    mock.set_active("vpn-a");
+
+    let (mut supervisor, _tx) = make_supervisor(mock.clone()).await;
+    supervisor.attempt_reconnect("vpn-a").await;
+
+    assert_eq!(mock.connect_count(), 0);
+}
+
+#[tokio::test]
+async fn disconnect_disables_kill_switch_config() {
+    let mock = MockNmClient::new();
+    mock.add_vpn("vpn-a");
+    mock.set_active("vpn-a");
+
+    let (mut supervisor, _tx) = make_supervisor(mock.clone()).await;
+    supervisor.dispatch(Event::NmVpnUp {
+        server: "vpn-a".to_string(),
+    });
+    supervisor.config_store.config.kill_switch_enabled = true;
+
+    supervisor.handle_disconnect().await;
+    assert!(mock.was_called(&NmCall::Disconnect("vpn-a".to_string())));
+}

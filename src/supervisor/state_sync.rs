@@ -9,7 +9,6 @@
 
 use log::{debug, info};
 
-use crate::nm::get_active_vpn as nm_get_active_vpn;
 use crate::state::{Event, TransitionReason, VpnState};
 
 impl super::VpnSupervisor {
@@ -50,7 +49,7 @@ impl super::VpnSupervisor {
     ///
     /// Returns true if state was corrected, false if already in sync.
     pub(crate) async fn sync_state_from_nm(&mut self) -> bool {
-        let active = nm_get_active_vpn().await;
+        let active = self.nm.get_active_vpn().await;
         let auto_reconnect = self.shared_state.read().await.auto_reconnect;
 
         match (&self.machine.state, active) {

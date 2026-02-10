@@ -46,6 +46,7 @@ use crate::dbus::NmEvent;
 use crate::health::HealthChecker;
 use crate::ipc::{IpcCommand, IpcResponse};
 use crate::killswitch::KillSwitch;
+use crate::nm::{NmCliClient, NmClient};
 use crate::notifications::NotificationManager;
 use crate::state::{StateMachine, StateMachineConfig};
 use crate::tray::{SharedState, VpnCommand, VpnTray};
@@ -169,6 +170,8 @@ pub struct VpnSupervisor {
     pub(crate) tray: TrayBridge,
     /// Persistent configuration storage
     pub(crate) config_store: ConfigStore,
+    /// NetworkManager client (trait object for testability)
+    pub(crate) nm: Box<dyn NmClient>,
     /// Kill switch for blocking non-VPN traffic
     pub(crate) kill_switch: KillSwitch,
     /// Timing-sensitive state
@@ -187,6 +190,25 @@ impl VpnSupervisor {
         ipc_rx: mpsc::Receiver<(IpcCommand, mpsc::Sender<IpcResponse>)>,
         dbus_rx: mpsc::Receiver<NmEvent>,
         tray_handle: Arc<std::sync::Mutex<Option<ksni::blocking::Handle<VpnTray>>>>,
+    ) -> Self {
+        Self::with_nm(
+            shared_state,
+            rx,
+            ipc_rx,
+            dbus_rx,
+            tray_handle,
+            Box::new(NmCliClient),
+        )
+    }
+
+    /// Constructor that accepts an NM client (for testing)
+    pub(crate) fn with_nm(
+        shared_state: Arc<RwLock<SharedState>>,
+        rx: mpsc::Receiver<VpnCommand>,
+        ipc_rx: mpsc::Receiver<(IpcCommand, mpsc::Sender<IpcResponse>)>,
+        dbus_rx: mpsc::Receiver<NmEvent>,
+        tray_handle: Arc<std::sync::Mutex<Option<ksni::blocking::Handle<VpnTray>>>>,
+        nm: Box<dyn NmClient>,
     ) -> Self {
         use log::info;
 
@@ -225,6 +247,7 @@ impl VpnSupervisor {
             dbus_rx,
             tray,
             config_store,
+            nm,
             health_checker: HealthChecker::new(),
             kill_switch,
             timing: TimingState::default(),

@@ -9,11 +9,7 @@ use crate::dbus::NmEvent;
 use crate::health::HealthResult;
 use crate::logging;
 use crate::nm::{
-    connect as nm_connect, disconnect as nm_disconnect,
-    get_active_vpn_with_state as nm_get_active_vpn_with_state,
-    get_all_active_vpns as nm_get_all_active_vpns, get_vpn_state as nm_get_vpn_state,
-    get_vpn_type as nm_get_vpn_type, kill_orphan_openvpn_processes,
-    list_vpn_connections as nm_list_vpn_connections,
+    get_vpn_type as nm_get_vpn_type,
     list_vpn_connections_with_types as nm_list_vpn_connections_with_types,
 };
 use crate::state::{Event, NmVpnState, TransitionReason, VpnState};
@@ -87,7 +83,7 @@ impl super::VpnSupervisor {
                         self.sync_shared_state().await;
                         self.tray.update(&self.shared_state);
                         // Then disconnect the old one
-                        if let Err(e) = nm_disconnect(&old_vpn).await {
+                        if let Err(e) = self.nm.disconnect(&old_vpn).await {
                             warn!("Failed to disconnect old VPN '{}': {}", old_vpn, e);
                         }
                         self.tray
@@ -97,7 +93,7 @@ impl super::VpnSupervisor {
                 }
 
                 // Also check for any other active VPNs in NetworkManager
-                let all_active = nm_get_all_active_vpns().await;
+                let all_active = self.nm.get_all_active_vpns().await;
                 if all_active.len() > 1 {
                     info!(
                         "Multiple VPNs detected ({}) - cleaning up extras",
@@ -106,7 +102,7 @@ impl super::VpnSupervisor {
                     for vpn in &all_active {
                         if vpn.name != name {
                             info!("Disconnecting extra VPN: {}", vpn.name);
-                            let _ = nm_disconnect(&vpn.name).await;
+                            let _ = self.nm.disconnect(&vpn.name).await;
                         }
                     }
                 }
@@ -198,7 +194,7 @@ impl super::VpnSupervisor {
     /// Initial sync with NetworkManager on startup
     pub(crate) async fn initial_nm_sync(&mut self) {
         // First, check for and clean up multiple simultaneous VPNs
-        let all_vpns = nm_get_all_active_vpns().await;
+        let all_vpns = self.nm.get_all_active_vpns().await;
         if all_vpns.len() > 1 {
             warn!(
                 "Found {} VPNs active on startup, cleaning up extras",
@@ -206,13 +202,13 @@ impl super::VpnSupervisor {
             );
             for extra_vpn in &all_vpns[1..] {
                 warn!("Disconnecting extra VPN: {}", extra_vpn.name);
-                let _ = nm_disconnect(&extra_vpn.name).await;
+                let _ = self.nm.disconnect(&extra_vpn.name).await;
             }
             // Wait a moment for disconnect to complete
             sleep(Duration::from_secs(1)).await;
         }
 
-        let active_vpn_info = nm_get_active_vpn_with_state().await;
+        let active_vpn_info = self.nm.get_active_vpn_with_state().await;
 
         if let Some(info) = active_vpn_info {
             match info.state {
@@ -251,7 +247,7 @@ impl super::VpnSupervisor {
         }
 
         // CRITICAL: Detect multiple simultaneous VPNs and clean up extras
-        let all_vpns = nm_get_all_active_vpns().await;
+        let all_vpns = self.nm.get_all_active_vpns().await;
         if all_vpns.len() > 1 {
             warn!(
                 "Poll detected {} VPNs active: {:?}",
@@ -276,7 +272,7 @@ impl super::VpnSupervisor {
             for vpn in &all_vpns {
                 if vpn.name != keep_vpn {
                     warn!("Disconnecting extra VPN: {}", vpn.name);
-                    let _ = nm_disconnect(&vpn.name).await;
+                    let _ = self.nm.disconnect(&vpn.name).await;
                 }
             }
 
@@ -290,7 +286,7 @@ impl super::VpnSupervisor {
             return; // Don't run the rest of the poll logic
         }
 
-        let active_vpn_info = nm_get_active_vpn_with_state().await;
+        let active_vpn_info = self.nm.get_active_vpn_with_state().await;
         let current_state = self.machine.state.clone();
         let auto_reconnect = self.shared_state.read().await.auto_reconnect;
 
@@ -387,7 +383,7 @@ impl super::VpnSupervisor {
         self.timing.last_disconnect_time = None;
         self.refresh_connections().await;
 
-        let active_vpn_info = nm_get_active_vpn_with_state().await;
+        let active_vpn_info = self.nm.get_active_vpn_with_state().await;
 
         // Force set the state based on what NM reports
         match active_vpn_info {
@@ -528,7 +524,7 @@ impl super::VpnSupervisor {
 
         // STEP 1: ALWAYS check NM for active VPNs first (don't trust our state machine)
         // This catches VPNs that NM still has active even if our state is wrong
-        let all_active = nm_get_all_active_vpns().await;
+        let all_active = self.nm.get_all_active_vpns().await;
         info!(
             "NM reports {} active VPN(s): {:?}",
             all_active.len(),
@@ -546,7 +542,7 @@ impl super::VpnSupervisor {
         for vpn in &all_active {
             if vpn.name != connection_name {
                 info!("Disconnecting VPN before switch: {}", vpn.name);
-                if let Err(e) = nm_disconnect(&vpn.name).await {
+                if let Err(e) = self.nm.disconnect(&vpn.name).await {
                     warn!("Failed to disconnect {}: {}", vpn.name, e);
                 }
             }
@@ -557,7 +553,7 @@ impl super::VpnSupervisor {
             info!("Waiting for VPN disconnection(s) to complete...");
             for attempt in 1..=DISCONNECT_VERIFY_MAX_ATTEMPTS {
                 sleep(Duration::from_millis(DISCONNECT_VERIFY_INTERVAL_MS)).await;
-                let remaining = nm_get_all_active_vpns().await;
+                let remaining = self.nm.get_all_active_vpns().await;
                 let others: Vec<_> = remaining
                     .iter()
                     .filter(|v| v.name != connection_name)
@@ -574,7 +570,7 @@ impl super::VpnSupervisor {
                     // Force cleanup
                     for other in &others {
                         warn!("Forcing disconnect of stuck VPN: {}", other.name);
-                        let _ = nm_disconnect(&other.name).await;
+                        let _ = self.nm.disconnect(&other.name).await;
                     }
                 }
                 debug!(
@@ -584,12 +580,12 @@ impl super::VpnSupervisor {
                 );
             }
 
-            kill_orphan_openvpn_processes().await;
+            self.nm.kill_orphan_openvpn_processes().await;
             sleep(Duration::from_secs(POST_DISCONNECT_SETTLE_SECS)).await;
         }
 
         // Final verification before connect
-        let final_check = nm_get_all_active_vpns().await;
+        let final_check = self.nm.get_all_active_vpns().await;
         let other_vpns: Vec<_> = final_check
             .iter()
             .filter(|v| v.name != connection_name)
@@ -620,13 +616,13 @@ impl super::VpnSupervisor {
                 attempt, MAX_CONNECT_ATTEMPTS, connection_name
             );
 
-            match nm_connect(connection_name).await {
+            match self.nm.connect(connection_name).await {
                 Ok(_) => {
                     // Monitor connection state
                     for _ in 1..=CONNECTION_MONITOR_MAX_ATTEMPTS {
                         sleep(Duration::from_millis(CONNECTION_MONITOR_INTERVAL_MS)).await;
 
-                        match nm_get_vpn_state(connection_name).await {
+                        match self.nm.get_vpn_state(connection_name).await {
                             Some(NmVpnState::Activated) => {
                                 info!("VPN '{}' successfully activated", connection_name);
                                 self.dispatch(Event::NmVpnUp {
@@ -715,7 +711,7 @@ impl super::VpnSupervisor {
 
         self.timing.last_disconnect_time = Some(Instant::now());
 
-        match nm_disconnect(&connection_name).await {
+        match self.nm.disconnect(&connection_name).await {
             Ok(_) => {
                 info!("Disconnected successfully");
 
@@ -1063,7 +1059,7 @@ impl super::VpnSupervisor {
     /// Refresh the list of available VPN connections
     pub(crate) async fn refresh_connections(&mut self) {
         info!("Refreshing VPN connections");
-        let connections = nm_list_vpn_connections().await;
+        let connections = self.nm.list_vpn_connections().await;
         {
             let mut state = self.shared_state.write().await;
             state.connections = connections;
@@ -1120,7 +1116,7 @@ impl super::VpnSupervisor {
                 }
             }
             IpcCommand::List { vpn_type } => {
-                let active = nm_get_all_active_vpns().await;
+                let active = self.nm.get_all_active_vpns().await;
                 let connections = nm_list_vpn_connections_with_types().await;
                 let mut entries = Vec::new();
 

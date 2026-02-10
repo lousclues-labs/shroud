@@ -5,10 +5,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
 
-use crate::nm::{
-    connect as nm_connect, disconnect as nm_disconnect, get_active_vpn as nm_get_active_vpn,
-    list_vpn_connections as nm_list_vpn_connections,
-};
 use crate::state::{Event, TransitionReason, VpnState};
 use crate::tray::VpnCommand;
 
@@ -31,7 +27,7 @@ impl super::VpnSupervisor {
     /// - None if a different VPN is active (user switched manually)
     async fn should_attempt_reconnect(&mut self, target_server: &str) -> Option<bool> {
         // Query NetworkManager for actual state
-        match nm_get_active_vpn().await {
+        match self.nm.get_active_vpn().await {
             Some(active) if active == target_server => {
                 // Already connected to the target VPN!
                 info!(
@@ -114,7 +110,7 @@ impl super::VpnSupervisor {
         }
 
         // Verify the connection still exists in NetworkManager
-        let available_connections = nm_list_vpn_connections().await;
+        let available_connections = self.nm.list_vpn_connections().await;
         if !available_connections.iter().any(|c| c == connection_name) {
             error!(
                 "Cannot reconnect: VPN '{}' no longer exists in NetworkManager",
@@ -201,7 +197,7 @@ impl super::VpnSupervisor {
                     Ok(VpnCommand::Disconnect) => {
                         info!("Disconnect command received during reconnect - cancelling");
                         // Disconnect any partial connection
-                        let _ = nm_disconnect(connection_name).await;
+                        let _ = self.nm.disconnect(connection_name).await;
                         self.timing.last_disconnect_time = Some(Instant::now());
                         self.machine
                             .set_state(VpnState::Disconnected, TransitionReason::UserRequested);
@@ -226,7 +222,7 @@ impl super::VpnSupervisor {
             }
 
             // Attempt connection
-            match nm_connect(connection_name).await {
+            match self.nm.connect(connection_name).await {
                 Ok(_) => {
                     // Check for disconnect command during verify delay
                     let verify_start = Instant::now();
@@ -236,7 +232,7 @@ impl super::VpnSupervisor {
                             info!(
                                 "Disconnect command received during connection verify - cancelling"
                             );
-                            let _ = nm_disconnect(connection_name).await;
+                            let _ = self.nm.disconnect(connection_name).await;
                             self.timing.last_disconnect_time = Some(Instant::now());
                             self.machine
                                 .set_state(VpnState::Disconnected, TransitionReason::UserRequested);
@@ -248,7 +244,7 @@ impl super::VpnSupervisor {
                         sleep(Duration::from_millis(200)).await;
                     }
 
-                    if let Some(active) = nm_get_active_vpn().await {
+                    if let Some(active) = self.nm.get_active_vpn().await {
                         if active == connection_name {
                             info!("Successfully reconnected to {}", connection_name);
                             self.dispatch(Event::NmVpnUp {

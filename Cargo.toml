@@ -1,6 +1,6 @@
 [package]
 name = "shroud"
-version = "1.12.1"
+version = "1.12.2"
 edition = "2021"
 authors = ["loujr"]
 description = "A provider-agnostic VPN connection manager for Linux with kill switch, auto-reconnect, and system tray integration"
@@ -30,6 +30,7 @@ path = "src/main.rs"
 [dependencies]
 # Async runtime
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "process", "signal"] }
+async-trait = "0.1"
 
 # Native KDE/SNI tray support
 ksni = { version = "0.3", features = ["blocking"] }

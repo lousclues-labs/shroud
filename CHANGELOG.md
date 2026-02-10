@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.12.2] - 2026-02-09
+
+### Added
+- **nm**: `NmClient` async trait + `NmCliClient` wrapper for free functions; `MockNmClient` for tests; `async-trait` dependency.
+- **supervisor**: `VpnSupervisor::with_nm` for injection; handlers/reconnect/state_sync now use trait methods.
+- **tests**: behavioral supervisor tests exercising commands/reconnect/state-sync against `MockNmClient` (no NetworkManager/iptables required).
+
+### Changed
+- **exports**: `nm` module re-exports `NmClient`, `NmCliClient`, `NmError`.
+
 ## [1.12.1] - 2026-02-09
 
 ### Changed
