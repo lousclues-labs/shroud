@@ -336,7 +336,7 @@ impl KillSwitch {
     /// Returns [`KillSwitchError::Spawn`] if the iptables/nft binary cannot be executed
     /// (not installed or not in `$PATH`).
     ///
-    /// Returns [`KillSwitchError::ExitStatus`] if iptables/nft exits with a non-zero status
+    /// Returns [`KillSwitchError::Command`] if iptables/nft exits with a non-zero status
     /// (missing `sudo` privileges or conflicting existing chains).
     ///
     /// Returns [`KillSwitchError::Wait`] if the iptables/nft process cannot be awaited to completion.
@@ -978,7 +978,7 @@ impl KillSwitch {
     ///
     /// Returns [`KillSwitchError::Spawn`] if the iptables/nft binary cannot be executed.
     ///
-    /// Returns [`KillSwitchError::ExitStatus`] if iptables/nft exits with a non-zero status
+    /// Returns [`KillSwitchError::Command`] if iptables/nft exits with a non-zero status
     /// while removing rules (e.g., insufficient `sudo` privileges).
     ///
     /// Returns [`KillSwitchError::Wait`] if the iptables/nft process cannot be awaited to completion.
