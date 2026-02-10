@@ -205,8 +205,8 @@ pub fn parse_args_from(argv: &[String]) -> Result<Args, String> {
                 return Ok(args);
             }
             "-V" | "--version" => {
-                println!("shroud {}", env!("CARGO_PKG_VERSION"));
-                std::process::exit(0);
+                args.command = Some(ParsedCommand::Version { check: false });
+                return Ok(args);
             }
             arg if arg.starts_with('-') && !arg.starts_with("--") => {
                 // Handle combined flags like -vvv
@@ -222,8 +222,8 @@ pub fn parse_args_from(argv: &[String]) -> Result<Args, String> {
                             return Ok(args);
                         }
                         'V' => {
-                            println!("shroud {}", env!("CARGO_PKG_VERSION"));
-                            std::process::exit(0);
+                            args.command = Some(ParsedCommand::Version { check: false });
+                            return Ok(args);
                         }
                         _ => return Err(format!("Unknown flag: -{}", c)),
                     }

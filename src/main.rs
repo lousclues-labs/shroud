@@ -46,8 +46,10 @@ mod notifications;
 mod state;
 mod supervisor;
 mod tray;
+mod util;
 
 use log::{error, info};
+use std::process::ExitCode;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 
@@ -118,7 +120,6 @@ async fn run_daemon_mode(args: cli::Args) {
         verbose: args.verbose,
         log_level: args.log_level,
         log_file: args.log_file,
-        ..Default::default()
     };
 
     // Initialize logging
@@ -134,7 +135,7 @@ async fn run_daemon_mode(args: cli::Args) {
         Ok(file) => file,
         Err(msg) => {
             eprintln!("{}", msg);
-            std::process::exit(1);
+            return;
         }
     };
 
@@ -146,10 +147,11 @@ async fn run_daemon_mode(args: cli::Args) {
     // Channels
     let (tx, rx) = mpsc::channel(16); // Tray commands
     let shutdown_tx = tx.clone();
+    let shutdown_tx_clone = shutdown_tx.clone();
 
     ctrlc::set_handler(move || {
         info!("Shutdown signal received");
-        if shutdown_tx.try_send(VpnCommand::Quit).is_err() {
+        if shutdown_tx_clone.try_send(VpnCommand::Quit).is_err() {
             info!("Supervisor not running, performing fallback cleanup");
             let _ = killswitch::cleanup_with_fallback();
             release_instance_lock();
@@ -157,7 +159,7 @@ async fn run_daemon_mode(args: cli::Args) {
             if socket_path.exists() {
                 let _ = std::fs::remove_file(&socket_path);
             }
-            std::process::exit(0);
+            // Let process exit naturally
         }
     })
     .expect("Error setting Ctrl-C handler");
@@ -194,6 +196,7 @@ async fn run_daemon_mode(args: cli::Args) {
     let supervisor_handle = tokio::spawn(supervisor.run());
 
     let tray_service = VpnTray::new(tx);
+    let tray_shutdown_tx = shutdown_tx.clone();
 
     info!("Starting system tray");
     let tray_handle_clone = tray_handle.clone();
@@ -207,33 +210,36 @@ async fn run_daemon_mode(args: cli::Args) {
             }
             Err(e) => {
                 error!("Failed to spawn tray: {}", e);
-                std::process::exit(1);
+                let _ = tray_shutdown_tx.try_send(VpnCommand::Quit);
             }
         }
     });
 
     let _ = supervisor_handle.await;
     info!("Supervisor exited, shutting down");
-    std::process::exit(0);
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> ExitCode {
     // Parse command-line arguments using CLI module
     let args = match cli::args::parse_args() {
         Ok(args) => args,
         Err(e) => {
             eprintln!("Error: {}", e);
-            std::process::exit(1);
+            return ExitCode::from(1);
         }
     };
 
     // Determine mode based on whether a command was provided
     match args.command {
+        Some(cli::args::ParsedCommand::Version { .. }) => {
+            println!("shroud {}", env!("CARGO_PKG_VERSION"));
+            ExitCode::SUCCESS
+        }
         Some(_) => {
             // Client mode: send command to running daemon
             let code = cli::run_client_mode(&args).await;
-            std::process::exit(code);
+            ExitCode::from(code as u8)
         }
         None => {
             // Check for headless mode
@@ -244,16 +250,17 @@ async fn main() {
                     // Load config from system location for headless
                     let config = config::ConfigManager::new().load_validated();
                     match headless::run_headless(config).await {
-                        Ok(()) => std::process::exit(0),
+                        Ok(()) => ExitCode::SUCCESS,
                         Err(e) => {
                             error!("Headless mode failed: {}", e);
-                            std::process::exit(1);
+                            ExitCode::FAILURE
                         }
                     }
                 }
                 mode::RuntimeMode::Desktop => {
                     // Desktop mode: start the tray application
                     run_daemon_mode(args).await;
+                    ExitCode::SUCCESS
                 }
             }
         }

@@ -17,6 +17,17 @@ use std::sync::Mutex;
 /// Maximum log file size before rotation (10 MB)
 const MAX_LOG_SIZE: u64 = 10 * 1024 * 1024;
 
+/// Command-line arguments for logging configuration
+#[derive(Debug, Clone, Default)]
+pub struct Args {
+    /// Verbosity level (0=info, 1=debug, 2+=trace)
+    pub verbose: u8,
+    /// Explicit log level override
+    pub log_level: Option<String>,
+    /// Log to file instead of stderr
+    pub log_file: Option<PathBuf>,
+}
+
 /// Number of rotated log files to keep
 const MAX_LOG_FILES: usize = 3;
 
@@ -25,94 +36,6 @@ static DEBUG_LOGGING_ENABLED: AtomicBool = AtomicBool::new(false);
 
 /// Shared file writer for runtime file logging
 static FILE_WRITER: Mutex<Option<FileWriter>> = Mutex::new(None);
-
-/// Command-line arguments for Shroud
-#[derive(Debug, Clone, Default)]
-#[allow(dead_code)]
-pub struct Args {
-    /// Verbosity level (0=info, 1=debug, 2+=trace)
-    pub verbose: u8,
-    /// Explicit log level override
-    pub log_level: Option<String>,
-    /// Log to file instead of stderr
-    pub log_file: Option<PathBuf>,
-    /// Show help
-    pub help: bool,
-    /// Show version
-    pub version: bool,
-}
-
-/// Parse command-line arguments
-/// Note: This function is replaced by cli::parse_args() but kept for backward compatibility
-#[allow(dead_code)]
-pub fn parse_args() -> Args {
-    let mut args = Args::default();
-    let mut argv = std::env::args().skip(1).peekable();
-
-    while let Some(arg) = argv.next() {
-        match arg.as_str() {
-            "-v" | "--verbose" => args.verbose = args.verbose.saturating_add(1),
-            "-vv" => args.verbose = args.verbose.saturating_add(2),
-            "--log-level" => {
-                args.log_level = argv.next();
-            }
-            "--log-file" => {
-                args.log_file = argv.next().map(PathBuf::from);
-            }
-            "-h" | "--help" => args.help = true,
-            "-V" | "--version" => args.version = true,
-            other => {
-                // Check for combined short flags like -vvv
-                if other.starts_with('-') && !other.starts_with("--") {
-                    for c in other.chars().skip(1) {
-                        if c == 'v' {
-                            args.verbose = args.verbose.saturating_add(1);
-                        }
-                    }
-                } else {
-                    eprintln!("Unknown argument: {}", other);
-                    eprintln!("Try 'shroud --help' for usage information.");
-                    std::process::exit(1);
-                }
-            }
-        }
-    }
-
-    args
-}
-
-/// Print help message
-/// Note: This function is replaced by cli::help::print_main_help() but kept for backward compatibility
-#[allow(dead_code)]
-pub fn print_help() {
-    println!(
-        r#"Shroud - A provider-agnostic VPN connection manager for Linux
-
-USAGE:
-    shroud [OPTIONS]
-
-OPTIONS:
-    -v, --verbose       Increase logging verbosity (use -vv for trace)
-    --log-level LEVEL   Set log level (error, warn, info, debug, trace)
-    --log-file PATH     Write logs to file instead of stderr
-    -h, --help          Print this help message
-    -V, --version       Print version information
-
-ENVIRONMENT:
-    RUST_LOG            Set log level (e.g., RUST_LOG=debug)
-                        Supports module-specific levels:
-                        RUST_LOG=shroud::killswitch=trace,shroud::dbus=debug
-
-EXAMPLES:
-    shroud                          # Normal operation (info level)
-    shroud -v                       # Debug logging to stderr
-    shroud -vv                      # Trace logging to stderr
-    shroud --log-file ~/shroud.log  # Log to file
-    RUST_LOG=debug shroud           # Debug via environment
-
-For more information, visit: https://github.com/loujr/shroud"#
-    );
-}
 
 /// Convert verbosity count to log level
 pub fn verbose_to_level(verbose: u8) -> LevelFilter {
@@ -297,73 +220,31 @@ impl log::Log for ShroudLogger {
     }
 }
 
-/// Simple timestamp without external dependency
+/// Timestamp using libc::localtime_r (thread-safe, local time)
 fn chrono_lite_timestamp() -> String {
+    use std::mem::MaybeUninit;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .as_secs() as libc::time_t;
 
-    let secs = now.as_secs();
-    let millis = now.subsec_millis();
-
-    // Convert to UTC time components
-    let time_secs = secs % 86400;
-    let hours = time_secs / 3600;
-    let minutes = (time_secs % 3600) / 60;
-    let seconds = time_secs % 60;
-
-    // Calculate year/month/day accounting for leap years
-    let mut remaining_days = (secs / 86400) as i64;
-    let mut year = 1970i32;
-
-    loop {
-        let days_in_year = if is_leap_year(year) { 366 } else { 365 };
-        if remaining_days < days_in_year {
-            break;
-        }
-        remaining_days -= days_in_year;
-        year += 1;
-    }
-
-    // Days in each month (adjusted for leap year)
-    let leap = is_leap_year(year);
-    let days_in_months: [i64; 12] = [
-        31,
-        if leap { 29 } else { 28 },
-        31,
-        30,
-        31,
-        30,
-        31,
-        31,
-        30,
-        31,
-        30,
-        31,
-    ];
-
-    let mut month = 1u32;
-    for days_in_month in days_in_months {
-        if remaining_days < days_in_month {
-            break;
-        }
-        remaining_days -= days_in_month;
-        month += 1;
-    }
-
-    let day = remaining_days + 1;
+    let mut tm = MaybeUninit::<libc::tm>::uninit();
+    let tm = unsafe {
+        libc::localtime_r(&now, tm.as_mut_ptr());
+        tm.assume_init()
+    };
 
     format!(
-        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
-        year, month, day, hours, minutes, seconds, millis
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        tm.tm_year + 1900,
+        tm.tm_mon + 1,
+        tm.tm_mday,
+        tm.tm_hour,
+        tm.tm_min,
+        tm.tm_sec,
     )
-}
-
-/// Check if a year is a leap year
-fn is_leap_year(year: i32) -> bool {
-    (year % 4 == 0 && year % 100 != 0) || (year % 400 == 0)
 }
 
 /// Initialize logging with the given configuration
@@ -531,10 +412,8 @@ mod tests {
     #[test]
     fn test_timestamp_format() {
         let ts = chrono_lite_timestamp();
-        // Should look like 2026-02-07T12:34:56.789Z
-        assert!(ts.contains('T'));
-        assert!(ts.ends_with('Z'));
-        assert!(ts.len() >= 23);
+        // Should look like 2026-02-09 12:34:56
+        assert!(ts.len() >= 19);
     }
 
     #[test]
@@ -546,30 +425,6 @@ mod tests {
             "Timestamp doesn't start with expected year: {}",
             ts
         );
-    }
-
-    // ----- Leap year -----
-
-    #[test]
-    fn test_leap_year_known() {
-        assert!(is_leap_year(2000));
-        assert!(is_leap_year(2024));
-        assert!(!is_leap_year(1900));
-        assert!(!is_leap_year(2023));
-        assert!(is_leap_year(2400));
-    }
-
-    #[test]
-    fn test_leap_year_divisible_by_4() {
-        assert!(is_leap_year(2020));
-        assert!(is_leap_year(2016));
-    }
-
-    #[test]
-    fn test_leap_year_century_not_400() {
-        assert!(!is_leap_year(1900));
-        assert!(!is_leap_year(2100));
-        assert!(!is_leap_year(2200));
     }
 
     // ----- parse_level extended -----
@@ -617,8 +472,6 @@ mod tests {
         assert_eq!(args.verbose, 0);
         assert!(args.log_level.is_none());
         assert!(args.log_file.is_none());
-        assert!(!args.help);
-        assert!(!args.version);
     }
 
     #[test]
@@ -627,8 +480,6 @@ mod tests {
             verbose: 2,
             log_level: Some("debug".into()),
             log_file: Some(PathBuf::from("/tmp/test.log")),
-            help: false,
-            version: true,
         };
         let cloned = args.clone();
         assert_eq!(cloned.verbose, 2);

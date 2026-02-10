@@ -17,17 +17,17 @@
 //! - `state_sync.rs` - State synchronization utilities
 //! - `reconnect.rs` - Reconnection logic with exponential backoff
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub mod command_validation;
 mod config_store;
-#[allow(dead_code)]
+#[cfg(test)]
 pub mod connection_stats;
 mod event_loop;
 mod handlers;
 mod reconnect;
-#[allow(dead_code)]
+#[cfg(test)]
 pub mod reconnect_logic;
-#[allow(dead_code)]
+#[cfg(test)]
 pub mod response_builder;
 mod state_sync;
 mod tray_bridge;
@@ -92,8 +92,8 @@ pub(crate) struct SwitchContext {
     pub(crate) completed_time: Option<Instant>,
 }
 
-#[allow(dead_code)]
 impl SwitchContext {
+    #[allow(dead_code)]
     pub(crate) fn start(&mut self, from: &str, to: &str) {
         self.in_progress = true;
         self.from = Some(from.to_string());
@@ -101,11 +101,13 @@ impl SwitchContext {
         self.completed_time = None;
     }
 
+    #[allow(dead_code)]
     pub(crate) fn complete(&mut self) {
         self.in_progress = false;
         self.completed_time = Some(Instant::now());
     }
 
+    #[allow(dead_code)]
     pub(crate) fn reset(&mut self) {
         *self = Self::default();
     }

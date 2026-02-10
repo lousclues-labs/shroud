@@ -26,8 +26,6 @@
 //! - `tunnel`: Allow IPv6 only via VPN tunnel interfaces
 //! - `off`: No special IPv6 handling (legacy)
 
-#![allow(dead_code)]
-
 use log::{debug, info, warn};
 use std::net::IpAddr;
 use std::process::Stdio;
@@ -89,6 +87,7 @@ const DOH_PROVIDER_IPS: &[&str] = &[
 pub enum KillSwitchError {
     /// iptables is not installed or not in PATH
     #[error("iptables is not available. Install with: sudo apt install iptables")]
+    #[allow(dead_code)]
     NotFound,
 
     /// Permission denied - need elevated privileges
@@ -116,6 +115,7 @@ pub enum KillSwitchError {
 
 /// Kill switch status
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum KillSwitchStatus {
     /// Kill switch is disabled (normal traffic allowed)
     Disabled,
@@ -132,6 +132,7 @@ pub struct KillSwitch {
     /// Current VPN server IP (allowed through even when kill switch is on)
     vpn_server_ip: Option<IpAddr>,
     /// VPN tunnel interface name (e.g., "tun0")
+    #[allow(dead_code)]
     vpn_interface: Option<String>,
     /// DNS leak protection mode
     dns_mode: DnsMode,
@@ -202,6 +203,7 @@ impl KillSwitch {
     }
 
     /// Check if iptables is available (version check doesn't need sudo)
+    #[allow(dead_code)]
     pub async fn is_available() -> bool {
         Command::new(iptables())
             .arg("--version")
@@ -217,6 +219,7 @@ impl KillSwitch {
     ///
     /// Uses sudo -n to avoid password prompts. Returns false if sudo
     /// access is not configured (NOPASSWD not set for iptables).
+    #[allow(dead_code)]
     pub async fn has_permission() -> bool {
         // Try to list filter table with sudo -n (non-interactive)
         Command::new("sudo")
@@ -230,6 +233,7 @@ impl KillSwitch {
     }
 
     /// Get current status
+    #[allow(dead_code)]
     pub fn status(&self) -> KillSwitchStatus {
         if self.enabled {
             KillSwitchStatus::Active
@@ -244,11 +248,13 @@ impl KillSwitch {
     }
 
     /// Set the VPN server IP to allow through the firewall
+    #[allow(dead_code)]
     pub fn set_vpn_server(&mut self, ip: Option<IpAddr>) {
         self.vpn_server_ip = ip;
     }
 
     /// Set the VPN tunnel interface
+    #[allow(dead_code)]
     pub fn set_vpn_interface(&mut self, iface: Option<String>) {
         self.vpn_interface = iface;
     }
@@ -515,6 +521,7 @@ impl KillSwitch {
     }
 
     /// Build a preview of the kill switch rules script (for diagnostics/tests)
+    #[allow(dead_code)]
     pub fn build_rules_preview(&self, vpn_ips: &[IpAddr]) -> String {
         self.build_complete_script(vpn_ips)
     }
@@ -1115,6 +1122,7 @@ impl KillSwitch {
     }
 
     /// Update the kill switch rules (e.g., when VPN interface changes)
+    #[allow(dead_code)]
     pub async fn update(&mut self) -> Result<(), KillSwitchError> {
         if !self.enabled {
             return Ok(());
@@ -1405,6 +1413,7 @@ table inet {table} {{
     }
 
     /// Detect the VPN tunnel interface from the system
+    #[allow(dead_code)]
     pub async fn detect_vpn_interface() -> Option<String> {
         let output = Command::new("ip")
             .args(["link", "show"])
@@ -1430,6 +1439,7 @@ table inet {table} {{
     }
 
     /// Get the VPN server IP from the active OpenVPN connection
+    #[allow(dead_code)]
     pub async fn detect_vpn_server_ip() -> Option<IpAddr> {
         // Try to get the remote IP from the tun interface route
         let output = Command::new("ip")

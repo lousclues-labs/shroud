@@ -5,11 +5,11 @@
 
 pub mod boot;
 pub mod cleanup;
-#[allow(dead_code)]
+#[cfg(test)]
 pub mod cleanup_logic;
 pub mod firewall;
 pub mod paths;
-#[allow(dead_code)]
+#[cfg(test)]
 pub mod rules;
 pub mod sudo_check;
 pub mod verify;

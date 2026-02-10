@@ -8,9 +8,10 @@
 //! to the supervisor via a channel. Responses are sent back through the socket.
 
 use log::{debug, error, info, warn};
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 
 use super::protocol::{socket_path, IpcCommand, IpcResponse};
 use thiserror::Error;
@@ -31,6 +32,9 @@ pub enum ServerError {
     #[error("Failed to remove stale socket: {0}")]
     Cleanup(#[source] std::io::Error),
 }
+
+const MAX_CONCURRENT_CONNECTIONS: usize = 10;
+const MAX_COMMANDS_PER_CONNECTION: usize = 100;
 
 /// Unix socket server for IPC communication.
 pub struct IpcServer {
@@ -92,14 +96,25 @@ impl IpcServer {
 
         info!("IPC server listening on {:?}", path);
 
+        let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
+
         loop {
             match listener.accept().await {
                 Ok((stream, _addr)) => {
                     let tx = self.command_tx.clone();
+                    let sem = semaphore.clone();
+                    let permit = match sem.try_acquire_owned() {
+                        Ok(p) => p,
+                        Err(_) => {
+                            warn!("Too many concurrent IPC connections, rejecting");
+                            continue;
+                        }
+                    };
                     tokio::spawn(async move {
                         if let Err(e) = Self::handle_connection(stream, tx).await {
                             warn!("Client connection error: {}", e);
                         }
+                        drop(permit);
                     });
                 }
                 Err(e) => {
@@ -117,8 +132,20 @@ impl IpcServer {
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
         let mut line = String::new();
+        let mut command_count = 0u32;
 
         while reader.read_line(&mut line).await? > 0 {
+            command_count += 1;
+            if command_count > MAX_COMMANDS_PER_CONNECTION as u32 {
+                let response = IpcResponse::Error {
+                    message: "Too many commands on this connection".to_string(),
+                };
+                let response_json = serde_json::to_string(&response)?;
+                writer.write_all(response_json.as_bytes()).await?;
+                writer.write_all(b"\n").await?;
+                writer.flush().await?;
+                break;
+            }
             if line.len() > 64 * 1024 {
                 let response = IpcResponse::Error {
                     message: "Request too large".to_string(),

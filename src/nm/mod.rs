@@ -7,7 +7,6 @@ pub mod client;
 pub mod connections;
 #[cfg(test)]
 pub mod mock;
-#[allow(dead_code)]
 pub mod parsing;
 pub mod traits;
 

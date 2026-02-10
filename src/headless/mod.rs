@@ -7,10 +7,10 @@
 //! - Auto-connect on startup
 //! - Infinite reconnection attempts
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub mod config;
 pub mod runtime;
-#[allow(dead_code)]
+#[cfg(test)]
 pub mod runtime_helpers;
 pub mod systemd;
 

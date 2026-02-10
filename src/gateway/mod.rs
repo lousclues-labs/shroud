@@ -12,12 +12,12 @@ pub mod detect;
 pub mod firewall;
 pub mod forwarding;
 pub mod nat;
-#[allow(dead_code)]
+#[cfg(test)]
 pub mod rule_builder;
 pub mod status;
-#[allow(dead_code)]
+#[cfg(test)]
 pub mod status_fmt;
-#[allow(dead_code)]
+#[cfg(test)]
 pub mod validation;
 
 #[cfg(test)]

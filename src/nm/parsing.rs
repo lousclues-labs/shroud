@@ -6,6 +6,7 @@
 use crate::state::{ActiveVpnInfo, NmVpnState};
 
 /// Parse VPN connections from nmcli `-t -f NAME,TYPE,STATE con show --active` output.
+#[allow(dead_code)]
 pub fn parse_active_vpns(stdout: &str) -> Vec<ActiveVpnInfo> {
     let mut vpns = Vec::new();
 
@@ -37,6 +38,7 @@ pub fn parse_active_vpns(stdout: &str) -> Vec<ActiveVpnInfo> {
 }
 
 /// Parse VPN connection names from nmcli `-t -f NAME,TYPE con show` output.
+#[allow(dead_code)]
 pub fn parse_vpn_connections(stdout: &str) -> Vec<String> {
     let mut connections = Vec::new();
     for line in stdout.lines() {
@@ -49,6 +51,7 @@ pub fn parse_vpn_connections(stdout: &str) -> Vec<String> {
 }
 
 /// Parse VPN UUID from nmcli `-t -f UUID,NAME,TYPE con show` output.
+#[allow(dead_code)]
 pub fn parse_vpn_uuid(stdout: &str, connection_name: &str) -> Option<String> {
     for line in stdout.lines() {
         let parts: Vec<&str> = line.rsplitn(3, ':').collect();
@@ -63,6 +66,7 @@ pub fn parse_vpn_uuid(stdout: &str, connection_name: &str) -> Option<String> {
 }
 
 /// Select the best active VPN by priority: activated > activating > deactivating.
+#[allow(dead_code)]
 pub fn select_best_vpn(vpns: &[ActiveVpnInfo]) -> Option<&ActiveVpnInfo> {
     vpns.iter()
         .find(|v| v.state == NmVpnState::Activated)
@@ -71,6 +75,7 @@ pub fn select_best_vpn(vpns: &[ActiveVpnInfo]) -> Option<&ActiveVpnInfo> {
 }
 
 /// Classify a NM connection type string as VPN or not.
+#[allow(dead_code)]
 pub fn is_vpn_connection_type(conn_type: &str) -> bool {
     conn_type == "vpn" || conn_type == "wireguard"
 }

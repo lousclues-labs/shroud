@@ -9,6 +9,7 @@ use crate::state::{Event, TransitionReason, VpnState};
 use crate::tray::VpnCommand;
 
 use super::{CONNECTION_VERIFY_DELAY_SECS, RECONNECT_BASE_DELAY_SECS, RECONNECT_MAX_DELAY_SECS};
+use crate::util::backoff::linear_backoff_secs;
 
 /// Debounce period between reconnect attempts (seconds)
 /// Prevents rapid reconnect thrashing
@@ -181,10 +182,9 @@ impl super::VpnSupervisor {
             self.tray.update(&self.shared_state);
 
             // Calculate backoff delay - but check for cancellation during the wait
-            let delay = std::cmp::min(
-                RECONNECT_BASE_DELAY_SECS * (attempt as u64),
-                RECONNECT_MAX_DELAY_SECS,
-            );
+            let delay =
+                linear_backoff_secs(RECONNECT_BASE_DELAY_SECS, RECONNECT_MAX_DELAY_SECS, attempt)
+                    .as_secs();
 
             // Wait with periodic checks for user commands
             let check_interval = Duration::from_millis(500);

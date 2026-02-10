@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.12.3] - 2026-02-09
+
+### Fixed
+- **daemon/exit**: replaced `process::exit` in daemon paths with graceful returns; `main` returns `ExitCode`; version flag parsed into `ParsedCommand::Version`.
+- **logging**: removed legacy CLI parser/helpers; timestamp uses `libc::localtime_r` (no hand-rolled calendars).
+- **IPC**: added connection semaphore and per-connection command cap.
+- **headless**: shared linear backoff helper; shutdown now awaits aborted tasks with timeout.
+- **dead code**: gated unused modules under `cfg(test)`; removed module-level `#[allow(dead_code)]`; removed backup `killswitch/firewall.rs.bak`.
+
+### Added
+- **util**: `backoff` helper for linear backoff + jitter.
+
 ## [1.12.2] - 2026-02-09
 
 ### Added

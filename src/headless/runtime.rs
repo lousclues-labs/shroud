@@ -193,7 +193,7 @@ async fn auto_connect_nmcli(
     server: &str,
     config: &crate::config::HeadlessConfig,
 ) -> Result<(), String> {
-    use rand::Rng;
+    use crate::util::backoff::{jitter_millis, linear_backoff_secs};
     use std::time::Duration;
 
     let max_attempts = if config.max_reconnect_attempts == 0 {
@@ -242,10 +242,9 @@ async fn auto_connect_nmcli(
         }
 
         if attempt < max_attempts {
-            // Calculate delay with exponential backoff and jitter
-            let delay = std::cmp::min(base_delay * 2u32.saturating_pow(attempt - 1), max_delay);
-            let jitter = rand::rng().random_range(0..1000);
-            let total_delay = delay + Duration::from_millis(jitter);
+            // Calculate delay with linear backoff and jitter
+            let delay = linear_backoff_secs(base_delay.as_secs(), max_delay.as_secs(), attempt);
+            let total_delay = delay + jitter_millis(1000);
 
             info!("Retrying in {:?}", total_delay);
             tokio::time::sleep(total_delay).await;
@@ -284,6 +283,16 @@ async fn shutdown(
     ipc_handle.abort();
     dbus_handle.abort();
     supervisor_handle.abort();
+
+    // Await task termination with timeout
+    let timeout = tokio::time::Duration::from_secs(5);
+    let _ = tokio::time::timeout(timeout, async {
+        let _ = watchdog_handle.await;
+        let _ = ipc_handle.await;
+        let _ = dbus_handle.await;
+        let _ = supervisor_handle.await;
+    })
+    .await;
 
     // Clean up IPC socket
     let socket_path = crate::ipc::protocol::socket_path();
