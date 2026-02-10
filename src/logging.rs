@@ -258,34 +258,6 @@ pub fn is_debug_logging_enabled() -> bool {
     DEBUG_LOGGING_ENABLED.load(Ordering::Relaxed)
 }
 
-/// Simple timestamp using libc::localtime_r
-#[allow(dead_code)]
-fn chrono_lite_timestamp() -> String {
-    use std::mem::MaybeUninit;
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as libc::time_t;
-
-    let mut tm = MaybeUninit::<libc::tm>::uninit();
-    let tm = unsafe {
-        libc::localtime_r(&now, tm.as_mut_ptr());
-        tm.assume_init()
-    };
-
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        tm.tm_year + 1900,
-        tm.tm_mon + 1,
-        tm.tm_mday,
-        tm.tm_hour,
-        tm.tm_min,
-        tm.tm_sec,
-    )
-}
-
 /// Open log file in default viewer
 pub fn open_log_file() -> Result<(), String> {
     let path = default_log_path();
@@ -340,12 +312,6 @@ mod tests {
     fn test_get_log_file_path() {
         let path = default_log_path();
         assert!(path.to_string_lossy().ends_with(".log"));
-    }
-
-    #[test]
-    fn test_timestamp_format() {
-        let ts = chrono_lite_timestamp();
-        assert!(ts.len() >= 19);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 use std::time::Instant;
 use tokio::time::Duration;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, instrument, warn};
 
 use crate::state::{Event, VpnState};
 use crate::tray::VpnCommand;
@@ -26,6 +26,7 @@ pub const WAKE_EVENT_DELAY_MS: u64 = 2000;
 
 impl super::VpnSupervisor {
     /// Run the supervisor's main loop
+    #[instrument(skip(self))]
     pub async fn run(mut self) {
         info!("VPN supervisor starting with formal state machine");
 

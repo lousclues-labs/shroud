@@ -193,6 +193,7 @@ impl super::VpnSupervisor {
     }
 
     /// Initial sync with NetworkManager on startup
+    #[instrument(skip(self))]
     pub(crate) async fn initial_nm_sync(&mut self) {
         // First, check for and clean up multiple simultaneous VPNs
         let all_vpns = self.nm.get_all_active_vpns().await;
@@ -493,6 +494,7 @@ impl super::VpnSupervisor {
     }
 
     /// Handle user request to connect to a server
+    #[instrument(skip(self), fields(connection = %connection_name))]
     pub(crate) async fn handle_connect(&mut self, connection_name: &str) {
         info!("Connect requested: {}", connection_name);
 
@@ -696,6 +698,7 @@ impl super::VpnSupervisor {
     }
 
     /// Handle user request to disconnect
+    #[instrument(skip(self))]
     pub(crate) async fn handle_disconnect(&mut self) {
         info!("Disconnect requested");
 
@@ -1010,6 +1013,7 @@ impl super::VpnSupervisor {
     }
 
     /// Toggle debug logging to file
+    #[instrument(skip(self))]
     pub(crate) async fn toggle_debug_logging(&mut self) {
         let currently_enabled = logging::is_debug_logging_enabled();
 
@@ -1058,6 +1062,7 @@ impl super::VpnSupervisor {
     }
 
     /// Refresh the list of available VPN connections
+    #[instrument(skip(self))]
     pub(crate) async fn refresh_connections(&mut self) {
         info!("Refreshing VPN connections");
         let connections = self.nm.list_vpn_connections().await;

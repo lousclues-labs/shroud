@@ -38,10 +38,9 @@ ksni = { version = "0.3", features = ["blocking"] }
 # Structured logging with RUST_LOG environment variable support
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "ansi"] }
-tracing-appender = "0.2"
 
 # Desktop notifications via D-Bus
-notify-rust = "4"
+notify-rust = { version = "4", default-features = false, features = ["dbus"] }
 
 # D-Bus for NetworkManager event subscription
 zbus = "5"

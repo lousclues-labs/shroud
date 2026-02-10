@@ -7,7 +7,7 @@
 //! - Desktop notifications
 //! - NetworkManager (source of truth)
 
-use tracing::{debug, info};
+use tracing::{debug, info, instrument};
 
 use crate::state::{Event, TransitionReason, VpnState};
 
@@ -36,6 +36,7 @@ impl super::VpnSupervisor {
     }
 
     /// Sync the shared state with current machine state (for async contexts)
+    #[instrument(skip(self))]
     pub(crate) async fn sync_shared_state(&self) {
         let mut state = self.shared_state.write().await;
         state.state = self.machine.state.clone();
@@ -48,6 +49,7 @@ impl super::VpnSupervisor {
     /// our internal state to match, handling all edge cases.
     ///
     /// Returns true if state was corrected, false if already in sync.
+    #[instrument(skip(self))]
     pub(crate) async fn sync_state_from_nm(&mut self) -> bool {
         let active = self.nm.get_active_vpn().await;
         let auto_reconnect = self.shared_state.read().await.auto_reconnect;

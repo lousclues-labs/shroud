@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **logging**: replaced `log` macros crate-wide with `tracing` macros; stderr filter uses runtime toggle; docs updated.
 - **supervisor**: health checker now respects `health_degraded_threshold_ms` and `health_check_endpoints` from config (previously only interval was wired).
 - **deps**: added `tracing`/`tracing-subscriber`, removed `log`/`env_logger`.
+- **deps**: removed unused `tracing-appender` (Principle V — complexity is debt).
 
 ### Fixed
 - **ipc**: handshake now validates protocol version and surfaces clear VersionMismatch errors.

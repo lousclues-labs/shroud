@@ -618,6 +618,14 @@ mod tests {
     #[test]
     fn test_command_descriptions() {
         assert_eq!(
+            IpcCommand::Hello {
+                version: PROTOCOL_VERSION
+            }
+            .description(),
+            "handshake"
+        );
+        assert_eq!(IpcCommand::Version.description(), "daemon version");
+        assert_eq!(
             IpcCommand::Connect { name: "x".into() }.description(),
             "connect to VPN"
         );
