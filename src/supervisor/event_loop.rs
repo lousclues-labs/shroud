@@ -45,14 +45,20 @@ impl super::VpnSupervisor {
         self.initial_nm_sync().await;
         self.timing.last_poll_time = Instant::now();
 
-        // Only restore kill switch if VPN is already connected (avoid blocking VPN connection on startup)
-        if self.config_store.config.kill_switch_enabled {
+        // Kill switch reconciliation after NM sync:
+        // - If rules already exist (detected by sync_state in constructor), ensure shared state matches
+        // - If config says enabled + VPN is connected but no rules, re-enable them
+        // - If config says enabled but VPN not connected, defer until VPN connects
+        if self.kill_switch.is_enabled() {
+            info!("Kill switch rules detected on startup — preserving");
+            let mut state = self.shared_state.write().await;
+            state.kill_switch = true;
+        } else if self.config_store.config.kill_switch_enabled {
             if matches!(self.machine.state, VpnState::Connected { .. }) {
                 info!("Restoring kill switch from config (VPN already connected)");
                 if let Err(e) = self.kill_switch.enable().await {
                     warn!("Failed to enable kill switch on startup: {}", e);
                 } else {
-                    // Update shared state after successfully enabling
                     let mut state = self.shared_state.write().await;
                     state.kill_switch = true;
                 }

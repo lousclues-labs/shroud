@@ -12,6 +12,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.13.1] - 2026-02-10
+
+### Fixed
+- **killswitch**: kill switch rules are no longer torn down during `handle_restart()`. Previously, restarting the daemon disabled iptables rules before spawning the new instance; the new daemon started in `Disconnected` state and the kill switch restore check fired before `initial_nm_sync()` could detect the still-active VPN, leaving traffic unprotected. Rules now survive across restarts and the new instance adopts them via `sync_state()` in the constructor.
+- **supervisor**: startup kill switch reconciliation now checks whether iptables rules already exist (restart / crash-recovery case) before deciding whether to re-enable. Three-branch logic: (1) rules present → preserve and sync shared state, (2) config enabled + VPN connected but no rules → re-enable, (3) config enabled but VPN not connected → defer until `handle_connect`.
+
 ## [1.13.0] - 2026-02-10
 
 ### Added

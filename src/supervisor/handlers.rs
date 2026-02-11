@@ -755,12 +755,11 @@ impl super::VpnSupervisor {
         info!("Restart requested");
         self.tray.notify("VPN Manager", "Restarting...");
 
-        if self.kill_switch.is_enabled() {
-            info!("Disabling kill switch before restart");
-            if let Err(e) = self.kill_switch.disable().await {
-                error!("Failed to disable kill switch: {}", e);
-            }
-        }
+        // NOTE: We intentionally do NOT disable the kill switch here.
+        // The new daemon instance will detect existing iptables rules via
+        // sync_state() in its constructor and adopt them. Tearing down rules
+        // creates a window where traffic leaks unprotected — a security hole
+        // if the new instance takes time to start or fails to restore them.
 
         let exe_path = match resolve_restart_path() {
             Ok(path) => path,
