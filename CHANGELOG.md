@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.15.5] - 2026-02-13
+
+### Fixed
+- **restart**: `resolve_restart_path()` now handles the Linux `(deleted)` suffix from `/proc/self/exe` by checking if a replacement binary exists at the original path. Fixes daemon restart failure during `shroud update` when the running binary is replaced.
+- **update**: `scripts/update.sh` uses `quit` + direct start instead of IPC `restart` command. The old daemon's restart logic cannot be relied on across version boundaries.
+- **update**: binary replacement changed from `rm + cp` to atomic `cp .shroud.new + mv`, avoiding the `(deleted)` state and ETXTBSY errors.
+
 ## [1.15.4] - 2026-02-13
 
 ### Fixed
