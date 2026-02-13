@@ -196,7 +196,10 @@ impl super::VpnSupervisor {
     /// Initial sync with NetworkManager on startup
     #[instrument(skip(self))]
     pub(crate) async fn initial_nm_sync(&mut self) {
-        // First, check for and clean up multiple simultaneous VPNs
+        // First, check for and clean up multiple simultaneous VPNs.
+        // NOTE: Keeps the first VPN reported by NM (arbitrary nmcli order),
+        // unlike the D-Bus handler which keeps the newest (most recently activated).
+        // Multi-VPN-at-boot is rare; this gives deterministic cleanup.
         let all_vpns = self.nm.get_all_active_vpns().await;
         if all_vpns.len() > 1 {
             warn!(
@@ -526,6 +529,11 @@ impl super::VpnSupervisor {
         // NOTE: We do NOT disable kill switch during VPN switch anymore.
         // The kill switch rules already whitelist all VPN server IPs from NetworkManager,
         // so VPN connections should work even with kill switch enabled.
+        // NOTE: enable() calls detect_all_vpn_server_ips() which reads server IPs
+        // from NM profiles. If the user just imported a config and NM hasn't fully
+        // registered the profile, the server IP may not be detected — the connection
+        // would be blocked by the kill switch. This is an unlikely edge case
+        // (import + connect in rapid succession).
         if self.config_store.config.kill_switch_enabled && !self.kill_switch.is_enabled() {
             info!("Pre-enabling kill switch before connection");
             if let Err(e) = self.kill_switch.enable().await {

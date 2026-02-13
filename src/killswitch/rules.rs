@@ -227,6 +227,9 @@ pub fn classify_ip(ip: &IpAddr) -> IpClass {
         IpAddr::V6(v6) => {
             if v6.is_loopback() {
                 IpClass::Loopback
+            } else if (v6.segments()[0] & 0xffc0) == 0xfe80 {
+                // fe80::/10 — IPv6 link-local
+                IpClass::LinkLocal
             } else {
                 IpClass::Public
             }

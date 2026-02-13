@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.16.7] - 2026-02-13
+
+### Fixed
+- **killswitch**: `classify_ip()` now correctly classifies IPv6 link-local addresses (`fe80::/10`) as `IpClass::LinkLocal` instead of `Public`. Uses manual segment check `(segments[0] & 0xffc0) == 0xfe80` since `Ipv6Addr::is_unicast_link_local()` is unstable in std.
+- **dbus**: D-Bus monitor reconnect loop now resets backoff attempt counter on `Ok(())` (clean stream exit). Previously the counter only incremented, so after hours of intermittent reconnects the backoff saturated at 60s permanently. On a systemd D-Bus restart, the monitor would wait the full 60s before reconnecting. Both `main.rs` and `headless/runtime.rs` fixed.
+- **supervisor**: `initial_nm_sync()` multi-VPN cleanup documented — keeps first VPN reported by NM (arbitrary nmcli order), not newest. The D-Bus handler uses "newest wins" policy. Both are valid but were undocumented as different.
+- **supervisor**: `handle_connect()` kill switch pre-enable documented — notes that `enable()` reads server IPs from NM profiles, so a just-imported config where NM hasn't fully registered the profile may not have its server IP whitelisted.
+
+---
+
 ## [1.16.6] - 2026-02-13
 
 ### Fixed

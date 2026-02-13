@@ -86,6 +86,7 @@ pub async fn run_headless(config: Config) -> Result<(), Box<dyn std::error::Erro
             match monitor.run().await {
                 Ok(()) => {
                     warn!("D-Bus monitor stream ended. Reconnecting...");
+                    attempt = 0; // Clean exit — connection was healthy, reset backoff
                 }
                 Err(e) => {
                     error!("D-Bus monitor failed: {}. Retrying...", e);

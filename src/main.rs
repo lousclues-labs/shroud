@@ -185,6 +185,7 @@ async fn run_daemon_mode(args: cli::Args) {
             match monitor.run().await {
                 Ok(()) => {
                     warn!("D-Bus monitor stream ended. Reconnecting...");
+                    attempt = 0; // Clean exit — connection was healthy, reset backoff
                 }
                 Err(e) => {
                     error!("D-Bus monitor failed: {}. Retrying...", e);
