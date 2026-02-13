@@ -162,112 +162,6 @@ impl Default for KillSwitchConfig {
     }
 }
 
-/// VPN Gateway configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(default)]
-pub struct GatewayConfig {
-    /// Enable gateway mode
-    pub enabled: bool,
-    /// Fail startup if gateway cannot be enabled
-    pub required: bool,
-    /// LAN interface to accept traffic from
-    pub lan_interface: Option<String>,
-    /// Which clients can use the gateway
-    pub allowed_clients: AllowedClients,
-    /// Enable kill switch for forwarded traffic
-    pub kill_switch_forwarding: bool,
-    /// Persist IP forwarding setting after exit
-    pub persist_ip_forward: bool,
-    /// Enable IPv6 forwarding
-    pub enable_ipv6: bool,
-}
-
-impl Default for GatewayConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            required: false,
-            lan_interface: None,
-            allowed_clients: AllowedClients::All,
-            kill_switch_forwarding: true,
-            persist_ip_forward: false,
-            enable_ipv6: false,
-        }
-    }
-}
-
-/// Allowed clients for gateway mode
-#[derive(Debug, Clone, PartialEq, Default)]
-pub enum AllowedClients {
-    /// Allow all clients on LAN
-    #[default]
-    All,
-    /// Allow specific CIDR range
-    Cidr(String),
-    /// Allow specific IP addresses
-    List(Vec<String>),
-}
-
-impl Serialize for AllowedClients {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            AllowedClients::All => serializer.serialize_str("all"),
-            AllowedClients::Cidr(cidr) => serializer.serialize_str(cidr),
-            AllowedClients::List(list) => list.serialize(serializer),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for AllowedClients {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use serde::de::{self, Visitor};
-
-        struct AllowedClientsVisitor;
-
-        impl<'de> Visitor<'de> for AllowedClientsVisitor {
-            type Value = AllowedClients;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("\"all\", a CIDR string, or an array of IP addresses")
-            }
-
-            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                if v == "all" {
-                    Ok(AllowedClients::All)
-                } else if v.contains('/') {
-                    // Looks like CIDR notation
-                    Ok(AllowedClients::Cidr(v.to_string()))
-                } else {
-                    // Single IP as a list of one
-                    Ok(AllowedClients::List(vec![v.to_string()]))
-                }
-            }
-
-            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
-            where
-                A: de::SeqAccess<'de>,
-            {
-                let mut list = Vec::new();
-                while let Some(item) = seq.next_element()? {
-                    list.push(item);
-                }
-                Ok(AllowedClients::List(list))
-            }
-        }
-
-        deserializer.deserialize_any(AllowedClientsVisitor)
-    }
-}
-
 /// Application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -305,9 +199,6 @@ pub struct Config {
     /// Kill switch specific configuration
     #[serde(default)]
     pub killswitch: KillSwitchConfig,
-    /// Gateway configuration
-    #[serde(default)]
-    pub gateway: GatewayConfig,
     /// Notification settings
     #[serde(default)]
     pub notifications: crate::notifications::manager::NotificationConfig,
@@ -334,7 +225,6 @@ impl Default for Config {
             ipv6_mode: Ipv6Mode::default(),
             headless: HeadlessConfig::default(),
             killswitch: KillSwitchConfig::default(),
-            gateway: GatewayConfig::default(),
             notifications: Default::default(),
         }
     }
@@ -718,7 +608,6 @@ mod tests {
             ipv6_mode: Ipv6Mode::Tunnel,
             headless: HeadlessConfig::default(),
             killswitch: KillSwitchConfig::default(),
-            gateway: GatewayConfig::default(),
             notifications: Default::default(),
         };
 
@@ -901,7 +790,6 @@ mod tests {
             ipv6_mode: Ipv6Mode::Tunnel,
             headless: HeadlessConfig::default(),
             killswitch: KillSwitchConfig::default(),
-            gateway: GatewayConfig::default(),
             notifications: Default::default(),
         };
 
@@ -989,114 +877,6 @@ kill_switch_enabled = true
         let metadata = std::fs::metadata(&config_path).unwrap();
         let mode = metadata.permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "Config file should have 600 permissions");
-    }
-
-    // AllowedClients tests - TOML requires values to be in a table,
-    // so we test through GatewayConfig
-
-    #[test]
-    fn test_allowed_clients_default_is_all() {
-        assert_eq!(AllowedClients::default(), AllowedClients::All);
-    }
-
-    // GatewayConfig with AllowedClients integration tests
-    #[test]
-    fn test_gateway_config_serialize_all() {
-        let config = GatewayConfig {
-            allowed_clients: AllowedClients::All,
-            ..Default::default()
-        };
-        let toml = toml::to_string(&config).expect("should serialize");
-        assert!(toml.contains(r#"allowed_clients = "all""#));
-    }
-
-    #[test]
-    fn test_gateway_config_serialize_cidr() {
-        let config = GatewayConfig {
-            allowed_clients: AllowedClients::Cidr("192.168.1.0/24".to_string()),
-            ..Default::default()
-        };
-        let toml = toml::to_string(&config).expect("should serialize");
-        assert!(toml.contains(r#"allowed_clients = "192.168.1.0/24""#));
-    }
-
-    #[test]
-    fn test_gateway_config_serialize_list() {
-        let config = GatewayConfig {
-            allowed_clients: AllowedClients::List(vec![
-                "192.168.1.50".to_string(),
-                "192.168.1.51".to_string(),
-            ]),
-            ..Default::default()
-        };
-        let toml = toml::to_string(&config).expect("should serialize");
-        assert!(toml.contains("192.168.1.50"));
-        assert!(toml.contains("192.168.1.51"));
-    }
-
-    #[test]
-    fn test_gateway_config_with_allowed_clients_all() {
-        let toml = r#"
-            enabled = true
-            allowed_clients = "all"
-            kill_switch_forwarding = true
-            enable_ipv6 = false
-        "#;
-
-        let config: GatewayConfig = toml::from_str(toml).expect("should parse");
-        assert_eq!(config.allowed_clients, AllowedClients::All);
-        assert!(config.enabled);
-    }
-
-    #[test]
-    fn test_gateway_config_with_allowed_clients_cidr() {
-        let toml = r#"
-            enabled = true
-            allowed_clients = "192.168.1.0/24"
-            kill_switch_forwarding = true
-            enable_ipv6 = false
-        "#;
-
-        let config: GatewayConfig = toml::from_str(toml).expect("should parse");
-        assert_eq!(
-            config.allowed_clients,
-            AllowedClients::Cidr("192.168.1.0/24".to_string())
-        );
-    }
-
-    #[test]
-    fn test_gateway_config_with_allowed_clients_list() {
-        let toml = r#"
-            enabled = true
-            allowed_clients = ["192.168.1.50", "192.168.1.51"]
-            kill_switch_forwarding = true
-            enable_ipv6 = false
-        "#;
-
-        let config: GatewayConfig = toml::from_str(toml).expect("should parse");
-        assert_eq!(
-            config.allowed_clients,
-            AllowedClients::List(vec!["192.168.1.50".to_string(), "192.168.1.51".to_string()])
-        );
-    }
-
-    #[test]
-    fn test_gateway_config_roundtrip() {
-        let original = GatewayConfig {
-            enabled: true,
-            required: false,
-            lan_interface: Some("eth0".to_string()),
-            allowed_clients: AllowedClients::Cidr("10.0.0.0/8".to_string()),
-            kill_switch_forwarding: true,
-            persist_ip_forward: false,
-            enable_ipv6: false,
-        };
-
-        let serialized = toml::to_string(&original).expect("serialize");
-        let deserialized: GatewayConfig = toml::from_str(&serialized).expect("deserialize");
-
-        assert_eq!(original.enabled, deserialized.enabled);
-        assert_eq!(original.allowed_clients, deserialized.allowed_clients);
     }
 
     // --- DnsMode Display ---
@@ -1229,23 +1009,6 @@ kill_switch_enabled = true
         assert!(!parsed.allow_lan);
     }
 
-    // --- AllowedClients single-IP edge case ---
-
-    #[test]
-    fn test_allowed_clients_single_ip_string() {
-        let toml = r#"
-            enabled = false
-            allowed_clients = "192.168.1.50"
-            kill_switch_forwarding = true
-            enable_ipv6 = false
-        "#;
-        let config: GatewayConfig = toml::from_str(toml).expect("should parse");
-        assert_eq!(
-            config.allowed_clients,
-            AllowedClients::List(vec!["192.168.1.50".to_string()])
-        );
-    }
-
     // --- ConfigError Display ---
 
     #[test]
@@ -1261,19 +1024,5 @@ kill_switch_enabled = true
 
         let err = ConfigError::Rename(std::io::Error::other("rename fail"));
         assert!(err.to_string().contains("atomic rename"));
-    }
-
-    // --- GatewayConfig defaults ---
-
-    #[test]
-    fn test_gateway_config_default() {
-        let gc = GatewayConfig::default();
-        assert!(!gc.enabled);
-        assert!(!gc.required);
-        assert!(gc.lan_interface.is_none());
-        assert_eq!(gc.allowed_clients, AllowedClients::All);
-        assert!(gc.kill_switch_forwarding);
-        assert!(!gc.persist_ip_forward);
-        assert!(!gc.enable_ipv6);
     }
 }

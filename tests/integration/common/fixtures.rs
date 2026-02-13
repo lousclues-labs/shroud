@@ -45,44 +45,6 @@ reconnect_delay_secs = 10
 "#
 }
 
-/// Config with gateway enabled
-pub fn gateway_config_toml() -> &'static str {
-    r#"
-version = 1
-auto_reconnect = true
-
-[gateway]
-enabled = true
-allowed_clients = "all"
-"#
-}
-
-/// Config with specific allowed clients CIDR
-pub fn gateway_cidr_config_toml() -> &'static str {
-    r#"
-version = 1
-
-[gateway]
-enabled = true
-
-[gateway.allowed_clients]
-cidr = "192.168.1.0/24"
-"#
-}
-
-/// Config with allowed clients list
-pub fn gateway_list_config_toml() -> &'static str {
-    r#"
-version = 1
-
-[gateway]
-enabled = true
-
-[gateway.allowed_clients]
-list = ["10.0.0.1", "10.0.0.2", "10.0.0.3"]
-"#
-}
-
 /// Invalid TOML content
 pub fn invalid_config_toml() -> &'static str {
     "this is {{ not valid toml {{"

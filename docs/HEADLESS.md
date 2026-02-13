@@ -196,7 +196,6 @@ shroud list                # Available VPNs
 shroud ks status           # Kill switch status
 shroud ks on               # Enable kill switch
 shroud ks off              # Disable kill switch
-shroud gateway on          # Enable gateway mode
 shroud doctor              # Run diagnostics
 shroud debug on            # Enable debug logging
 shroud debug tail          # Follow logs

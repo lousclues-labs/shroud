@@ -26,7 +26,6 @@ The things that make Shroud useful:
 |-----|----------------|
 | [Kill Switch](KILLSWITCH.md) | Block all traffic when VPN drops |
 | [Headless Mode](HEADLESS.md) | Running on servers without a GUI |
-| [Gateway Mode](GATEWAY.md) | Route your whole network through VPN |
 
 ---
 

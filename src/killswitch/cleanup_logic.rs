@@ -4,12 +4,7 @@
 //! actually running any commands.
 
 /// Chain names managed by Shroud.
-pub const SHROUD_CHAINS: &[&str] = &[
-    "SHROUD_KILLSWITCH",
-    "SHROUD_BOOT_KS",
-    "SHROUD_GATEWAY",
-    "SHROUD_GATEWAY_KS",
-];
+pub const SHROUD_CHAINS: &[&str] = &["SHROUD_KILLSWITCH", "SHROUD_BOOT_KS"];
 
 /// Build the iptables arguments to remove a jump rule from a parent chain.
 pub fn build_remove_jump(parent: &str, target: &str) -> Vec<String> {
@@ -158,13 +153,11 @@ Chain SHROUD_KILLSWITCH (1 references)
         let output = "\
 -A OUTPUT -j ACCEPT
 -A OUTPUT -j SHROUD_KILLSWITCH
--A FORWARD -j SHROUD_GATEWAY
 -A INPUT -j ACCEPT
 ";
         let rules = find_shroud_rules(output);
-        assert_eq!(rules.len(), 2);
+        assert_eq!(rules.len(), 1);
         assert!(rules[0].contains("SHROUD_KILLSWITCH"));
-        assert!(rules[1].contains("SHROUD_GATEWAY"));
     }
 
     #[test]
@@ -187,7 +180,6 @@ Chain SHROUD_KILLSWITCH (1 references)
         assert!(text.contains("iptables -D OUTPUT -j SHROUD_KILLSWITCH"));
         assert!(text.contains("ip6tables -D OUTPUT -j SHROUD_KILLSWITCH"));
         assert!(text.contains("SHROUD_BOOT_KS"));
-        assert!(text.contains("SHROUD_GATEWAY"));
     }
 
     #[test]

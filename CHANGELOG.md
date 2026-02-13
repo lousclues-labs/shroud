@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.14.0] - 2026-02-13
+
+### Removed
+- **gateway**: removed gateway mode entirely — violated three core principles: "Wrap, don't replace" (gateway replaced router routing), "Single purpose" (expanded scope to entire LAN), and "Leave no trace" (stopping gateway broke other devices' connectivity). Deleted `src/gateway/`, all CLI commands (`gateway`/`gw`), `[gateway]` config section (`GatewayConfig`, `AllowedClients`), `SHROUD_GATEWAY`/`SHROUD_GATEWAY_KS` chain cleanup, gateway help text, gateway tests, and `docs/GATEWAY.md`.
+
+### Changed
+- **deps**: `notify-rust` now uses `dbus` backend (no macOS-only transitive deps).
+
+### Preserved
+- Kill switch (host-level INPUT/OUTPUT), headless mode, auto-reconnect, health monitoring, state machine, tray, import, IPC, autostart, D-Bus, notifications — all untouched.
+
 ## [1.13.1] - 2026-02-10
 
 ### Fixed

@@ -93,13 +93,6 @@ src/
 ├── dbus/                # System events
 │   └── monitor.rs       # NmMonitor, D-Bus signals
 │
-├── gateway/             # VPN router mode
-│   ├── detect.rs        # Interface detection
-│   ├── firewall.rs      # NAT/forwarding rules
-│   ├── forwarding.rs    # IP forwarding
-│   ├── nat.rs           # MASQUERADE rules
-│   └── status.rs        # Gateway status
-│
 ├── headless/            # Server mode
 │   ├── runtime.rs       # Headless runtime
 │   └── systemd.rs       # Systemd integration

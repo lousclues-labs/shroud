@@ -171,36 +171,6 @@ shroud import ~/configs/ --dry-run            # Preview only
 
 ---
 
-## Gateway Commands
-
-### `shroud gateway on` / `shroud gw on`
-
-Enable VPN gateway mode.
-
-```bash
-shroud gateway on
-```
-
-### `shroud gateway off` / `shroud gw off`
-
-Disable gateway mode.
-
-```bash
-shroud gateway off
-```
-
-### `shroud gateway status` / `shroud gw status`
-
-Check gateway status.
-
-```bash
-shroud gateway status
-```
-
-See [Gateway Mode](GATEWAY.md) for details.
-
----
-
 ## Autostart Commands
 
 ### `shroud autostart on` / `shroud startup on`
@@ -392,7 +362,6 @@ Short names for common commands:
 | `ls` | `list` |
 | `ks` | `killswitch` |
 | `ar` | `auto-reconnect` |
-| `gw` | `gateway` |
 | `startup` | `autostart` |
 | `stop` | `quit` |
 | `exit` | `quit` |

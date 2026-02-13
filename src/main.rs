@@ -33,7 +33,7 @@ mod cli;
 mod config;
 mod daemon;
 mod dbus;
-mod gateway;
+
 mod headless;
 mod health;
 mod import;

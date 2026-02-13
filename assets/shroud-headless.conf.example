@@ -46,38 +46,3 @@ persist_kill_switch = false
 [killswitch]
 # Allow LAN traffic when kill switch is active.
 allow_lan = true
-
-# =============================================================================
-# GATEWAY MODE SETTINGS (Optional)
-# =============================================================================
-
-[gateway]
-# Enable VPN gateway mode.
-# This allows other devices to route their traffic through this machine's VPN.
-enabled = false
-
-# Fail startup if gateway cannot be enabled.
-required = false
-
-# LAN interface to accept traffic from.
-# If not set, auto-detected (usually eth0, enp3s0, etc.)
-# lan_interface = "eth0"
-
-# Which clients can use the gateway.
-# Options:
-#   "all"                    - Any device on the LAN
-#   "192.168.1.0/24"        - Specific subnet
-#   ["192.168.1.50", "..."] - Specific IPs
-allowed_clients = "all"
-
-# Enable kill switch for forwarded traffic.
-# If VPN drops, all forwarded traffic is blocked.
-kill_switch_forwarding = true
-
-# Persist IP forwarding after Shroud exits.
-# If false, restores original sysctl value.
-persist_ip_forward = false
-
-# Enable IPv6 forwarding.
-# Disabled by default to prevent IPv6 leaks.
-enable_ipv6 = false

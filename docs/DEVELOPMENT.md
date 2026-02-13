@@ -174,7 +174,6 @@ src/
 ├── config/              # Configuration management
 ├── daemon/              # Lock file, single instance
 ├── dbus/                # D-Bus/NetworkManager monitoring
-├── gateway/             # VPN gateway mode
 ├── headless/            # Headless/server mode
 ├── health/              # Connection health checks
 ├── import/              # VPN config import

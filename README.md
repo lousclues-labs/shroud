@@ -80,9 +80,6 @@ Read the full [Principles](docs/PRINCIPLES.md) if you want to understand what we
 │   ✓ Headless mode for servers                                    │
 │     └─ No GUI? No problem. Systemd integration included.         │
 │                                                                  │
-│   ✓ Gateway mode for your network                                │
-│     └─ Route your whole house through the VPN.                   │
-│                                                                  │
 │   ✓ Single binary, single purpose                                │
 │     └─ One executable. CLI and daemon in one.                    │
 │                                                                  │
@@ -192,7 +189,6 @@ shroud import ~/vpn.conf --connect             # Import and connect immediately
 | [Configuration](docs/CONFIGURATION.md) | The config file explained |
 | [Kill Switch](docs/KILLSWITCH.md) | How the firewall rules work |
 | [Headless Mode](docs/HEADLESS.md) | Running on servers |
-| [Gateway Mode](docs/GATEWAY.md) | VPN for your whole network |
 | [Troubleshooting](docs/TROUBLESHOOTING.md) | When things go wrong |
 | [Architecture](docs/ARCHITECTURE.md) | How it's built |
 | [Principles](docs/PRINCIPLES.md) | Why it's built this way |

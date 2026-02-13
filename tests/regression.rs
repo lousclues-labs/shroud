@@ -156,21 +156,6 @@ fn regression_dns_mode_exists() {
     );
 }
 
-/// Verify gateway config has safety defaults
-#[test]
-fn regression_gateway_defaults_safe() {
-    let content = include_str!("../src/config/settings.rs");
-    assert!(
-        content.contains("GatewayConfig"),
-        "GatewayConfig must exist"
-    );
-    // Gateway should be disabled by default
-    assert!(
-        content.contains("enabled: false") || content.contains("enabled = false"),
-        "Gateway should be disabled by default"
-    );
-}
-
 /// Verify VPN state types implement required traits
 #[test]
 fn regression_vpn_state_has_traits() {

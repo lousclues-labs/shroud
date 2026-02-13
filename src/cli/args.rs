@@ -120,23 +120,10 @@ pub enum ParsedCommand {
         verbose: bool,
     },
 
-    // Gateway
-    Gateway {
-        action: GatewayAction,
-    },
-
     // Help
     Help {
         command: Option<String>,
     },
-}
-
-/// Action for gateway commands
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GatewayAction {
-    On,
-    Off,
-    Status,
 }
 
 /// Action for toggle commands (killswitch, auto-reconnect)
@@ -312,10 +299,6 @@ fn parse_command(argv: &[String]) -> Result<ParsedCommand, String> {
             }
             Ok(ParsedCommand::VerifyKillswitch { json, verbose })
         }
-        "gateway" | "gw" => {
-            let action = parse_gateway_action(argv.get(1).map(|s| s.as_str()))?;
-            Ok(ParsedCommand::Gateway { action })
-        }
         "version" => {
             let check = argv.get(1).map(|s| s.as_str()) == Some("--check");
             Ok(ParsedCommand::Version { check })
@@ -364,19 +347,6 @@ fn parse_debug_args(argv: &[String]) -> Result<ParsedCommand, String> {
     };
 
     Ok(ParsedCommand::Debug { action })
-}
-
-/// Parse a gateway action argument
-fn parse_gateway_action(arg: Option<&str>) -> Result<GatewayAction, String> {
-    match arg {
-        Some("on") | Some("enable") => Ok(GatewayAction::On),
-        Some("off") | Some("disable") => Ok(GatewayAction::Off),
-        None | Some("status") | Some("show") => Ok(GatewayAction::Status),
-        Some(other) => Err(format!(
-            "Unknown gateway action: '{}'. Use on/off/status",
-            other
-        )),
-    }
 }
 
 fn parse_list_flags(argv: &[String]) -> Result<ParsedCommand, String> {

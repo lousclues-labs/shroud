@@ -80,69 +80,6 @@ fn test_config_load_headless_section() {
     );
 }
 
-/// Test: Gateway config section parses correctly
-#[test]
-fn test_config_load_gateway_section() {
-    init_test_logging();
-
-    let file = create_temp_config(gateway_config_toml());
-    let content = std::fs::read_to_string(file.path()).unwrap();
-
-    let parsed: toml::Value = toml::from_str(&content).expect("Should parse");
-
-    let gateway = parsed.get("gateway").expect("Should have gateway section");
-    assert_eq!(gateway.get("enabled").and_then(|v| v.as_bool()), Some(true));
-    assert_eq!(
-        gateway.get("allowed_clients").and_then(|v| v.as_str()),
-        Some("all")
-    );
-}
-
-/// Test: Gateway with CIDR allowed_clients
-#[test]
-fn test_config_gateway_cidr() {
-    init_test_logging();
-
-    let file = create_temp_config(gateway_cidr_config_toml());
-    let content = std::fs::read_to_string(file.path()).unwrap();
-
-    let parsed: toml::Value = toml::from_str(&content).expect("Should parse");
-
-    let gateway = parsed.get("gateway").expect("Should have gateway section");
-    let allowed = gateway
-        .get("allowed_clients")
-        .expect("Should have allowed_clients");
-    assert_eq!(
-        allowed.get("cidr").and_then(|v| v.as_str()),
-        Some("192.168.1.0/24")
-    );
-}
-
-/// Test: Gateway with list of allowed_clients
-#[test]
-fn test_config_gateway_list() {
-    init_test_logging();
-
-    let file = create_temp_config(gateway_list_config_toml());
-    let content = std::fs::read_to_string(file.path()).unwrap();
-
-    let parsed: toml::Value = toml::from_str(&content).expect("Should parse");
-
-    let gateway = parsed.get("gateway").expect("Should have gateway section");
-    let allowed = gateway
-        .get("allowed_clients")
-        .expect("Should have allowed_clients");
-    let list = allowed
-        .get("list")
-        .and_then(|v| v.as_array())
-        .expect("Should be array");
-
-    assert_eq!(list.len(), 3);
-    assert_eq!(list[0].as_str(), Some("10.0.0.1"));
-    assert_eq!(list[1].as_str(), Some("10.0.0.2"));
-    assert_eq!(list[2].as_str(), Some("10.0.0.3"));
-}
-
 /// Test: Invalid TOML produces parse error
 #[test]
 fn test_config_invalid_toml() {

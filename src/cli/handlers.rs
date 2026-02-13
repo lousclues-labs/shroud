@@ -5,7 +5,7 @@
 
 use tracing::{error, info};
 
-use super::args::{Args, DebugAction, GatewayAction, ParsedCommand, ToggleAction};
+use super::args::{Args, DebugAction, ParsedCommand, ToggleAction};
 use super::help;
 use super::import as import_command;
 use crate::ipc::client::{send_command, ClientError};
@@ -47,9 +47,6 @@ pub async fn run_client_mode(args: &Args) -> i32 {
             let json_flag = *json || args.json_output;
             return handle_verify_killswitch_command(json_flag, *verbose || args.verbose >= 2)
                 .await;
-        }
-        ParsedCommand::Gateway { action } => {
-            return handle_gateway_command(*action).await;
         }
         ParsedCommand::Import { options } => {
             let mut merged = options.clone();
@@ -266,7 +263,6 @@ fn args_to_command(cmd: &ParsedCommand) -> Option<IpcCommand> {
         ParsedCommand::Update => None,
         ParsedCommand::Doctor => None,
         ParsedCommand::VerifyKillswitch { .. } => None,
-        ParsedCommand::Gateway { .. } => None,
         ParsedCommand::Import { .. } => None,
 
         ParsedCommand::Help { .. } => None, // Handled locally
@@ -475,85 +471,6 @@ fn print_human_verification_report(report: &verify::VerificationReport, verbose:
 
     if chain_missing && jump_missing {
         println!("\n💡 Tip: Kill switch appears OFF. Enable it with: shroud killswitch on");
-    }
-}
-
-/// Handle gateway commands.
-async fn handle_gateway_command(action: GatewayAction) -> i32 {
-    use crate::config::ConfigManager;
-    use crate::gateway;
-    use crate::gateway::status::GatewayStatus;
-
-    match action {
-        GatewayAction::On => {
-            // Load config
-            let config = ConfigManager::new().load_validated();
-
-            // Check if VPN is connected
-            let vpn_interface = gateway::detect::detect_vpn_interface();
-            if vpn_interface.is_none() {
-                eprintln!("Error: VPN not connected. Connect to VPN first, then enable gateway.");
-                eprintln!();
-                eprintln!("  shroud connect <server-name>");
-                eprintln!("  shroud gateway on");
-                return 1;
-            }
-
-            println!("Enabling VPN gateway...");
-
-            match gateway::enable(&config.gateway).await {
-                Ok(()) => {
-                    println!();
-                    println!("✓ Gateway enabled");
-                    println!();
-
-                    let status = GatewayStatus::collect();
-                    if let Some(ref lan) = status.lan_interface {
-                        if let Some(ref ip) = status.lan_ip {
-                            println!("  LAN interface: {} ({})", lan, ip);
-                        }
-                    }
-                    if let Some(ref vpn) = status.vpn_interface {
-                        if let Some(ref ip) = status.vpn_ip {
-                            println!("  VPN interface: {} ({})", vpn, ip);
-                        }
-                    }
-                    println!();
-                    println!("Clients can now route traffic through this gateway.");
-                    println!("Set their default gateway to this machine's LAN IP.");
-
-                    0
-                }
-                Err(e) => {
-                    eprintln!("Error: Failed to enable gateway: {}", e);
-                    1
-                }
-            }
-        }
-        GatewayAction::Off => {
-            if !gateway::is_enabled() {
-                println!("Gateway is not enabled.");
-                return 0;
-            }
-
-            println!("Disabling VPN gateway...");
-
-            match gateway::disable().await {
-                Ok(()) => {
-                    println!("✓ Gateway disabled");
-                    0
-                }
-                Err(e) => {
-                    eprintln!("Error: Failed to disable gateway: {}", e);
-                    1
-                }
-            }
-        }
-        GatewayAction::Status => {
-            let status = GatewayStatus::collect();
-            println!("{}", status);
-            0
-        }
     }
 }
 
@@ -1262,10 +1179,6 @@ mod tests {
             assert!(args_to_command(&ParsedCommand::Version { check: false }).is_none());
             assert!(args_to_command(&ParsedCommand::Update).is_none());
             assert!(args_to_command(&ParsedCommand::Doctor).is_none());
-            assert!(args_to_command(&ParsedCommand::Gateway {
-                action: GatewayAction::Status
-            })
-            .is_none());
             assert!(args_to_command(&ParsedCommand::Help { command: None }).is_none());
         }
     }

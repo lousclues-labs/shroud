@@ -7,8 +7,6 @@ pub fn cleanup_iptables() {
     let chains = [
         "SHROUD_KILLSWITCH",
         "SHROUD_BOOT_KS",
-        "SHROUD_GATEWAY",
-        "SHROUD_GATEWAY_KS",
     ];
 
     for chain in &chains {

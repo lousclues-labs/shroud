@@ -124,18 +124,6 @@ shroud killswitch status
 shroud killswitch disable
 ```
 
-### Gateway Mode
-```bash
-# Enable
-sudo shroud gateway enable
-
-# Check status
-shroud gateway status
-
-# Disable
-sudo shroud gateway disable
-```
-
 ## Why No E2E Tests?
 
 Previously, Shroud had end-to-end tests that spawned the actual binary. These were

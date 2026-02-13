@@ -32,7 +32,6 @@ COMMANDS:
     killswitch           Manage kill switch (on/off/toggle/status)
     auto-reconnect       Manage auto-reconnect (on/off/toggle/status)
     autostart            Manage autostart on login (on/off/toggle/status)
-    gateway              Manage VPN gateway mode (on/off/status)
     cleanup              Remove old configurations and stale files
     debug                Manage debug logging (on/off/log-path/tail/dump)
     ping                 Check if daemon is running
@@ -57,8 +56,6 @@ EXAMPLES:
     shroud debug tail               Follow the debug log file
     shroud autostart on             Enable autostart on login
     shroud autostart status         Check autostart status
-    shroud gateway on               Enable VPN gateway mode
-    shroud gateway status           Show gateway status
     shroud --headless               Run in headless server mode
     shroud cleanup                  Remove old systemd service and stale files
     shroud reload                   Reload configuration from disk
@@ -70,7 +67,6 @@ ALIASES:
     ls                   Alias for 'list'
     ks                   Alias for 'killswitch'
     ar                   Alias for 'auto-reconnect'
-    gw                   Alias for 'gateway'
     startup              Alias for 'autostart'
     stop, exit           Aliases for 'quit'
 
@@ -333,44 +329,6 @@ EXAMPLES:
     shroud verify-killswitch
     shroud verify-ks --json
     shroud verify-ks -v"#
-        ),
-
-        "gateway" | "gw" => println!(
-            r#"Manage VPN gateway mode
-
-USAGE:
-    shroud gateway <COMMAND>
-
-COMMANDS:
-    on       Enable gateway mode (route LAN traffic through VPN)
-    off      Disable gateway mode
-    status   Show gateway status and configuration
-
-DESCRIPTION:
-    Gateway mode allows other devices on your network to route their
-    traffic through this machine's VPN tunnel.
-
-REQUIREMENTS:
-    - VPN must be connected before enabling gateway
-    - Run as root or with sudo
-    - Clients must set this machine as their default gateway
-
-EXAMPLES:
-    shroud connect my-vpn    # Connect to VPN first
-    shroud gateway on        # Enable gateway
-    shroud gateway status    # Check status
-    shroud gateway off       # Disable when done
-
-CONFIGURATION:
-    Gateway settings in config.toml:
-    
-    [gateway]
-    enabled = false              # Auto-enable on startup
-    lan_interface = "eth0"       # LAN interface (auto-detected if omitted)
-    allowed_clients = "all"      # Or specific subnet/IPs
-    kill_switch_forwarding = true # Block forwarded traffic if VPN drops
-
-For more: https://github.com/loujr/shroud/blob/main/docs/GATEWAY.md"#
         ),
 
         "debug" => println!(

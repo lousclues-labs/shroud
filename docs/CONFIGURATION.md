@@ -29,14 +29,6 @@ require_kill_switch = true
 persist_kill_switch = false
 max_reconnect_attempts = 0
 reconnect_delay_secs = 5
-
-[gateway]
-enabled = false
-required = false
-allowed_clients = "all"
-kill_switch_forwarding = true
-persist_ip_forward = false
-enable_ipv6 = false
 ```
 
 Most people won't need to change anything. But if you do, here's what everything means.
@@ -229,32 +221,6 @@ reconnect_delay_secs = 5
 
 ---
 
-## Gateway Options
-
-For VPN gateway/router mode. See [Gateway Mode](GATEWAY.md).
-
-### `[gateway]` Section
-
-```toml
-[gateway]
-enabled = true
-allowed_clients = "all"
-kill_switch_forwarding = true
-persist_ip_forward = false
-enable_ipv6 = false
-```
-
-| Option | Type | Default | What It Does |
-|--------|------|---------|--------------|
-| `enabled` | bool | `false` | Enable gateway on startup |
-| `required` | bool | `false` | Fail if gateway can't enable |
-| `allowed_clients` | string | `"all"` | Who can use the gateway |
-| `kill_switch_forwarding` | bool | `true` | Block forwarded traffic if VPN drops |
-| `persist_ip_forward` | bool | `false` | Keep forwarding after exit |
-| `enable_ipv6` | bool | `false` | Forward IPv6 (risky) |
-
----
-
 ## Config Location
 
 | Mode | Path |
@@ -341,15 +307,6 @@ require_kill_switch = true
 persist_kill_switch = false
 max_reconnect_attempts = 0
 reconnect_delay_secs = 5
-
-[gateway]
-# Gateway disabled
-enabled = false
-required = false
-allowed_clients = "all"
-kill_switch_forwarding = true
-persist_ip_forward = false
-enable_ipv6 = false
 ```
 
 ---
