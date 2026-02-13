@@ -12,6 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.16.1] - 2026-02-13
+
+### Fixed
+- **nm**: consolidated `nmcli_command()` into a single function in `nm/mod.rs`. Eliminates divergent copies in `client.rs` and `connections.rs` that could drift independently.
+- **nm**: `connections.rs` now has 30-second timeout protection on all nmcli calls, matching `client.rs`. Previously `list_vpn_connections_with_types()` and `get_vpn_type()` could hang indefinitely.
+- **nm**: fixed `parse_vpn_uuid()` in `nm/parsing.rs` for VPN names containing colons (same fix as `client.rs` from v1.16.0).
+- **logging**: log file creation uses `OpenOptionsExt::mode(0o600)` directly instead of post-creation `chmod`. Eliminates TOCTOU window where log files were briefly world-readable during creation and rotation.
+- **import**: OpenVPN validator no longer accepts `<connection>` tag as substitute for `remote` directive. Prevents validation pass on malformed configs with no server address.
+
 ## [1.16.0] - 2026-02-13
 
 ### Fixed

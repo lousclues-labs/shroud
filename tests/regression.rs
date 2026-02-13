@@ -82,10 +82,11 @@ fn regression_ipc_socket_cleanup() {
 /// Verify SHROUD_NMCLI environment variable support
 #[test]
 fn regression_nmcli_env_override() {
-    let content = include_str!("../src/nm/client.rs");
+    // nmcli_command() is centralized in nm/mod.rs
+    let content = include_str!("../src/nm/mod.rs");
     assert!(
         content.contains("SHROUD_NMCLI"),
-        "nm client must support SHROUD_NMCLI env var for testing"
+        "nm module must support SHROUD_NMCLI env var for testing"
     );
 }
 
