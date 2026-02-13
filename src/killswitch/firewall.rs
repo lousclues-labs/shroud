@@ -1399,14 +1399,12 @@ table inet {table} {{
             }
         }
 
-        rules.push_str(
-            r#"
-        # === LOCAL NETWORK ===
-        ip daddr 192.168.0.0/16 accept
-        ip daddr 10.0.0.0/8 accept
-        ip daddr 172.16.0.0/12 accept
-"#,
-        );
+        // === LOCAL NETWORK (auto-detected subnets) ===
+        let lan_subnets = crate::killswitch::rules::detect_local_subnets();
+        rules.push_str("\n        # === LOCAL NETWORK ===\n");
+        for subnet in &lan_subnets {
+            rules.push_str(&format!("        ip daddr {} accept\n", subnet));
+        }
 
         rules.push_str(
             r#"
@@ -2093,9 +2091,15 @@ mod nft_tests {
     fn test_nft_ruleset_local_network() {
         let ks = KillSwitch::new();
         let rules = ks.build_nft_ruleset(&[]);
-        assert!(rules.contains("192.168.0.0/16"));
-        assert!(rules.contains("10.0.0.0/8"));
-        assert!(rules.contains("172.16.0.0/12"));
+        // LAN rules now use auto-detected subnets (or RFC1918 fallback)
+        assert!(
+            rules.contains("ip daddr")
+                && (rules.contains("192.168.")
+                    || rules.contains("10.0.")
+                    || rules.contains("172.16.")
+                    || rules.contains("169.254.")),
+            "NFT ruleset should contain LAN subnet accept rules"
+        );
     }
 
     #[test]

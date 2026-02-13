@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.15.1] - 2026-02-13
+
+### Fixed
+- **security**: `handle_disconnect()` no longer persists `kill_switch_enabled = false` to config — kill switch is suspended for the session only and restores on next VPN connect (SHROUD-VULN-015).
+- **security**: `resolve_restart_path()` removes `$PATH` fallback, verifies ELF headers, and warns on inode mismatch with running binary (SHROUD-VULN-008).
+- **health**: `check()` returns `HealthResult::Suspended` instead of `Healthy` during suspension — callers leave state unchanged instead of falsely affirming health (SHROUD-VULN-017).
+- **health**: `suspend()` no longer resets failure counters — preserved for post-wake detection.
+- **health**: ureq agent disables redirect following (`max_redirects(0)`) and adds 5s connect timeout (SHROUD-VULN-013).
+- **killswitch**: nftables backend now uses `detect_local_subnets()` instead of hardcoded RFC1918 ranges, matching the iptables backend (SHROUD-VULN-016).
+
+### Added
+- **config**: `Config::validate()` now enforces bounds on `health_check_interval_secs` (0 or 10–300), `health_degraded_threshold_ms` (100–30000), `max_reconnect_attempts` (≤100), and `health_check_endpoints` (≤10, HTTPS-only, ≤256 chars each).
+- **config**: 8 new config validation unit tests.
+- **docs**: expanded `SECURITY.md` mitigations list with all v1.15.x hardening.
+
 ## [1.15.0] - 2026-02-13
 
 ### Added

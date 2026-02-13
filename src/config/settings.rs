@@ -245,6 +245,59 @@ impl Config {
             validate_vpn_name(server)
                 .map_err(|e| format!("Invalid last_server in config: {}", e))?;
         }
+
+        // Health check interval bounds
+        if self.health_check_interval_secs > 0 && self.health_check_interval_secs < 10 {
+            return Err(format!(
+                "health_check_interval_secs must be 0 (disabled) or >= 10, got {}",
+                self.health_check_interval_secs
+            ));
+        }
+        if self.health_check_interval_secs > 300 {
+            return Err(format!(
+                "health_check_interval_secs must be <= 300, got {}",
+                self.health_check_interval_secs
+            ));
+        }
+
+        // Health degraded threshold bounds
+        if self.health_degraded_threshold_ms < 100 || self.health_degraded_threshold_ms > 30000 {
+            return Err(format!(
+                "health_degraded_threshold_ms must be between 100 and 30000, got {}",
+                self.health_degraded_threshold_ms
+            ));
+        }
+
+        // Max reconnect attempts
+        if self.max_reconnect_attempts > 100 {
+            return Err(format!(
+                "max_reconnect_attempts must be <= 100, got {}",
+                self.max_reconnect_attempts
+            ));
+        }
+
+        // Health check endpoints validation
+        if self.health_check_endpoints.len() > 10 {
+            return Err(format!(
+                "health_check_endpoints must have <= 10 entries, got {}",
+                self.health_check_endpoints.len()
+            ));
+        }
+        for (i, endpoint) in self.health_check_endpoints.iter().enumerate() {
+            if endpoint.len() > 256 {
+                return Err(format!(
+                    "health_check_endpoints[{}] exceeds 256 characters",
+                    i
+                ));
+            }
+            if !endpoint.starts_with("https://") {
+                return Err(format!(
+                    "health_check_endpoints[{}] must use https:// scheme: {}",
+                    i, endpoint
+                ));
+            }
+        }
+
         Ok(())
     }
 }
@@ -1035,5 +1088,67 @@ kill_switch_enabled = true
 
         let err = ConfigError::Rename(std::io::Error::other("rename fail"));
         assert!(err.to_string().contains("atomic rename"));
+    }
+
+    // --- Config validation ---
+
+    #[test]
+    fn test_validate_health_interval_too_low() {
+        let mut config = Config::default();
+        config.health_check_interval_secs = 5;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_health_interval_zero_ok() {
+        let mut config = Config::default();
+        config.health_check_interval_secs = 0;
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_health_interval_too_high() {
+        let mut config = Config::default();
+        config.health_check_interval_secs = 999;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_health_endpoint_http_rejected() {
+        let mut config = Config::default();
+        config.health_check_endpoints = vec!["http://evil.com".to_string()];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_health_endpoint_https_ok() {
+        let mut config = Config::default();
+        config.health_check_endpoints = vec!["https://1.1.1.1/cdn-cgi/trace".to_string()];
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_health_endpoints_too_many() {
+        let mut config = Config::default();
+        config.health_check_endpoints = (0..11).map(|i| format!("https://ep{}.com", i)).collect();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_reconnect_attempts_too_high() {
+        let mut config = Config::default();
+        config.max_reconnect_attempts = 200;
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_degraded_threshold_bounds() {
+        let mut config = Config::default();
+        config.health_degraded_threshold_ms = 50;
+        assert!(config.validate().is_err());
+        config.health_degraded_threshold_ms = 50000;
+        assert!(config.validate().is_err());
+        config.health_degraded_threshold_ms = 5000;
+        assert!(config.validate().is_ok());
     }
 }

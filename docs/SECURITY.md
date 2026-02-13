@@ -162,11 +162,18 @@ Shroud's job is to be the armor around your VPN. Protecting against local malwar
 ### Mitigations in place
 
 - IPC commands are logged with the peer PID and source identification
-- Security-critical config changes via file reload are refused
-- The socket is created with 0600 permissions and symlink protection
+- Security-critical config changes via file reload are refused (kill switch, auto-reconnect, DNS/IPv6 mode, DoH blocking)
+- Disconnect does not persist kill switch disable to config — protection restores on next VPN connect
+- Config values are validated: health intervals bounded, endpoints HTTPS-only, reconnect attempts capped
+- The socket is created with 0600 permissions and symlink protection (no TOCTOU)
+- Health checks disable redirect following and enforce connect timeouts
+- Health check suspension returns `Suspended` (not `Healthy`) — no false assurance during wake
 - All firewall commands use `Command::new().args()` (no shell expansion)
-- VPN names are validated against shell metacharacters
+- VPN names are validated against shell metacharacters and ANSI escapes
 - Sudoers rules are scoped to SHROUD_* chains (no bare `iptables -F` or `nft -f /path`)
+- Restart path resolution removes PATH fallback and verifies ELF headers
+- LAN firewall rules use auto-detected subnets (not full RFC1918)
+- Kill switch Drop implementation attempts emergency rule cleanup
 
 ### Debug Logs
 

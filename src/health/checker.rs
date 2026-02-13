@@ -18,6 +18,9 @@ pub enum HealthResult {
     Degraded { latency_ms: u64 },
     /// Health check failed - tunnel appears dead
     Dead { reason: String },
+    /// Health checks are suspended (e.g., during system wake)
+    /// Callers should leave state unchanged — neither affirm health nor declare failure.
+    Suspended,
 }
 
 /// Configuration for health checks
@@ -88,14 +91,13 @@ impl HealthChecker {
     /// Suspend health checks for a duration
     ///
     /// Used during system wake or other events that may cause transient failures.
-    /// Health checks will return Healthy immediately while suspended.
+    /// Health checks will return Suspended while suspended — callers should
+    /// leave state unchanged (not affirm health, not declare failure).
     pub fn suspend(&mut self, duration: Duration) {
         let until = std::time::Instant::now() + duration;
         debug!("Suspending health checks for {:?}", duration);
         self.suspended_until = Some(until);
-        // Reset failure counters to avoid false positives after resume
-        self.consecutive_failures = 0;
-        self.consecutive_degraded = 0;
+        // Do NOT reset failure counters — preserve them for post-suspension check
     }
 
     /// Resume health checks (cancel suspension)
@@ -126,7 +128,7 @@ impl HealthChecker {
         // Check if suspended (e.g., during system wake)
         if self.is_suspended() {
             debug!("Health check skipped - suspended");
-            return HealthResult::Healthy;
+            return HealthResult::Suspended;
         }
 
         for endpoint in &self.config.endpoints {
@@ -202,6 +204,8 @@ impl HealthChecker {
 
                 let config = ureq::Agent::config_builder()
                     .timeout_global(Some(std::time::Duration::from_secs(timeout_secs)))
+                    .timeout_connect(Some(std::time::Duration::from_secs(5)))
+                    .max_redirects(0) // SECURITY: Do not follow redirects (SHROUD-VULN-013)
                     .build();
                 let agent = ureq::Agent::new_with_config(config);
 
@@ -308,15 +312,17 @@ mod tests {
     }
 
     #[test]
-    fn test_suspend_resets_counters() {
+    fn test_suspend_preserves_counters() {
         let mut checker = HealthChecker::new();
         checker.consecutive_failures = 5;
         checker.consecutive_degraded = 3;
 
         checker.suspend(Duration::from_secs(10));
 
-        assert_eq!(checker.consecutive_failures, 0);
-        assert_eq!(checker.consecutive_degraded, 0);
+        // SECURITY: Counters are preserved during suspension so post-wake
+        // checks can detect ongoing failures (SHROUD-VULN-017).
+        assert_eq!(checker.consecutive_failures, 5);
+        assert_eq!(checker.consecutive_degraded, 3);
     }
 
     #[test]

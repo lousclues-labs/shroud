@@ -491,6 +491,11 @@ impl super::VpnSupervisor {
                     self.tray.notify("VPN Dead", &reason);
                 }
             }
+            HealthResult::Suspended => {
+                // Health checks are suspended (e.g., system wake).
+                // Leave state unchanged — don't affirm health or declare failure.
+                debug!("Health check suspended, skipping state update");
+            }
         }
     }
 
@@ -727,10 +732,11 @@ impl super::VpnSupervisor {
                     if let Err(e) = self.kill_switch.disable().await {
                         warn!("Failed to disable kill switch: {}", e);
                     }
-                    // Update config to reflect kill switch is now off
-                    self.config_store.config.kill_switch_enabled = false;
-                    self.config_store.save();
-                    // Update shared state
+                    // SECURITY: Do NOT persist kill_switch_enabled = false to config.
+                    // The kill switch is suspended for this session only — it will
+                    // re-enable on next VPN connect if config still says enabled.
+                    // This prevents a single IPC Disconnect command from permanently
+                    // stripping kill switch protection (SHROUD-VULN-015).
                     {
                         let mut state = self.shared_state.write().await;
                         state.kill_switch = false;
@@ -1532,6 +1538,8 @@ fn resolve_restart_path() -> Result<std::path::PathBuf, String> {
         return Ok(exe_path);
     }
 
+    // SECURITY: Only check known install locations — no $PATH fallback.
+    // Walking $PATH could pick up attacker-controlled binaries (SHROUD-VULN-008).
     let mut candidates = Vec::new();
 
     if let Some(home) = dirs::home_dir() {
@@ -1539,19 +1547,41 @@ fn resolve_restart_path() -> Result<std::path::PathBuf, String> {
         candidates.push(home.join(".cargo/bin/shroud"));
     }
 
-    if let Ok(path_var) = std::env::var("PATH") {
-        for entry in path_var.split(':') {
-            if entry.is_empty() {
+    for candidate in candidates {
+        if !candidate.exists() {
+            continue;
+        }
+
+        // Verify it's an ELF binary (not a script or garbage)
+        if let Ok(mut f) = std::fs::File::open(&candidate) {
+            use std::io::Read;
+            let mut magic = [0u8; 4];
+            if f.read_exact(&mut magic).is_ok() && magic != [0x7f, b'E', b'L', b'F'] {
+                warn!(
+                    "Restart candidate {} is not an ELF binary, skipping",
+                    candidate.display()
+                );
                 continue;
             }
-            candidates.push(std::path::Path::new(entry).join("shroud"));
         }
-    }
 
-    for candidate in candidates {
-        if candidate.exists() {
-            return Ok(candidate);
+        // Warn if the candidate differs from the running binary
+        if let Ok(current) = std::env::current_exe() {
+            if let (Ok(c_meta), Ok(r_meta)) =
+                (std::fs::metadata(&current), std::fs::metadata(&candidate))
+            {
+                use std::os::unix::fs::MetadataExt;
+                if c_meta.ino() != r_meta.ino() || c_meta.dev() != r_meta.dev() {
+                    warn!(
+                        "Restart binary {} differs from running binary {}",
+                        candidate.display(),
+                        current.display()
+                    );
+                }
+            }
         }
+
+        return Ok(candidate);
     }
 
     Err("Failed to locate shroud executable to restart".to_string())
