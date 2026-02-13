@@ -298,6 +298,17 @@ impl Config {
             }
         }
 
+        // SECURITY: Validate custom_doh_blocklist entries are valid IPv4 addresses.
+        // These flow directly into iptables/nft rules (SHROUD-VULN-022).
+        for (i, ip) in self.custom_doh_blocklist.iter().enumerate() {
+            if ip.parse::<std::net::Ipv4Addr>().is_err() {
+                return Err(format!(
+                    "custom_doh_blocklist[{}] is not a valid IPv4 address: {}",
+                    i, ip
+                ));
+            }
+        }
+
         Ok(())
     }
 }
@@ -346,8 +357,9 @@ impl ConfigManager {
     /// Performs migration if config version is outdated.
     /// Also migrates config from old openvpn-tray location if present.
     pub fn load(&self) -> Config {
-        // Check for migration from old openvpn-tray config location
-        self.migrate_from_old_location();
+        // NOTE: Legacy config migration from openvpn-tray was removed
+        // (SHROUD-VULN-024). The migration followed symlinks and trusted
+        // arbitrary content on first load, bypassing all reload protections.
 
         if !self.config_path.exists() {
             debug!("Config file not found, using defaults");
@@ -371,60 +383,6 @@ impl ConfigManager {
             Config::default()
         } else {
             config
-        }
-    }
-
-    /// Migrate config from old openvpn-tray location if present
-    fn migrate_from_old_location(&self) {
-        let old_config_dir = std::env::var("XDG_CONFIG_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|_| {
-                let home = std::env::var("HOME").unwrap_or_default();
-                PathBuf::from(home).join(".config")
-            })
-            .join("openvpn-tray");
-
-        let old_config_path = old_config_dir.join("config.toml");
-        let migration_marker = old_config_dir.join("MIGRATED_TO_SHROUD.txt");
-
-        // Only migrate if old config exists, new config doesn't, and not already migrated
-        if old_config_path.exists() && !self.config_path.exists() && !migration_marker.exists() {
-            info!(
-                "Found old config at {:?}, migrating to {:?}",
-                old_config_path, self.config_path
-            );
-
-            // Create new config directory
-            if let Some(parent) = self.config_path.parent() {
-                if let Err(e) = fs::create_dir_all(parent) {
-                    warn!("Failed to create config directory: {}", e);
-                    return;
-                }
-                #[cfg(unix)]
-                {
-                    use std::os::unix::fs::PermissionsExt;
-                    let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
-                }
-            }
-
-            // Copy old config to new location
-            if let Err(e) = fs::copy(&old_config_path, &self.config_path) {
-                warn!("Failed to copy config: {}", e);
-                return;
-            }
-
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let _ = fs::set_permissions(&self.config_path, fs::Permissions::from_mode(0o600));
-            }
-
-            // Leave a marker in the old location
-            let marker_content = "This configuration has been migrated to ~/.config/shroud/\n\
-                                  You may safely delete this directory.\n";
-            let _ = fs::write(&migration_marker, marker_content);
-
-            info!("Configuration migrated from ~/.config/openvpn-tray/ to ~/.config/shroud/");
         }
     }
 
@@ -1150,5 +1108,28 @@ kill_switch_enabled = true
         assert!(config.validate().is_err());
         config.health_degraded_threshold_ms = 5000;
         assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_custom_doh_blocklist_valid() {
+        let mut config = Config::default();
+        config.custom_doh_blocklist = vec!["1.1.1.1".to_string(), "8.8.8.8".to_string()];
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn test_validate_custom_doh_blocklist_injection_rejected() {
+        let mut config = Config::default();
+        // SHROUD-VULN-022: nft injection via custom_doh_blocklist
+        config.custom_doh_blocklist =
+            vec!["1.1.1.1 tcp dport 443 drop\n}\n}\ntable inet evil".to_string()];
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn test_validate_custom_doh_blocklist_non_ip_rejected() {
+        let mut config = Config::default();
+        config.custom_doh_blocklist = vec!["not-an-ip".to_string()];
+        assert!(config.validate().is_err());
     }
 }

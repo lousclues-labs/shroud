@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.15.2] - 2026-02-13
+
+### Fixed
+- **security**: `custom_doh_blocklist` entries are now validated as IPv4 addresses before interpolation into iptables/nft rulesets. Previously, arbitrary strings from config.toml were format-interpolated into the nft ruleset piped to `nft -f -`, enabling complete firewall bypass via nft scripting injection (SHROUD-VULN-022, Critical).
+- **security**: `detect_local_subnets()` now validates that all detected subnets are RFC1918/link-local with prefix ≥ 8. Rejects `0.0.0.0/0` and public ranges that would open the kill switch to all traffic (SHROUD-VULN-021, Critical).
+- **security**: removed legacy config migration from `~/.config/openvpn-tray/`. The migration followed symlinks and trusted arbitrary content on first load, bypassing all reload protections (SHROUD-VULN-024, High).
+- **security**: IPC server uses bounded `take()` before `read_line()` — prevents OOM DoS from connections sending data without newlines. Previously `read_line()` allocated unbounded memory before the 64KB size check (SHROUD-VULN-026, Medium).
+- **security**: VPN name validation now rejects all control characters (tab, form feed, vertical tab), not just newlines. Prevents log line injection via `\t` and `\r` (SHROUD-VULN-023, High).
+- **security**: nmcli output parsing uses `rsplitn` (right-split) instead of `split(':')` for colon-delimited fields. Connection names containing `:` no longer corrupt field alignment (SHROUD-VULN-027, Medium).
+- **security**: boot kill switch now uses `detect_local_subnets()` with RFC1918 fallback, consistent with runtime kill switch. Eliminates broader-than-intended LAN access during boot window (SHROUD-VULN-025, Medium).
+
 ## [1.15.1] - 2026-02-13
 
 ### Fixed

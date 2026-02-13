@@ -409,9 +409,11 @@ async fn disconnect_vpn_device() -> Result<(), NmError> {
     if dev_output.status.success() {
         let dev_stdout = String::from_utf8_lossy(&dev_output.stdout);
         for line in dev_stdout.lines() {
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() >= 2 && parts[1] == "tun" {
-                let device = parts[0];
+            // SECURITY: rsplitn for colon-safe parsing (SHROUD-VULN-027)
+            let parts: Vec<&str> = line.rsplitn(2, ':').collect();
+            if parts.len() >= 2 && parts[0] == "tun" {
+                // rsplitn reverses: [type, name]
+                let device = parts[1];
                 debug!("Found VPN device: {}, attempting disconnect", device);
 
                 let disconnect_output = match timeout(

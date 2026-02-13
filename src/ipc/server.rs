@@ -8,7 +8,7 @@
 //! to the supervisor via a channel. Responses are sent back through the socket.
 
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
 use tokio::sync::{mpsc, Semaphore};
 use tracing::{debug, error, info, warn};
@@ -179,7 +179,34 @@ impl IpcServer {
         let mut command_count = 0u32;
         let mut first = true;
 
-        while reader.read_line(&mut line).await? > 0 {
+        // SECURITY: Use take() to enforce a hard read limit BEFORE allocation.
+        // Without this, read_line() allocates unbounded memory for lines without
+        // newlines, enabling OOM DoS (SHROUD-VULN-026).
+        const MAX_LINE_BYTES: u64 = 64 * 1024 + 1; // 64KB + newline
+
+        loop {
+            line.clear();
+            let mut limited = (&mut reader).take(MAX_LINE_BYTES);
+            let bytes_read = limited.read_line(&mut line).await?;
+            if bytes_read == 0 {
+                break; // EOF
+            }
+
+            // If we read MAX_LINE_BYTES without a newline, the line was too long
+            if !line.ends_with('\n') && line.len() as u64 >= MAX_LINE_BYTES - 1 {
+                // Drain remaining bytes until newline or EOF to re-sync
+                let mut drain = String::new();
+                reader.read_line(&mut drain).await?;
+                let response = IpcResponse::Error {
+                    message: "Request too large".to_string(),
+                };
+                let response_json = serde_json::to_string(&response)?;
+                writer.write_all(response_json.as_bytes()).await?;
+                writer.write_all(b"\n").await?;
+                writer.flush().await?;
+                continue;
+            }
+
             command_count += 1;
             if command_count > MAX_COMMANDS_PER_CONNECTION as u32 {
                 let response = IpcResponse::Error {
@@ -190,17 +217,6 @@ impl IpcServer {
                 writer.write_all(b"\n").await?;
                 writer.flush().await?;
                 break;
-            }
-            if line.len() > 64 * 1024 {
-                let response = IpcResponse::Error {
-                    message: "Request too large".to_string(),
-                };
-                let response_json = serde_json::to_string(&response)?;
-                writer.write_all(response_json.as_bytes()).await?;
-                writer.write_all(b"\n").await?;
-                writer.flush().await?;
-                line.clear();
-                continue;
             }
 
             let trimmed = line.trim();

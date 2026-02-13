@@ -51,11 +51,15 @@ pub async fn list_vpn_connections_with_types() -> Vec<VpnConnection> {
         let stdout = String::from_utf8_lossy(&output.stdout);
 
         for line in stdout.lines() {
-            let parts: Vec<&str> = line.split(':').collect();
+            // SECURITY: Use rsplitn to split from the right. nmcli -t uses ':'
+            // as a delimiter, but connection names can contain ':'. The type and
+            // UUID fields (rightmost) never contain colons (SHROUD-VULN-027).
+            let parts: Vec<&str> = line.rsplitn(3, ':').collect();
             if parts.len() >= 3 {
-                let name = parts[0].to_string();
+                // rsplitn reverses order: [uuid, type, name]
+                let name = parts[2].to_string();
                 let conn_type = parts[1];
-                let uuid = parts[2].to_string();
+                let uuid = parts[0].to_string();
 
                 let vpn_type = match conn_type {
                     "wireguard" => VpnType::WireGuard,

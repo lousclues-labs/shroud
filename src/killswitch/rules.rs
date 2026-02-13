@@ -6,7 +6,28 @@
 
 #![allow(dead_code)]
 
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
+
+/// Validate that a string is a safe IPv4 address (no injection characters).
+/// Returns true only for valid IPv4 addresses.
+pub fn is_valid_ipv4(s: &str) -> bool {
+    s.parse::<Ipv4Addr>().is_ok()
+}
+
+/// Validate that a string is a safe CIDR notation (addr/prefix).
+/// Returns true only for valid private/link-local CIDR ranges.
+pub fn is_valid_private_cidr(s: &str) -> bool {
+    if let Some((addr_str, prefix_str)) = s.split_once('/') {
+        if let (Ok(addr), Ok(prefix)) = (addr_str.parse::<Ipv4Addr>(), prefix_str.parse::<u32>()) {
+            if !(8..=32).contains(&prefix) {
+                return false; // Reject /0 through /7 — too broad
+            }
+            // Must be RFC1918 or link-local
+            return addr.is_private() || addr.is_link_local();
+        }
+    }
+    false
+}
 
 /// LAN subnets that should always be allowed (RFC 1918 + link-local).
 pub const LAN_SUBNETS: &[&str] = &[
@@ -62,7 +83,20 @@ pub fn detect_local_subnets() -> Vec<String> {
                         };
                         let net = u32::from(addr) & mask;
                         let net_addr = std::net::Ipv4Addr::from(net);
-                        subnets.push(format!("{}/{}", net_addr, prefix));
+                        let cidr = format!("{}/{}", net_addr, prefix);
+
+                        // SECURITY: Only allow private (RFC1918) and link-local subnets.
+                        // Reject 0.0.0.0/0 or any public range that would open the
+                        // kill switch to all traffic (SHROUD-VULN-021).
+                        if !is_valid_private_cidr(&cidr) {
+                            tracing::warn!(
+                                "Rejected non-private subnet from interface detection: {}",
+                                cidr
+                            );
+                            continue;
+                        }
+
+                        subnets.push(cidr);
                     }
                 }
             }
@@ -344,6 +378,40 @@ pub fn validate_chain_name(name: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ----- IP and CIDR validation (SHROUD-VULN-021, VULN-022) -----
+
+    #[test]
+    fn test_is_valid_ipv4_accepts_valid() {
+        assert!(is_valid_ipv4("1.1.1.1"));
+        assert!(is_valid_ipv4("192.168.1.1"));
+        assert!(is_valid_ipv4("255.255.255.255"));
+    }
+
+    #[test]
+    fn test_is_valid_ipv4_rejects_injection() {
+        assert!(!is_valid_ipv4("1.1.1.1 tcp dport 443 drop"));
+        assert!(!is_valid_ipv4("1.1.1.1\n}\n}\n"));
+        assert!(!is_valid_ipv4("not-an-ip"));
+        assert!(!is_valid_ipv4(""));
+    }
+
+    #[test]
+    fn test_is_valid_private_cidr_accepts_rfc1918() {
+        assert!(is_valid_private_cidr("192.168.1.0/24"));
+        assert!(is_valid_private_cidr("10.0.0.0/8"));
+        assert!(is_valid_private_cidr("172.16.0.0/12"));
+        assert!(is_valid_private_cidr("169.254.0.0/16"));
+    }
+
+    #[test]
+    fn test_is_valid_private_cidr_rejects_public() {
+        assert!(!is_valid_private_cidr("8.8.8.0/24")); // public
+        assert!(!is_valid_private_cidr("0.0.0.0/0")); // too broad
+        assert!(!is_valid_private_cidr("10.0.0.0/4")); // prefix < 8
+        assert!(!is_valid_private_cidr("192.168.1.0/33")); // invalid prefix
+        assert!(!is_valid_private_cidr("not-a-cidr"));
+    }
 
     // ----- classify_ip -----
 

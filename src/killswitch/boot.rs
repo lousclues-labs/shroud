@@ -123,10 +123,14 @@ fn add_boot_rules(allow_lan: bool) -> Result<(), KillSwitchError> {
         "-A", BOOT_CHAIN, "-p", "udp", "--dport", "67:68", "-j", "ACCEPT",
     ])?;
 
-    // Allow LAN if configured
+    // Allow LAN if configured — use detected subnets with RFC1918 fallback
+    // (SHROUD-VULN-025: consistent with runtime kill switch)
     if allow_lan {
-        for network in &["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"] {
-            run_iptables(&["-A", BOOT_CHAIN, "-d", network, "-j", "ACCEPT"])?;
+        let subnets = crate::killswitch::rules::detect_local_subnets();
+        for subnet in &subnets {
+            if crate::killswitch::rules::is_valid_private_cidr(subnet) {
+                run_iptables(&["-A", BOOT_CHAIN, "-d", subnet, "-j", "ACCEPT"])?;
+            }
         }
         let _ = run_ip6tables(&["-A", BOOT_CHAIN, "-d", "fe80::/10", "-j", "ACCEPT"]);
     }

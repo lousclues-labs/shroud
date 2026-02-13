@@ -478,6 +478,13 @@ impl KillSwitch {
         // LAN access rules — use detected subnets instead of full RFC1918
         let lan_subnets = crate::killswitch::rules::detect_local_subnets();
         for subnet in &lan_subnets {
+            // SECURITY: Double-check that detected subnets are valid private CIDRs.
+            // Rejects 0.0.0.0/0 or public ranges that would open the kill switch
+            // to all traffic (SHROUD-VULN-021).
+            if !crate::killswitch::rules::is_valid_private_cidr(subnet) {
+                warn!("Rejected non-private subnet in iptables rules: {}", subnet);
+                continue;
+            }
             s.push_str(&format!(
                 "{} -A SHROUD_KILLSWITCH -d {} -j ACCEPT\n",
                 iptables(),
@@ -670,6 +677,16 @@ impl KillSwitch {
             .copied()
             .chain(self.custom_doh_blocklist.iter().map(|s| s.as_str()))
         {
+            // SECURITY: Validate each IP to prevent injection into iptables
+            // commands. custom_doh_blocklist comes from config.toml and could
+            // contain crafted strings (SHROUD-VULN-022).
+            if !crate::killswitch::rules::is_valid_ipv4(ip) {
+                warn!(
+                    "Rejected invalid DoH blocklist IP (possible injection): {}",
+                    ip
+                );
+                continue;
+            }
             s.push_str(&format!(
                 "{} -A SHROUD_KILLSWITCH -d {} -p tcp --dport 443 -j DROP\n",
                 iptables(),
@@ -1395,6 +1412,15 @@ table inet {table} {{
                 .copied()
                 .chain(self.custom_doh_blocklist.iter().map(|s| s.as_str()))
             {
+                // SECURITY: Validate each IP to prevent nft ruleset injection.
+                // custom_doh_blocklist comes from config.toml (SHROUD-VULN-022).
+                if !crate::killswitch::rules::is_valid_ipv4(ip) {
+                    warn!(
+                        "Rejected invalid DoH blocklist IP in nft (possible injection): {}",
+                        ip
+                    );
+                    continue;
+                }
                 rules.push_str(&format!("        ip daddr {} tcp dport 443 drop\n", ip));
             }
         }
@@ -1403,6 +1429,11 @@ table inet {table} {{
         let lan_subnets = crate::killswitch::rules::detect_local_subnets();
         rules.push_str("\n        # === LOCAL NETWORK ===\n");
         for subnet in &lan_subnets {
+            // SECURITY: Double-check that detected subnets are valid private CIDRs
+            if !crate::killswitch::rules::is_valid_private_cidr(subnet) {
+                warn!("Rejected non-private subnet in nft rules: {}", subnet);
+                continue;
+            }
             rules.push_str(&format!("        ip daddr {} accept\n", subnet));
         }
 
@@ -1529,9 +1560,12 @@ table inet {table} {{
 
         // Find VPN connections and get their remote IPs
         for line in connections.lines() {
-            let parts: Vec<&str> = line.split(':').collect();
-            if parts.len() >= 2 && parts[1] == "vpn" {
-                let conn_name = parts[0];
+            // SECURITY: Use rsplitn to handle connection names containing ':'
+            // (SHROUD-VULN-027). Type field is rightmost and never contains ':'.
+            let parts: Vec<&str> = line.rsplitn(2, ':').collect();
+            if parts.len() >= 2 && parts[0] == "vpn" {
+                // rsplitn reverses: [type, name]
+                let conn_name = parts[1];
 
                 // Get the remote IP for this VPN connection
                 if let Some(ip) = Self::get_vpn_remote_ip(conn_name).await {

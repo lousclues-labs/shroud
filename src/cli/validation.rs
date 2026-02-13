@@ -159,11 +159,21 @@ pub fn validate_vpn_name(value: &str) -> ValidationResult<String> {
         ));
     }
 
-    if trimmed.contains('\n') || trimmed.contains('\r') {
+    if trimmed.contains('\n') || trimmed.contains('\r') || trimmed.contains('\t') {
         return Err(ValidationError::new(
             "VPN name",
             value,
-            "cannot contain newlines",
+            "cannot contain control characters (newline, carriage return, tab)",
+        ));
+    }
+
+    // SECURITY: Reject any remaining control characters (SHROUD-VULN-023).
+    // These can forge log lines or misalign terminal output.
+    if trimmed.chars().any(|c| c.is_control()) {
+        return Err(ValidationError::new(
+            "VPN name",
+            value,
+            "cannot contain control characters",
         ));
     }
 
