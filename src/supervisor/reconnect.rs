@@ -1,6 +1,5 @@
 //! Supervisor reconnection logic
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, error, info, instrument, warn};
@@ -14,10 +13,6 @@ use crate::util::backoff::linear_backoff_secs;
 /// Debounce period between reconnect attempts (seconds)
 /// Prevents rapid reconnect thrashing
 const RECONNECT_DEBOUNCE_SECS: u64 = 5;
-
-/// Static flag to track if a reconnect is currently in progress
-/// Uses atomic to be safe across async boundaries
-static RECONNECT_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 
 impl super::VpnSupervisor {
     /// Check actual NetworkManager state before reconnecting
@@ -70,17 +65,19 @@ impl super::VpnSupervisor {
     /// Attempt to reconnect with exponential backoff (triggered by connection drop)
     #[instrument(skip(self), fields(connection = %connection_name))]
     pub(crate) async fn attempt_reconnect(&mut self, connection_name: &str) {
-        // RACE PREVENTION: Check if reconnect is already in progress
-        if RECONNECT_IN_PROGRESS.swap(true, Ordering::SeqCst) {
+        // RACE PREVENTION: Check if reconnect is already in progress.
+        // Uses struct field instead of static AtomicBool so it resets when
+        // the supervisor is dropped and recreated (e.g., during restart).
+        if self.timing.reconnect_in_progress {
             debug!("Reconnect already in progress, ignoring duplicate request");
             return;
         }
+        self.timing.reconnect_in_progress = true;
+        self.attempt_reconnect_inner(connection_name).await;
+        self.timing.reconnect_in_progress = false;
+    }
 
-        // Ensure we clear the flag when we exit (success or failure)
-        let _guard = scopeguard::guard((), |_| {
-            RECONNECT_IN_PROGRESS.store(false, Ordering::SeqCst);
-        });
-
+    async fn attempt_reconnect_inner(&mut self, connection_name: &str) {
         // DEBOUNCE: Check if we recently attempted a reconnect
         if let Some(last_time) = self.timing.last_reconnect_time {
             let elapsed = last_time.elapsed().as_secs();

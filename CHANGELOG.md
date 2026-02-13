@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.16.0] - 2026-02-13
+
+### Fixed
+- **reconnect**: `RECONNECT_IN_PROGRESS` moved from `static AtomicBool` to `TimingState` struct field. The static survived supervisor restart, permanently blocking reconnection after a restart. Now resets when the supervisor is dropped.
+- **nmcli**: `parse_vpn_uuid()` fixed for VPN names containing colons. Uses `split_once`/`rsplit_once` instead of `rsplitn(3)` which misaligned fields when the middle NAME field contained `:`.
+- **event loop**: wake-from-sleep handling no longer blocks the event loop with a 2-second `sleep`. IPC commands, D-Bus events, and tray interactions are now processed immediately during system wake. Health check suspension (10s) provides the stabilization window.
+
 ## [1.15.5] - 2026-02-13
 
 ### Fixed

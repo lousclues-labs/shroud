@@ -22,6 +22,9 @@ pub const TIME_JUMP_THRESHOLD_SECS: u64 = NM_POLL_INTERVAL_SECS * 3;
 pub const TIME_JUMP_COOLDOWN_SECS: u64 = 5;
 
 /// Delay before dispatching wake event (allows system to stabilize)
+/// NOTE: No longer used inline — wake handling is non-blocking.
+/// The health check suspension (10s) serves as the stabilization window.
+#[allow(dead_code)]
 pub const WAKE_EVENT_DELAY_MS: u64 = 2000;
 
 impl super::VpnSupervisor {
@@ -172,14 +175,14 @@ impl super::VpnSupervisor {
                                 elapsed.as_secs_f32()
                             );
 
-                            // Delay before dispatching to let system stabilize
-                            tokio::time::sleep(Duration::from_millis(WAKE_EVENT_DELAY_MS)).await;
-
                             // Suspend health checks during wake to avoid false positives
                             self.health_checker.suspend(Duration::from_secs(10));
-
-                            self.dispatch(Event::Wake);
                             self.timing.last_wake_event = Some(Instant::now());
+
+                            // Mark that we need a wake resync — handled in the next
+                            // poll cycle rather than blocking the event loop with a
+                            // 2-second sleep that prevents IPC/tray/D-Bus processing.
+                            self.dispatch(Event::Wake);
                             self.force_state_resync().await;
                         } else {
                             debug!(

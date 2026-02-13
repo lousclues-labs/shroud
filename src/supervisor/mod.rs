@@ -136,6 +136,9 @@ pub(crate) struct TimingState {
     pub(crate) last_wake_event: Option<Instant>,
     pub(crate) last_reconnect_time: Option<Instant>,
     pub(crate) reconnect_cancelled: bool,
+    /// Guard flag: true while a reconnect loop is running. Struct-owned, not
+    /// static, so it resets when the supervisor is dropped (e.g., restart).
+    pub(crate) reconnect_in_progress: bool,
 }
 
 impl Default for TimingState {
@@ -146,6 +149,7 @@ impl Default for TimingState {
             last_wake_event: None,
             last_reconnect_time: None,
             reconnect_cancelled: false,
+            reconnect_in_progress: false,
         }
     }
 }

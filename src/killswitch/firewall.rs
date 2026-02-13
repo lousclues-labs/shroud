@@ -271,14 +271,14 @@ impl KillSwitch {
     /// Check actual state of rules, not just our flag
     ///
     /// Note: This requires sudo access for iptables. If we can't check
-    /// (permission denied), we return the current internal state rather
-    /// than incorrectly reporting disabled.
+    /// (permission denied), we return false to avoid reporting enabled
+    /// when rules may be gone (SHROUD-VULN-032). The `-n` flag on sudo
+    /// ensures non-interactive (no hang on password prompt).
     pub fn is_actually_enabled(&self) -> bool {
         use std::process::{Command, Stdio};
 
         match self.backend {
             FirewallBackend::Iptables => {
-                // Must use sudo to check iptables rules
                 let result = Command::new("sudo")
                     .args(["-n", iptables(), "-C", "OUTPUT", "-j", CHAIN_NAME])
                     .stdout(Stdio::null())
@@ -288,10 +288,6 @@ impl KillSwitch {
                 match result {
                     Ok(status) => status.success(),
                     Err(_) => {
-                        // SECURITY: When we can't verify via sudo, assume DISABLED
-                        // (false). A false negative (showing disabled when enabled)
-                        // is a UX annoyance; a false positive (showing enabled when
-                        // rules are gone) is a security failure (SHROUD-VULN-032).
                         warn!("Cannot verify iptables state (sudo failed), assuming disabled");
                         false
                     }

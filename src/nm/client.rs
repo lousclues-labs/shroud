@@ -119,16 +119,21 @@ fn parse_vpn_connections(stdout: &str) -> Vec<String> {
     connections
 }
 
-/// Parse VPN UUID from nmcli "UUID:NAME:TYPE" output for a specific connection
+/// Parse VPN UUID from nmcli "UUID:NAME:TYPE" output for a specific connection.
+///
+/// Handles VPN names containing colons by splitting UUID on the first `:` (UUIDs
+/// are fixed 36-char format with no colons in the value) and type on the last `:`.
 fn parse_vpn_uuid(stdout: &str, connection_name: &str) -> Option<String> {
     for line in stdout.lines() {
-        // Format: UUID:NAME:TYPE - split from right to handle names with colons
-        let parts: Vec<&str> = line.rsplitn(3, ':').collect();
-        if parts.len() >= 3
-            && (parts[0] == "vpn" || parts[0] == "wireguard")
-            && parts[1] == connection_name
-        {
-            return Some(parts[2].to_string());
+        // UUID is the first 36 chars (8-4-4-4-12 hex), followed by ':'
+        // Format: UUID:NAME:TYPE
+        // Split on first ':' to isolate UUID, then rsplitn(2) on rest for type + name
+        if let Some((uuid, rest)) = line.split_once(':') {
+            if let Some((name, conn_type)) = rest.rsplit_once(':') {
+                if (conn_type == "vpn" || conn_type == "wireguard") && name == connection_name {
+                    return Some(uuid.to_string());
+                }
+            }
         }
     }
     None
