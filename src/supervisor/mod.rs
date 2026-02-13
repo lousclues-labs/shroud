@@ -17,18 +17,10 @@
 //! - `state_sync.rs` - State synchronization utilities
 //! - `reconnect.rs` - Reconnection logic with exponential backoff
 
-#[cfg(test)]
-pub mod command_validation;
 mod config_store;
-#[cfg(test)]
-pub mod connection_stats;
 mod event_loop;
 mod handlers;
 mod reconnect;
-#[cfg(test)]
-pub mod reconnect_logic;
-#[cfg(test)]
-pub mod response_builder;
 mod state_sync;
 mod tray_bridge;
 
@@ -92,27 +84,6 @@ pub(crate) struct SwitchContext {
     pub(crate) target: Option<String>,
     pub(crate) from: Option<String>,
     pub(crate) completed_time: Option<Instant>,
-}
-
-impl SwitchContext {
-    #[allow(dead_code)]
-    pub(crate) fn start(&mut self, from: &str, to: &str) {
-        self.in_progress = true;
-        self.from = Some(from.to_string());
-        self.target = Some(to.to_string());
-        self.completed_time = None;
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn complete(&mut self) {
-        self.in_progress = false;
-        self.completed_time = Some(Instant::now());
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn reset(&mut self) {
-        *self = Self::default();
-    }
 }
 
 /// Tracks whether the supervisor should exit and why.
@@ -234,8 +205,6 @@ impl VpnSupervisor {
 
         let sm_config = StateMachineConfig {
             max_retries: config_store.config.max_reconnect_attempts,
-            base_delay_secs: RECONNECT_BASE_DELAY_SECS,
-            max_delay_secs: RECONNECT_MAX_DELAY_SECS,
         };
 
         // Create kill switch with config-based DNS and IPv6 modes

@@ -7,24 +7,15 @@ use tracing::info;
 use crate::state::types::{Event, TransitionReason, VpnState};
 
 /// Configuration for the state machine
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct StateMachineConfig {
     /// Maximum number of reconnection attempts before failing
     pub max_retries: u32,
-    /// Base delay for exponential backoff in seconds
-    pub base_delay_secs: u64,
-    /// Maximum delay cap for backoff in seconds
-    pub max_delay_secs: u64,
 }
 
 impl Default for StateMachineConfig {
     fn default() -> Self {
-        Self {
-            max_retries: 10,
-            base_delay_secs: 2,
-            max_delay_secs: 30,
-        }
+        Self { max_retries: 10 }
     }
 }
 
@@ -713,8 +704,6 @@ mod tests {
     fn test_default_config_values() {
         let config = StateMachineConfig::default();
         assert_eq!(config.max_retries, 10);
-        assert_eq!(config.base_delay_secs, 2);
-        assert_eq!(config.max_delay_secs, 30);
     }
 
     #[test]

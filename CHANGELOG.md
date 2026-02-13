@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.16.3] - 2026-02-13
+
+### Removed
+- **supervisor**: deleted four `#[cfg(test)]`-only modules that compiled only in test builds but appeared as real architecture in `mod.rs`: `command_validation.rs` (552 lines), `connection_stats.rs` (180 lines), `response_builder.rs` (495 lines), and `reconnect_logic.rs` (342 lines). None were imported or referenced by any production or test code outside their own files. `ReconnectTracker`, `ReconnectConfig`, `ReconnectDecision`, `ConnectionStats`, `ResponseBuilder` — none of these types were ever used by the actual supervisor. This was a shadow architecture that created the illusion of structure while the real reconnect path used `TimingState` fields and `util::backoff::linear_backoff_secs()` directly. Principle V: Complexity Is Debt.
+- **state**: removed dead `base_delay_secs` and `max_delay_secs` fields from `StateMachineConfig`. These were set in the supervisor constructor but never read by any code — the actual backoff uses the `RECONNECT_BASE_DELAY_SECS`/`RECONNECT_MAX_DELAY_SECS` constants directly. The struct-level `#[allow(dead_code)]` that hid this is also removed.
+- **supervisor**: deleted dead `SwitchContext::start()`, `complete()`, and `reset()` methods (all `#[allow(dead_code)]`). The handlers set `switch_ctx` fields directly — these methods were never called.
+
+### Fixed
+- **killswitch**: `run_cleanup_command()` no longer returns `Ok(())` unconditionally. Previously every chain flush/delete result was `let _ =` — spawn failures were invisible. Now tracks failures from all iptables/ip6tables/nft cleanup commands and returns `Err(CleanupError::CommandFailed)` with details if any command’s process fails to spawn. Exit-code failures on `-F`/`-X` are logged at debug level (idempotent cleanup of non-existent chains is expected). The caller `cleanup_with_timeout()` still verifies with its post-check. Principle II: Fail Loud, Recover Quiet.
+
+### Added
+- **util**: backoff tests now live in `util/backoff.rs` alongside the actual `linear_backoff_secs()` and `jitter_millis()` functions — 7 tests covering zero base, saturation, capping, and jitter bounds. Previously the only tests for the canonical backoff function were in the now-deleted `reconnect_logic.rs` shadow module.
+
+---
+
 ## [1.16.2] - 2026-02-13
 
 ### Fixed

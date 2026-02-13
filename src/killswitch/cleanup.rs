@@ -77,6 +77,7 @@ pub fn rules_exist_ipv6() -> Result<bool, CleanupError> {
 
 fn run_cleanup_command() -> Result<(), CleanupError> {
     // Use sudo -n to avoid password prompts that would cause hangs
+    let mut failures: Vec<String> = Vec::new();
 
     // CRITICAL: Remove ALL duplicate jump rules (race conditions can create many)
     // Loop until -D fails (meaning no more rules to delete)
@@ -105,41 +106,50 @@ fn run_cleanup_command() -> Result<(), CleanupError> {
         }
     }
 
-    // Now flush and delete the chains
-    let _ = Command::new("sudo")
-        .args(["-n", iptables(), "-F", "SHROUD_KILLSWITCH"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    // Now flush and delete the chains — track failures
+    let cmds: &[(&str, &[&str])] = &[
+        (iptables(), &["-F", "SHROUD_KILLSWITCH"]),
+        (iptables(), &["-X", "SHROUD_KILLSWITCH"]),
+        (ip6tables(), &["-F", "SHROUD_KILLSWITCH"]),
+        (ip6tables(), &["-X", "SHROUD_KILLSWITCH"]),
+    ];
 
-    let _ = Command::new("sudo")
-        .args(["-n", iptables(), "-X", "SHROUD_KILLSWITCH"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
+    for (bin, args) in cmds {
+        let mut full_args = vec!["-n", *bin];
+        full_args.extend_from_slice(args);
+        match Command::new("sudo")
+            .args(&full_args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        {
+            Ok(s) if !s.success() => {
+                // -X fails when chain doesn't exist — that's fine (idempotent cleanup).
+                // Only log, don't treat as hard failure. The post-check verifies state.
+                debug!("cleanup command failed: sudo {}", full_args.join(" "));
+            }
+            Err(e) => {
+                failures.push(format!("sudo {} {}: {}", bin, args.join(" "), e));
+            }
+            _ => {}
+        }
+    }
 
-    let _ = Command::new("sudo")
-        .args(["-n", ip6tables(), "-F", "SHROUD_KILLSWITCH"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-
-    let _ = Command::new("sudo")
-        .args(["-n", ip6tables(), "-X", "SHROUD_KILLSWITCH"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-
-    let _ = Command::new("sudo")
+    // Also try nftables cleanup
+    if let Err(e) = Command::new("sudo")
         .args(["-n", nft(), "delete", "table", "inet", "shroud_killswitch"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status();
+        .status()
+    {
+        failures.push(format!("nft delete table: {}", e));
+    }
+
+    if !failures.is_empty() {
+        return Err(CleanupError::CommandFailed(failures.join("; ")));
+    }
 
     Ok(())
 }
