@@ -93,7 +93,10 @@ impl IpcServer {
     pub async fn run(self) -> Result<(), ServerError> {
         let path = socket_path();
 
-        // SECURITY: Check for symlink before removal (TOCTOU mitigation)
+        // SECURITY: Best-effort symlink check before stale socket removal.
+        // A TOCTOU window exists between symlink_metadata() and remove_file(),
+        // but XDG_RUNTIME_DIR is user-owned (mode 0700) so exploitation requires
+        // same-UID access. True atomic safety would need openat2(RESOLVE_NO_SYMLINKS).
         if path.exists() {
             if let Ok(meta) = std::fs::symlink_metadata(&path) {
                 if meta.file_type().is_symlink() {

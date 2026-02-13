@@ -223,7 +223,7 @@ pub async fn run_headless(config: Config) -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
-/// Auto-connect using nmcli directly with exponential backoff.
+/// Auto-connect using nmcli directly with linear backoff.
 async fn auto_connect_nmcli(
     server: &str,
     config: &crate::config::HeadlessConfig,
@@ -263,7 +263,10 @@ async fn auto_connect_nmcli(
                         return Ok(());
                     }
                     Some(active) => {
-                        debug!("Connected to different VPN: {}", active);
+                        warn!(
+                            "Auto-connect requested '{}' but '{}' is active — proceeding with active VPN",
+                            server, active
+                        );
                         return Ok(());
                     }
                     None => {

@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.16.6] - 2026-02-13
+
+### Fixed
+- **killswitch**: fixed kill switch UI desync where tray showed "Enabled" but no iptables rules existed. Root cause: `toggle_kill_switch()` optimistically updated `shared_state.kill_switch` before calling `enable()`/`disable()`, then trusted `Ok(())` as success. But `enable()`/`disable()` return `Ok(())` without acting when a cooldown or `toggle_in_progress` guard fires — so the UI showed the new state while the kill switch struct's `enabled` field and iptables reality hadn't changed. Fix: removed optimistic UI update; now reads `self.kill_switch.is_enabled()` after the operation and syncs shared state to actual state. Config is only persisted when actual state matches desired state.
+- **killswitch**: IPC `KillSwitch { enable }` handler had the same pattern — set `shared_state.kill_switch = enable` on `Ok(())` without verifying actual state. Now reads `is_enabled()` after operation and persists config (was missing entirely before).
+- **killswitch**: `sync_killswitch_state()` now runs on every NM poll cycle (every 2 seconds) in addition to health checks. Previously it only ran inside `run_health_check()`, which only fires when VPN is Connected or Degraded — meaning a kill switch desync while VPN was disconnected would persist in the tray indefinitely.
+- **headless**: `auto_connect_nmcli()` doc changed from "exponential backoff" to "linear backoff" — the function calls `linear_backoff_secs()`.
+- **headless**: `auto_connect_nmcli()` now logs `warn!` when connected to a different VPN than requested instead of silent `debug!` + `Ok(())`. The caller (and operator reading logs) now knows the actual connection doesn't match the configured `startup_server`.
+- **killswitch**: `cleanup_with_timeout()` doc rewritten to accurately describe behavior — the timeout is a post-hoc duration check, not an enforced deadline. `sudo -n` prevents password prompts; the timeout detects unexpectedly slow commands.
+- **killswitch**: IPv6 boot kill switch chain creation failures now logged at `warn!` level instead of silently swallowed with `let _ =`. Documents that IPv6 boot protection is best-effort.
+- **ipc**: symlink check comment corrected from "TOCTOU mitigation" to "best-effort symlink check" with explanation of the residual TOCTOU window and why it's acceptable (`XDG_RUNTIME_DIR` is user-owned, mode 0700).
+- **supervisor**: `health_check_interval_secs: 0` now correctly disables health checks as documented. Previously 0 fell through to the default (30s), contradicting the config doc ("0 to disable"). Uses `tokio::select!` precondition guard (`if health_checks_enabled`).
+
+---
+
 ## [1.16.5] - 2026-02-13
 
 ### Fixed

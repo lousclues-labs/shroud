@@ -75,11 +75,12 @@ impl super::VpnSupervisor {
             );
         }
 
-        // Use health check interval from config
-        let health_interval = if self.config_store.config.health_check_interval_secs > 0 {
+        // Use health check interval from config (0 = disabled)
+        let health_checks_enabled = self.config_store.config.health_check_interval_secs > 0;
+        let health_interval = if health_checks_enabled {
             self.config_store.config.health_check_interval_secs
         } else {
-            HEALTH_CHECK_INTERVAL_SECS
+            HEALTH_CHECK_INTERVAL_SECS // interval is created but never fires (guarded below)
         };
 
         // Create an interval for NM polling
@@ -191,8 +192,8 @@ impl super::VpnSupervisor {
                     self.timing.last_poll_time = Instant::now();
                 }
 
-                // Run health checks when connected
-                _ = health_check_interval.tick() => {
+                // Run health checks when connected (disabled when health_check_interval_secs = 0)
+                _ = health_check_interval.tick(), if health_checks_enabled => {
                     self.run_health_check().await;
                 }
             }

@@ -7,7 +7,7 @@
 use super::paths::{ip6tables, iptables};
 use super::KillSwitchError;
 use std::process::Command;
-use tracing::info;
+use tracing::{info, warn};
 
 const BOOT_CHAIN: &str = "SHROUD_BOOT_KS";
 
@@ -83,9 +83,11 @@ fn create_boot_chain() -> Result<(), KillSwitchError> {
         run_iptables(&["-F", BOOT_CHAIN])?;
     }
 
+    // IPv6 rules are best-effort — systems without ip6tables (minimal
+    // containers, disabled IPv6) will skip IPv6 protection silently.
     let result = run_ip6tables(&["-N", BOOT_CHAIN]);
-    if result.is_err() {
-        let _ = run_ip6tables(&["-F", BOOT_CHAIN]);
+    if result.is_err() && run_ip6tables(&["-F", BOOT_CHAIN]).is_err() {
+        warn!("IPv6 boot kill switch chain could not be created or flushed — IPv6 traffic will not be blocked");
     }
 
     Ok(())

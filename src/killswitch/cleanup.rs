@@ -150,14 +150,17 @@ fn run_cleanup_command() -> Result<(), CleanupError> {
     Ok(())
 }
 
-/// Execute cleanup with a timeout.
+/// Execute cleanup and verify completion within a time budget.
 ///
-/// This prevents blocking forever if a password prompt appears.
-/// Clean up kill switch rules with a timeout.
+/// Runs `run_cleanup_command()` synchronously (blocking on `sudo -n`), then
+/// checks whether the elapsed time exceeded `timeout`. The timeout is **not**
+/// enforced as a deadline — it is a post-hoc duration check. `sudo -n` prevents
+/// interactive password prompts; this function detects cases where the commands
+/// took unexpectedly long (e.g., kernel module load, slow nft flush).
 ///
 /// # Errors
 ///
-/// Returns [`CleanupError::Timeout`] if sudo prompts or iptables/nft commands hang beyond `timeout`.
+/// Returns [`CleanupError::Timeout`] if elapsed time exceeds `timeout` after commands complete.
 ///
 /// Returns [`CleanupError::CommandFailed`] if rules remain after cleanup commands complete.
 pub fn cleanup_with_timeout(timeout: Duration) -> Result<CleanupResult, CleanupError> {

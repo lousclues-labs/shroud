@@ -233,6 +233,11 @@ impl super::VpnSupervisor {
 
     /// Poll NetworkManager state and dispatch appropriate events
     pub(crate) async fn poll_nm_state(&mut self) {
+        // Sync kill switch state with iptables reality on every poll cycle.
+        // This catches desync even when VPN is disconnected (health checks
+        // only run when connected).
+        self.sync_killswitch_state();
+
         // CRITICAL: Skip polling entirely while a VPN switch is in progress
         if self.switch_ctx.in_progress {
             debug!("Skipping NM poll during VPN switch");
@@ -927,41 +932,52 @@ impl super::VpnSupervisor {
             current_enabled, new_enabled
         );
 
-        // Optimistically update shared state immediately so tray shows new state
-        // This prevents the "flicker" where tray briefly shows old state
-        {
-            let mut state = self.shared_state.write().await;
-            state.kill_switch = new_enabled;
-        }
-        self.tray.update(&self.shared_state);
-
         let result = if new_enabled {
             self.kill_switch.enable().await
         } else {
             self.kill_switch.disable().await
         };
 
+        // Read ACTUAL state after the operation — don't trust Ok(()) alone.
+        // enable()/disable() can return Ok(()) without acting (cooldown, toggle guard).
+        let actual_enabled = self.kill_switch.is_enabled();
+
         match result {
             Ok(()) => {
-                // Save to persistent config
-                self.config_store.config.kill_switch_enabled = new_enabled;
-                self.config_store.save();
-
-                info!("Kill switch toggled to: {}", new_enabled);
-                self.tray.notify(
-                    "Kill Switch",
-                    if new_enabled {
-                        "Enabled - Non-VPN traffic blocked"
-                    } else {
-                        "Disabled"
-                    },
-                );
-            }
-            Err(e) => {
-                // Rollback optimistic state update on failure
+                // Sync shared state to actual kill switch state
                 {
                     let mut state = self.shared_state.write().await;
-                    state.kill_switch = current_enabled; // Revert to original
+                    state.kill_switch = actual_enabled;
+                }
+                self.tray.update(&self.shared_state);
+
+                if actual_enabled == new_enabled {
+                    // Operation achieved the desired state
+                    self.config_store.config.kill_switch_enabled = new_enabled;
+                    self.config_store.save();
+
+                    info!("Kill switch toggled to: {}", new_enabled);
+                    self.tray.notify(
+                        "Kill Switch",
+                        if new_enabled {
+                            "Enabled - Non-VPN traffic blocked"
+                        } else {
+                            "Disabled"
+                        },
+                    );
+                } else {
+                    // Operation returned Ok but didn't change state (cooldown/guard)
+                    warn!(
+                        "Kill switch toggle returned Ok but state unchanged (wanted={}, actual={})",
+                        new_enabled, actual_enabled
+                    );
+                }
+            }
+            Err(e) => {
+                // Sync shared state to actual kill switch state on error too
+                {
+                    let mut state = self.shared_state.write().await;
+                    state.kill_switch = actual_enabled;
                 }
                 self.tray.update(&self.shared_state);
 
@@ -1319,18 +1335,27 @@ impl super::VpnSupervisor {
                     self.kill_switch.disable().await
                 };
 
+                // Read ACTUAL state — don't trust Ok(()) alone
+                let actual_enabled = self.kill_switch.is_enabled();
+
                 match result {
                     Ok(()) => {
-                        // Update shared state
+                        // Sync shared state to actual kill switch state
                         {
                             let mut state = self.shared_state.write().await;
-                            state.kill_switch = enable;
+                            state.kill_switch = actual_enabled;
                         }
+                        self.config_store.config.kill_switch_enabled = actual_enabled;
+                        self.config_store.save();
                         self.sync_shared_state().await;
                         IpcResponse::OkMessage {
                             message: format!(
                                 "Kill switch {}",
-                                if enable { "enabled" } else { "disabled" }
+                                if actual_enabled {
+                                    "enabled"
+                                } else {
+                                    "disabled"
+                                }
                             ),
                         }
                     }
