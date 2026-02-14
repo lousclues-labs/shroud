@@ -7,5 +7,4 @@ pub mod manager;
 pub mod types;
 
 pub use manager::NotificationManager;
-#[allow(unused_imports)]
-pub use types::{Notification, NotificationAction, NotificationCategory, Urgency};
+pub use types::{Notification, NotificationCategory};

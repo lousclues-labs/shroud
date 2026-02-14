@@ -354,8 +354,16 @@ impl NmMonitor {
         };
 
         if let Some(event) = event {
-            if self.tx.send(event).await.is_err() {
-                debug!("Event receiver dropped");
+            if let Err(e) = self.tx.try_send(event) {
+                use tokio::sync::mpsc::error::TrySendError;
+                match e {
+                    TrySendError::Full(_) => {
+                        warn!("D-Bus event channel full, dropping event (poll fallback active)");
+                    }
+                    TrySendError::Closed(_) => {
+                        debug!("Event receiver dropped");
+                    }
+                }
             }
         }
 
@@ -428,8 +436,16 @@ impl NmMonitor {
         };
 
         if let Some(event) = event {
-            if self.tx.send(event).await.is_err() {
-                debug!("Event receiver dropped");
+            if let Err(e) = self.tx.try_send(event) {
+                use tokio::sync::mpsc::error::TrySendError;
+                match e {
+                    TrySendError::Full(_) => {
+                        warn!("D-Bus event channel full, dropping event (poll fallback active)");
+                    }
+                    TrySendError::Closed(_) => {
+                        debug!("Event receiver dropped");
+                    }
+                }
             }
         }
 

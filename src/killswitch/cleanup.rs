@@ -158,6 +158,9 @@ fn run_cleanup_command() -> Result<(), CleanupError> {
 /// interactive password prompts; this function detects cases where the commands
 /// took unexpectedly long (e.g., kernel module load, slow nft flush).
 ///
+/// **NOTE:** Uses synchronous commands — safe for CLI and startup use but must
+/// not be called from the daemon event loop. Use `KillSwitch::disable()` instead.
+///
 /// # Errors
 ///
 /// Returns [`CleanupError::Timeout`] if elapsed time exceeds `timeout` after commands complete.

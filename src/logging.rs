@@ -123,6 +123,8 @@ impl RotatingWriter {
 
     fn rotate(&mut self) -> std::io::Result<()> {
         // Rename debug.log.(N-1) -> debug.log.N
+        // Note: debug.log.{MAX_LOG_FILES} is overwritten by rename (not leaked).
+        // Lowering MAX_LOG_FILES at compile time will orphan higher-numbered files.
         for i in (1..MAX_LOG_FILES).rev() {
             let from = self.path.with_extension(format!("log.{}", i));
             let to = self.path.with_extension(format!("log.{}", i + 1));

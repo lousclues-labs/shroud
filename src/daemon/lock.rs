@@ -35,6 +35,9 @@ pub fn get_lock_file_path() -> PathBuf {
 
 /// Check if a process with the given PID is still running
 fn is_process_running(pid: u32) -> bool {
+    if pid == 0 {
+        return false; // PID 0 = kernel scheduler, never a shroud instance
+    }
     // Use kill(pid, 0) to check if process exists
     let result = unsafe { libc::kill(pid as i32, 0) };
     if result == 0 {
@@ -49,6 +52,10 @@ fn is_process_running(pid: u32) -> bool {
 /// Returns the lock file handle on success. The lock is held as long as
 /// the file handle exists. Returns an error if another instance is running.
 pub fn acquire_instance_lock() -> Result<File, String> {
+    acquire_instance_lock_inner(1) // allow one retry for stale locks
+}
+
+fn acquire_instance_lock_inner(retries_left: u32) -> Result<File, String> {
     let lock_path = get_lock_file_path();
 
     let file = std::fs::OpenOptions::new()
@@ -79,6 +86,9 @@ pub fn acquire_instance_lock() -> Result<File, String> {
 
             if let Ok(pid) = contents.trim().parse::<u32>() {
                 if !is_process_running(pid) {
+                    if retries_left == 0 {
+                        return Err("Stale lock file persists after retry".to_string());
+                    }
                     // Process is dead - this is a stale lock!
                     warn!("Stale lock file from dead process (PID {}), removing", pid);
                     drop(file); // Release our non-exclusive handle
@@ -88,8 +98,8 @@ pub fn acquire_instance_lock() -> Result<File, String> {
                         return Err(format!("Failed to remove stale lock: {}", e));
                     }
 
-                    // Recursive call to retry acquisition
-                    return acquire_instance_lock();
+                    // Retry with decremented counter
+                    return acquire_instance_lock_inner(retries_left - 1);
                 }
                 return Err(format!("Another instance is already running (PID {})", pid));
             }

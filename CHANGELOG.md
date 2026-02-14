@@ -12,6 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.16.11] - 2026-02-13
+
+### Fixed
+- **daemon**: `is_process_running(0)` now returns `false` instead of calling `kill(0, 0)` which signals the entire process group (always succeeds). A corrupted lock file containing "0" would make Shroud think another instance is running, preventing daemon startup.
+- **daemon**: `acquire_instance_lock()` bounded to 1 retry for stale locks. Previously recursed unboundedly — if another process raced to create a new stale lock between `remove_file()` and retry, the recursion was infinite. Now returns a clear error on second failure.
+- **dbus**: `NmMonitor` event sending changed from `tx.send().await` to `tx.try_send()`. If the supervisor blocks during reconnect and the D-Bus channel fills (capacity 64), `send().await` would suspend the monitor task. While suspended, the D-Bus `MessageStream` isn't drained, backing up the system D-Bus connection until it disconnects the client. `try_send()` drops the event with a `warn!` log and keeps the monitor alive — the 2-second poll fallback catches any missed state changes.
+- **killswitch**: `cleanup_with_timeout()` doc now states that synchronous commands must not be called from the daemon event loop (CLI and startup use only). Use `KillSwitch::disable()` for async contexts.
+
+### Changed
+- **killswitch**: cleaned up `killswitch/mod.rs` re-exports. Removed three `#[allow(unused_imports)]` blocks — `cleanup_all` (used via direct path `cleanup::cleanup_all`, not the re-export), `paths::*` (only used within killswitch submodules), and `sudo_check::*` (only `validate_sudoers_on_startup` used externally). Keeps re-exports honest.
+- **notifications**: removed `#[allow(unused_imports)]` on re-exports. Dropped unused `NotificationAction` and `Urgency` from the public API surface — only `Notification` and `NotificationCategory` are used outside the module.
+- **logging**: added comment documenting that lowering `MAX_LOG_FILES` will orphan higher-numbered rotated log files.
+
+---
+
 ## [1.16.10] - 2026-02-13
 
 ### Fixed
