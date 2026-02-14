@@ -631,6 +631,10 @@ version = 1
 # Automatically reconnect if VPN connection drops
 auto_reconnect = true
 
+# Automatically connect to the last used VPN when Shroud starts
+# Useful with 'shroud autostart on' to restore VPN protection on login
+auto_connect = false
+
 # Maximum number of reconnection attempts before giving up
 # Set to 0 for unlimited attempts
 max_reconnect_attempts = 10

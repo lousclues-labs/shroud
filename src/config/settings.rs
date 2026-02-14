@@ -8,6 +8,7 @@
 //! ```toml
 //! version = 1
 //! auto_reconnect = true
+//! auto_connect = false
 //! last_server = "us-east-1"  # optional
 //! health_check_interval_secs = 30
 //! health_degraded_threshold_ms = 5000
@@ -178,6 +179,13 @@ pub struct Config {
     pub version: u32,
     /// Whether auto-reconnect is enabled
     pub auto_reconnect: bool,
+    /// Auto-connect to last_server on startup (desktop mode only)
+    ///
+    /// When `true` and `last_server` is set, Shroud connects to the last used
+    /// VPN on startup if no VPN is already active. Pair with `shroud autostart on`
+    /// for automatic VPN protection on login.
+    #[serde(default)]
+    pub auto_connect: bool,
     /// Last successfully connected server (for quick reconnect)
     pub last_server: Option<String>,
     /// Health check interval in seconds (0 to disable)
@@ -221,6 +229,7 @@ impl Default for Config {
         Self {
             version: CONFIG_VERSION,
             auto_reconnect: true,
+            auto_connect: false,
             last_server: None,
             health_check_interval_secs: 30,
             health_degraded_threshold_ms: 5000,
@@ -612,6 +621,7 @@ mod tests {
         let config = Config {
             version: 1,
             auto_reconnect: false,
+            auto_connect: false,
             last_server: Some("us-east-1".to_string()),
             health_check_interval_secs: 60,
             health_degraded_threshold_ms: 3000,
@@ -794,6 +804,7 @@ mod tests {
         let original = Config {
             version: 1,
             auto_reconnect: false,
+            auto_connect: false,
             last_server: Some("test-server".to_string()),
             health_check_interval_secs: 45,
             health_degraded_threshold_ms: 1500,

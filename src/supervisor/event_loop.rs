@@ -64,6 +64,32 @@ impl super::VpnSupervisor {
             }
         }
 
+        // Auto-connect on startup (desktop mode)
+        // If auto_connect is enabled, last_server is set, and no VPN is active,
+        // connect to the last used VPN. This gives "start on login = protect on login"
+        // behavior when paired with `shroud autostart on`.
+        if matches!(self.machine.state, VpnState::Disconnected)
+            && self.config_store.config.auto_connect
+        {
+            if let Some(ref server) = self.config_store.config.last_server {
+                if !server.is_empty() {
+                    let connections = self.shared_state.read().await.connections.clone();
+                    if connections.iter().any(|c| c == server) {
+                        info!("Auto-connecting to last server: {}", server);
+                        self.tray
+                            .notify("Shroud", &format!("Auto-connecting to {}...", server));
+                        let server_clone = server.clone();
+                        self.handle_connect(&server_clone).await;
+                    } else {
+                        warn!(
+                            "Auto-connect: last_server '{}' not found in available connections, skipping",
+                            server
+                        );
+                    }
+                }
+            }
+        }
+
         // Update tray with initial state
         self.tray.update(&self.shared_state);
 

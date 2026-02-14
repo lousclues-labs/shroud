@@ -48,7 +48,15 @@ Most people won't need to change anything. But if you do, here's what everything
 | boolean | `true` |
 
 When the VPN drops, try to reconnect automatically.
+### `auto_connect`
 
+| Type | Default |
+|------|--------|
+| boolean | `false` |
+
+When enabled and `last_server` is set, Shroud automatically connects to the last used VPN on startup. Only applies to desktop mode (headless mode has its own `[headless]` `auto_connect` setting).
+
+Pair with `shroud autostart on` for automatic VPN protection on login.
 ### `kill_switch_enabled`
 
 | Type | Default |

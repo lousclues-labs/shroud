@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.16.13] - 2026-02-14
+
+### Added
+- **config**: `auto_connect` option (boolean, default `false`). When enabled and `last_server` is set, desktop-mode Shroud automatically connects to the last used VPN on startup if no VPN is already active. Pair with `shroud autostart on` for automatic VPN protection on login. The field uses `#[serde(default)]` so existing config files without it deserialize safely with `false`.
+- **supervisor**: auto-connect logic in `VpnSupervisor::run()` — after `initial_nm_sync()` and kill switch reconciliation, checks if state is `Disconnected`, `auto_connect` is `true`, and `last_server` exists in the current NM connection list. Calls `handle_connect()` if all conditions are met. Shows a tray notification before connecting. Logs a warning and skips gracefully if `last_server` is no longer in NetworkManager.
+- **docs**: `auto_connect` documented in `CONFIGURATION.md` under Core Options.
+- **setup**: `auto_connect = false` added to the default config template in `setup.sh` with explanatory comment.
+
+---
+
 ## [1.16.12] - 2026-02-13
 
 ### Fixed
