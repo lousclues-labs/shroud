@@ -193,16 +193,16 @@ impl Tray for VpnTray {
             .clone();
         let mut items = Vec::new();
 
-        // Branding — subtle, disabled label at the top of the menu
+        // Branding — small caps gives a quietly authoritative header
         items.push(MenuItem::Standard(StandardItem {
-            label: format!("Shroud v{}", env!("CARGO_PKG_VERSION")),
+            label: format!("ꜱʜʀᴏᴜᴅ  v{}", env!("CARGO_PKG_VERSION")),
             enabled: false,
             ..Default::default()
         }));
 
         items.push(MenuItem::Separator);
 
-        // Status header with clear visual indicators
+        // Status
         let status_text = match &state.state {
             VpnState::Connected { server } => format!("🔒 Connected: {}", server),
             VpnState::Connecting { server } => format!("⏳ Connecting: {}...", server),
@@ -214,8 +214,8 @@ impl Tray for VpnTray {
                 format!("🔄 Reconnecting: {} ({}/{})", server, attempt, max_attempts)
             }
             VpnState::Degraded { server } => format!("⚠️ Degraded: {}", server),
-            VpnState::Failed { server, reason } => format!("❌ Failed: {} - {}", server, reason),
-            VpnState::Disconnected => "⭕ Disconnected".to_string(),
+            VpnState::Failed { server, reason } => format!("❌ {}: {}", server, reason),
+            VpnState::Disconnected => "Disconnected".to_string(),
         };
 
         items.push(MenuItem::Standard(StandardItem {
@@ -226,15 +226,11 @@ impl Tray for VpnTray {
 
         items.push(MenuItem::Separator);
 
-        // VPN connections with clear selection state
+        // ── Servers ──
+
         if state.connections.is_empty() {
             items.push(MenuItem::Standard(StandardItem {
-                label: "No VPN connections configured".to_string(),
-                enabled: false,
-                ..Default::default()
-            }));
-            items.push(MenuItem::Standard(StandardItem {
-                label: "Use 'nmcli con import' to add VPNs".to_string(),
+                label: "No VPN connections".to_string(),
                 enabled: false,
                 ..Default::default()
             }));
@@ -248,18 +244,19 @@ impl Tray for VpnTray {
                 let is_connected =
                     matches!(&state.state, VpnState::Connected { server } if server == connection);
 
+                let label = if is_connected {
+                    format!("● {}", extract_short_name(connection))
+                } else if is_current {
+                    format!("◌ {}", extract_short_name(connection))
+                } else {
+                    extract_short_name(connection).to_string()
+                };
+
                 items.push(MenuItem::Standard(StandardItem {
-                    label: if is_connected {
-                        format!("✓ {} (connected)", extract_short_name(connection))
-                    } else if is_current {
-                        format!("⋯ {} (in progress)", extract_short_name(connection))
-                    } else {
-                        format!("  {}", extract_short_name(connection))
-                    },
+                    label,
                     enabled: !is_current && !is_busy,
                     activate: Box::new(move |tray: &mut Self| {
                         let conn = conn_clone.clone();
-                        // Use try_send (non-blocking) - ksni uses an async runtime internally
                         let _ = tray.tx.try_send(VpnCommand::Connect(conn));
                     }),
                     ..Default::default()
@@ -267,92 +264,83 @@ impl Tray for VpnTray {
             }
         }
 
-        items.push(MenuItem::Separator);
-
-        // Disconnect button - only enabled when connected
+        // Disconnect — only when connected/degraded
         let can_disconnect = matches!(
             state.state,
             VpnState::Connected { .. } | VpnState::Degraded { .. }
         );
-        items.push(MenuItem::Standard(StandardItem {
-            label: "Disconnect".to_string(),
-            enabled: can_disconnect,
-            activate: Box::new(|tray: &mut Self| {
-                // Use try_send (non-blocking) - ksni uses an async runtime internally
-                let _ = tray.tx.try_send(VpnCommand::Disconnect);
-            }),
-            ..Default::default()
-        }));
+        if can_disconnect {
+            items.push(MenuItem::Standard(StandardItem {
+                label: "Disconnect".to_string(),
+                enabled: true,
+                activate: Box::new(|tray: &mut Self| {
+                    let _ = tray.tx.try_send(VpnCommand::Disconnect);
+                }),
+                ..Default::default()
+            }));
+        }
 
         items.push(MenuItem::Separator);
 
-        // Auto-reconnect toggle with checkbox
+        // ── Settings ──
+
         items.push(MenuItem::Checkmark(CheckmarkItem {
             label: "Auto-Reconnect".to_string(),
             enabled: true,
             checked: state.auto_reconnect,
             activate: Box::new(|tray: &mut Self| {
-                // Use try_send (non-blocking) - ksni uses an async runtime internally
                 let _ = tray.tx.try_send(VpnCommand::ToggleAutoReconnect);
             }),
             ..Default::default()
         }));
 
-        // Kill switch toggle with checkbox
         items.push(MenuItem::Checkmark(CheckmarkItem {
             label: "Kill Switch".to_string(),
             enabled: true,
             checked: state.kill_switch,
             activate: Box::new(|tray: &mut Self| {
-                // Use try_send (non-blocking) - ksni uses an async runtime internally
                 let _ = tray.tx.try_send(VpnCommand::ToggleKillSwitch);
             }),
             ..Default::default()
         }));
 
-        // Autostart toggle with checkbox
         items.push(MenuItem::Checkmark(CheckmarkItem {
             label: "Start on Login".to_string(),
             enabled: true,
             checked: Autostart::is_enabled(),
             activate: Box::new(|tray: &mut Self| {
-                // Use try_send (non-blocking) - ksni uses an async runtime internally
                 let _ = tray.tx.try_send(VpnCommand::ToggleAutostart);
-            }),
-            ..Default::default()
-        }));
-
-        // Refresh connections
-        items.push(MenuItem::Standard(StandardItem {
-            label: "Refresh Connections".to_string(),
-            enabled: true,
-            activate: Box::new(|tray: &mut Self| {
-                // Use try_send (non-blocking) - ksni uses an async runtime internally
-                let _ = tray.tx.try_send(VpnCommand::RefreshConnections);
             }),
             ..Default::default()
         }));
 
         items.push(MenuItem::Separator);
 
-        // Debug logging toggle
+        // ── Tools ──
+
+        items.push(MenuItem::Standard(StandardItem {
+            label: "Refresh".to_string(),
+            enabled: true,
+            activate: Box::new(|tray: &mut Self| {
+                let _ = tray.tx.try_send(VpnCommand::RefreshConnections);
+            }),
+            ..Default::default()
+        }));
+
         items.push(MenuItem::Checkmark(CheckmarkItem {
             label: "Debug Logging".to_string(),
             enabled: true,
             checked: state.debug_logging,
             activate: Box::new(|tray: &mut Self| {
-                // Use try_send (non-blocking) - ksni uses an async runtime internally
                 let _ = tray.tx.try_send(VpnCommand::ToggleDebugLogging);
             }),
             ..Default::default()
         }));
 
-        // Open log file
         items.push(MenuItem::Standard(StandardItem {
-            label: "Open Log File".to_string(),
-            enabled: state.debug_logging,
+            label: "Open Log".to_string(),
+            enabled: true,
             activate: Box::new(|tray: &mut Self| {
-                // Use try_send (non-blocking) - ksni uses an async runtime internally
                 let _ = tray.tx.try_send(VpnCommand::OpenLogFile);
             }),
             ..Default::default()
@@ -360,22 +348,19 @@ impl Tray for VpnTray {
 
         items.push(MenuItem::Separator);
 
-        // Restart application
+        // ── Session ──
+
         items.push(MenuItem::Standard(StandardItem {
-            label: "Restart Daemon".to_string(),
-            icon_name: "view-refresh".to_string(),
+            label: "Restart".to_string(),
             enabled: true,
             activate: Box::new(|tray: &mut Self| {
-                // Use try_send (non-blocking) - ksni uses an async runtime internally
                 let _ = tray.tx.try_send(VpnCommand::Restart);
             }),
             ..Default::default()
         }));
 
-        // Quit
         items.push(MenuItem::Standard(StandardItem {
             label: "Quit".to_string(),
-            icon_name: "application-exit".to_string(),
             enabled: true,
             activate: Box::new(|tray: &mut Self| {
                 let _ = tray.tx.try_send(VpnCommand::Quit);

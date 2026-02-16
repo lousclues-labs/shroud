@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.16.19] - 2026-02-16
+
+### Changed
+- **tray**: redesigned system tray menu for cleaner visual grouping. Branding header uses Unicode small caps (`ᨆʜʀᴏᴜᴅ`) for a quietly authoritative look. Connection list uses `●` for active VPN (was `✓ server (connected)`). Disconnect button only appears when connected (was always present, greyed out). Tools section groups Refresh, Debug Logging, and Open Log together. Removed icon names from Restart/Quit (cleaner on most themes). Open Log always visible for accessibility.
+
+---
+
 ## [1.16.18] - 2026-02-16
 
 ### Added
