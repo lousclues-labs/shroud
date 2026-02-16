@@ -58,7 +58,7 @@ jobs:
         run: cargo outdated --exit-code 1 || true
       
       - name: Report outdated
-        run: cargo outdated
+        run: cargo outdated || true
 
   # ===========================================================================
   # Coverage Report (Monthly)

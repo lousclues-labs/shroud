@@ -12,6 +12,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.16.15] - 2026-02-16
+
+### Fixed
+- **build**: `Cargo.lock` is now committed to version control. Previously it was in `.gitignore`, which meant CI, users building from source, and packagers all resolved dependency versions independently — potentially getting different (and incompatible) versions. This directly caused the CI `cargo-outdated` failure where `libc` resolved to `0.2.182` in CI but `0.2.181` locally, conflicting with `nix 0.31.0` (via `ctrlc`). Per [Cargo’s official guidance](https://doc.rust-lang.org/cargo/faq.html#why-have-cargolock-in-version-control): commit `Cargo.lock` for binary applications, gitignore it only for libraries. Shroud is a binary.
+
+### Changed
+- **build**: removed `Cargo.lock` from `.gitignore`. All builds now use the exact same dependency versions pinned in the lockfile. Dependency updates are explicit via `cargo update` and reviewed in diffs.
+
+---
+
 ## [1.16.14] - 2026-02-14
 
 ### Fixed
