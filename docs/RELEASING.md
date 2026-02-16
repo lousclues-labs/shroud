@@ -1,6 +1,6 @@
 # Releasing
 
-How we ship new versions of Shroud.
+How Shroud ships new versions.
 
 ---
 
@@ -128,7 +128,7 @@ Don't let users sit on a broken release.
 
 ## Version Numbering
 
-We use [Semantic Versioning](https://semver.org/):
+Shroud follows [Semantic Versioning](https://semver.org/):
 
 | Change | Example | Bump |
 |--------|---------|------|
@@ -148,6 +148,6 @@ For Shroud specifically:
 
 Ship often. Ship small. Ship working code.
 
-A release with one fix is better than a release with ten that we're not sure about. Users can update frequently. Big releases are scary.
+A release with one fix is better than a release with ten that aren't fully tested. Users can update frequently. Big releases are scary.
 
 Working code today beats perfect code never.

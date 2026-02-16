@@ -50,7 +50,7 @@ Shroud doesn't do any of that.
 
 **We fail loud, recover quiet.** When something breaks, you'll know. When it heals, you won't need to lift a finger.
 
-**We leave no trace.** When Shroud stops, your system is exactly as it was. No orphaned firewall rules. No zombie processes. No "please run this script to unfuck your networking."
+**We leave no trace.** When Shroud stops, your system is exactly as it was. No orphaned firewall rules. No zombie processes. No "please run this cleanup script to fix your networking."
 
 **We respect your privacy.** No telemetry. No analytics. No phoning home. If you want to run Shroud in a bunker with nothing but a VPN tunnel to the outside world, that's your right.
 
@@ -270,7 +270,7 @@ See [Troubleshooting](docs/TROUBLESHOOTING.md) for more.
 
 ## Contributing
 
-We'd love your help. But first, read the [Principles](docs/PRINCIPLES.md). Every contribution should align with them.
+Contributions are welcome. But first, read the [Principles](docs/PRINCIPLES.md). Every contribution should align with them.
 
 The short version:
 - Wrap, don't replace

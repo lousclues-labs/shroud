@@ -1,6 +1,6 @@
 # Troubleshooting
 
-When things go wrong, we want you back online fast. No essay required.
+When things go wrong, the goal is to get you back online fast. No essay required.
 
 ---
 
@@ -281,7 +281,7 @@ If you're stuck:
    - `shroud doctor` output
    - Relevant log snippets
 
-We read everything. We fix what we can.
+Every issue gets read. If it's fixable, it gets fixed.
 
 ---
 
@@ -289,4 +289,4 @@ We read everything. We fix what we can.
 
 Troubleshooting docs should get you back online, not teach you the entire codebase.
 
-If you're reading this, something went wrong. We're sorry about that. Let's fix it and move on.
+If you're reading this, something went wrong. Let's fix it and move on.

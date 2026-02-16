@@ -1,8 +1,8 @@
 # Contributing to Shroud
 
-You want to help. We appreciate that.
+You want to help. That's appreciated.
 
-Before you write any code, read the [Principles](docs/PRINCIPLES.md). Every contribution should align with them. If your idea contradicts a principle, we should talk about it first — either the idea needs adjusting, or maybe the principle does.
+Before you write any code, read the [Principles](docs/PRINCIPLES.md). Every contribution should align with them. If your idea contradicts a principle, let's talk about it first — either the idea needs adjusting, or maybe the principle does.
 
 ---
 
@@ -18,7 +18,7 @@ Before you write any code, read the [Principles](docs/PRINCIPLES.md). Every cont
 
 ## Contributor License
 
-Shroud is dual-licensed. By submitting a pull request, you agree to the terms in [CONTRIBUTOR-LICENSE.md](CONTRIBUTOR-LICENSE.md). The short version: you keep your copyright, you license your contribution under GPL-3.0, and you grant us permission to include it in our commercial license too. Your code always stays open source.
+Shroud is dual-licensed. By submitting a pull request, you agree to the terms in [CONTRIBUTOR-LICENSE.md](CONTRIBUTOR-LICENSE.md). The short version: you keep your copyright, you license your contribution under GPL-3.0, and you grant the project permission to include it in the commercial license too. Your code always stays open source.
 
 ---
 
@@ -93,7 +93,7 @@ cargo clippy -- -D warnings  # No lint warnings
 cargo test            # All tests pass
 ```
 
-We also recommend:
+Also recommended:
 
 ```bash
 cargo audit           # Check for vulnerable dependencies
@@ -103,7 +103,7 @@ These run in CI. Save yourself the round trip.
 
 ---
 
-## What We Want
+## What Makes a Good Contribution
 
 ### Great Contributions
 
@@ -123,7 +123,7 @@ Open an issue before implementing:
 - Changes to the state machine
 - Architectural changes
 
-We want to make sure it fits before you invest time.
+Best to make sure it fits before you invest time.
 
 ### Out of Scope
 
@@ -131,11 +131,11 @@ These are intentional limits. Don't try to "improve" Shroud by adding:
 
 | Feature | Why Not |
 |---------|---------|
-| macOS/Windows support | We're Linux-focused. That's the point. |
-| GUI application | We're CLI-first with a tray icon. |
-| Built-in VPN protocols | We wrap NM, we don't replace it. |
+| macOS/Windows support | Shroud is Linux-focused. That's the point. |
+| GUI application | CLI-first with a tray icon. |
+| Built-in VPN protocols | Shroud wraps NM, it doesn't replace it. |
 | Telemetry/analytics | No phoning home. Ever. |
-| Auto-updates | User controls their system. |
+| Auto-updates | The user controls their system. |
 
 ---
 
@@ -276,10 +276,10 @@ Before submitting changes to core functionality:
 
 - **Bug?** Open an issue with reproduction steps
 - **Feature idea?** Open an issue to discuss first
-- **Stuck?** Open an issue. We're friendly.
+- **Stuck?** Open an issue. You'll get a response.
 
-Be respectful. Be constructive. We're all here because we want this to be good.
+Be respectful. Be constructive.
 
 ---
 
-*Thanks for helping make Shroud better. We mean it.*
+*Thanks for helping make Shroud better.*

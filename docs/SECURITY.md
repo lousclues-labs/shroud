@@ -22,7 +22,7 @@ If advisories aren't available, contact the maintainers directly through GitHub.
 
 ## What to Include
 
-The more detail, the faster we can fix it:
+The more detail, the faster the fix:
 
 - **Description** — What's the vulnerability?
 - **Impact** — What can an attacker do?
@@ -41,7 +41,7 @@ The more detail, the faster we can fix it:
 | Fix or mitigation plan | 2 weeks |
 | Public disclosure | After fix is available |
 
-We'll keep you updated on progress.
+Expect updates on progress.
 
 ---
 
@@ -66,9 +66,9 @@ shroud audit
 
 This runs in CI. If a vulnerable dependency is found:
 
-1. We assess the actual risk (not all advisories apply to all use cases)
-2. We document the risk if we can't update immediately
-3. We prioritize a fix in the next release
+1. The actual risk is assessed (not all advisories apply to all use cases)
+2. The risk is documented if an update isn't immediately possible
+3. A fix is prioritized in the next release
 
 ---
 
@@ -85,7 +85,7 @@ Shroud's security assumptions:
 
 ### Kill Switch Privileges
 
-The kill switch requires root for iptables. We use sudoers rules that only allow specific commands:
+The kill switch requires root for iptables. Shroud uses sudoers rules that only allow specific commands:
 
 ```
 %wheel ALL=(ALL) NOPASSWD: /usr/bin/iptables, /usr/bin/ip6tables, ...
@@ -130,7 +130,7 @@ Security through clarity.
 
 Every firewall rule should be auditable. Every design decision should be explainable. If users can't understand what Shroud is doing, they won't trust it.
 
-We'd rather have fewer features that we're confident in than more features with hidden risks.
+Shroud prioritizes fewer features done right over more features with hidden risks.
 
 ---
 

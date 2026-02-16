@@ -9,10 +9,10 @@ This guide gets you from zero to a working development environment. No fluff.
 ## Prerequisites
 
 You need:
-- **Rust 1.75+** — We use some newer features
+- **Rust 1.75+** — Some newer features are used
 - **NetworkManager** — With OpenVPN and/or WireGuard plugins
 - **iptables or nftables** — For kill switch testing
-- **A Linux system** — WSL might work, but we don't test it
+- **A Linux system** — WSL might work, but it's not tested
 
 ### Arch Linux
 
@@ -285,7 +285,7 @@ sudo iptables -L SHROUD_KILLSWITCH -n -v
 
 Development should feel like the tool itself: simple, clear, no surprises.
 
-If something is confusing, that's a bug in our documentation or our code. File an issue or send a PR.
+If something is confusing, that's a bug in the documentation or the code. File an issue or send a PR.
 
 Read [PRINCIPLES.md](PRINCIPLES.md) before making significant changes. Every contribution should align with those values.
 
@@ -297,4 +297,4 @@ Read [PRINCIPLES.md](PRINCIPLES.md) before making significant changes. Every con
 - **Design philosophy**: Read [PRINCIPLES.md](PRINCIPLES.md)
 - **Stuck on something**: Open a GitHub issue
 
-We're friendly. We're here to help.
+You'll get a response.
