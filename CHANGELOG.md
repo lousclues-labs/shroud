@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.16.16] - 2026-02-16
+
+### Fixed
+- **ci**: `cargo-outdated` step in the security audit workflow no longer fails the job. The tool has a known resolver bug where it creates synthetic dependency pins (e.g., `libc = "=0.2.182"`) that conflict with transitive dependencies (`nix 0.31.0` requires `libc ^0.2.180`). Added `continue-on-error: true` at both job and step level, and consolidated the two redundant `cargo outdated` steps into one. Actual security auditing is done by `cargo audit` which is unaffected.
+
+---
+
 ## [1.16.15] - 2026-02-16
 
 ### Fixed
