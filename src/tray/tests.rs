@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! Unit tests for Tray module
 //!
 //! Tests menu/action wiring with mock notifier

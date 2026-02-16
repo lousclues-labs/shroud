@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! Kill switch rule generation — pure functions, easily testable.
 //!
 //! Contains pure-logic helpers for building firewall rule strings,

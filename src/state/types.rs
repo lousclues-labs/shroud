@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! State machine types and enums
 //!
 //! Defines the core state model for the VPN manager, following the formal

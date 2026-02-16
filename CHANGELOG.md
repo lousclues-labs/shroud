@@ -12,6 +12,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.16.20] - 2026-02-16
+
+### Added
+- **licensing**: comprehensive licensing framework for dual-licensed distribution:
+  - `LICENSE` — rewritten with clean GPL-3.0 preamble (copyright notice + project attribution) so GitHub’s license detector correctly identifies GPL-3.0. Full verbatim GPL-3.0 text preserved. Removes custom dual-license preamble that caused GitHub to show "Other".
+  - `LICENSE-COMMERCIAL.md` — explains commercial licensing option, when it’s needed, and how to obtain it.
+  - `LICENSE-DOCS.md` — CC BY 4.0 license for all project documentation.
+  - `TRADEMARKS.md` — trademark policy for "Shroud" and "lousclues" — permitted uses, fork naming guidelines.
+  - `CONTRIBUTOR-LICENSE.md` — contributor license agreement for dual-licensing compatibility. License grant (not copyright assignment) — contributors retain copyright, grant broad license for commercial use.
+  - `NOTICE` — central attribution file with copyright, license references, project URL.
+  - `THIRD-PARTY-LICENSES` — inventory of all direct dependency licenses (19 crates, all MIT/Apache-2.0 compatible with GPL-3.0).
+- **copyright**: SPDX headers added to all 72 `.rs` source files under `src/`: `// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial` + `// Copyright (C) 2026 loujr (lousclues)`.
+- **contributing**: `CONTRIBUTING.md` now references the Contributor License with a plain-language summary.
+
+### Changed
+- **readme**: license section expanded to reference all license files (GPL, commercial, docs, third-party, trademarks, contributor license).
+- **cargo**: `authors` field updated from `loujr` to `loujr (lousclues)`.
+
+---
+
 ## [1.16.19] - 2026-02-16
 
 ### Changed

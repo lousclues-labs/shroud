@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! D-Bus module for NetworkManager integration
 //!
 //! Provides real-time VPN state change notifications via D-Bus signals,

@@ -294,9 +294,18 @@ That's really it.
 
 ## License
 
-GPL-3.0 for open source use. Commercial licensing available.
+Shroud is a lousclues project, dual-licensed:
 
-See [LICENSE](LICENSE) for details.
+- **Source Code** — [GPL-3.0-or-later](LICENSE) for open source use, modification, and distribution under GPL terms.
+- **Commercial** — [Commercial license](LICENSE-COMMERCIAL.md) available for proprietary use cases.
+- **Documentation** — [CC BY 4.0](LICENSE-DOCS.md) for all project documentation.
+- **Third-Party** — [Dependency licenses](THIRD-PARTY-LICENSES) for all included libraries.
+
+"Shroud" and "lousclues" are trademarks of loujr. See [TRADEMARKS.md](TRADEMARKS.md) for usage guidelines.
+
+By contributing, you agree to the [Contributor License](CONTRIBUTOR-LICENSE.md).
+
+See [LICENSE](LICENSE) for the full GPL text.
 
 ---
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! Headless-mode configuration helpers — pure functions, easily testable.
 //!
 //! Parses stdin commands, validates headless config, and builds

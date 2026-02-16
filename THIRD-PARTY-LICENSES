@@ -1,0 +1,34 @@
+This file lists the licenses of third-party dependencies used by Shroud.
+These dependencies are included at compile time via Cargo (Rust's package manager).
+Their source code is not modified or vendored — they are linked as published crates.
+
+For the complete dependency tree and transitive dependencies, run:
+  cargo license
+  cargo about generate
+
+Direct dependencies:
+
+  tokio (https://crates.io/crates/tokio) — MIT
+  async-trait (https://crates.io/crates/async-trait) — MIT OR Apache-2.0
+  ksni (https://crates.io/crates/ksni) — MIT
+  tracing (https://crates.io/crates/tracing) — MIT
+  tracing-subscriber (https://crates.io/crates/tracing-subscriber) — MIT
+  notify-rust (https://crates.io/crates/notify-rust) — MIT OR Apache-2.0
+  zbus (https://crates.io/crates/zbus) — MIT
+  futures-lite (https://crates.io/crates/futures-lite) — Apache-2.0 OR MIT
+  ctrlc (https://crates.io/crates/ctrlc) — MIT OR Apache-2.0
+  serde (https://crates.io/crates/serde) — MIT OR Apache-2.0
+  toml (https://crates.io/crates/toml) — MIT OR Apache-2.0
+  serde_json (https://crates.io/crates/serde_json) — MIT OR Apache-2.0
+  dirs (https://crates.io/crates/dirs) — MIT OR Apache-2.0
+  walkdir (https://crates.io/crates/walkdir) — Unlicense OR MIT
+  libc (https://crates.io/crates/libc) — MIT OR Apache-2.0
+  thiserror (https://crates.io/crates/thiserror) — MIT OR Apache-2.0
+  ureq (https://crates.io/crates/ureq) — MIT OR Apache-2.0
+  rand (https://crates.io/crates/rand) — MIT OR Apache-2.0
+  scopeguard (https://crates.io/crates/scopeguard) — MIT OR Apache-2.0
+
+All listed dependencies are compatible with GPL-3.0-or-later.
+Full license texts for MIT and Apache-2.0 are available at:
+  MIT: https://opensource.org/licenses/MIT
+  Apache-2.0: https://www.apache.org/licenses/LICENSE-2.0

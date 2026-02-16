@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! IPC client for CLI communication with daemon.
 //!
 //! Provides functions for connecting to the Shroud daemon and sending commands.

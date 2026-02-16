@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! Unit tests for Kill Switch module
 //!
 //! Tests rule synthesis, teardown logic, and configuration

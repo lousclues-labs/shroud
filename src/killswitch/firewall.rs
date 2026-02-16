@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! iptables-based VPN kill switch
 //!
 //! Uses a dedicated iptables chain to block all outbound traffic except:

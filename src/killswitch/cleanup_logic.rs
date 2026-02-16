@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! Kill-switch cleanup helpers — pure functions, easily testable.
 //!
 //! Builds cleanup command lists and parses iptables output without

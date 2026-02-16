@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! NM output parsing — pure functions, easily testable.
 //!
 //! Extracts the nmcli output parsing logic from `nm::client` so it

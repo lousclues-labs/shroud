@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! D-Bus type conversions and state mapping — pure functions, easily testable.
 //!
 //! Provides NM state enums, D-Bus path parsing utilities, and

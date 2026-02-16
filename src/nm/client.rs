@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! NetworkManager interface via nmcli
 //!
 //! Provides functions for interacting with NetworkManager to manage VPN connections.

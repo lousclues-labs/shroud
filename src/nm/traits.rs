@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! Trait abstraction over NetworkManager operations.
 //!
 //! This allows the supervisor to be tested with mock implementations

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! System tray service implementation
 //!
 //! Provides the ksni-based system tray interface for the VPN manager.

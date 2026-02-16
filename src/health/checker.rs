@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! Health checker implementation
 //!
 //! Verifies VPN tunnel connectivity by making HTTP requests through the tunnel

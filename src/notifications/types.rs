@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! Notification types and categories — pure data, easily testable.
 //!
 //! Some variants and methods are part of the public API surface but not

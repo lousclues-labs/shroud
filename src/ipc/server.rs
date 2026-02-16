@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 loujr (lousclues)
+
 //! IPC server for the Shroud daemon.
 //!
 //! Listens on a Unix domain socket for commands from CLI clients.
