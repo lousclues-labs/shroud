@@ -47,6 +47,10 @@ jobs:
   dependency-updates:
     name: Check Dependency Updates
     runs-on: ubuntu-latest
+    # This job is informational only — cargo-outdated has known resolver
+    # conflicts with complex dependency graphs (e.g., libc version pinning).
+    # Failures here do not indicate security issues or build problems.
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -54,11 +58,9 @@ jobs:
       - name: Install cargo-outdated
         run: cargo install cargo-outdated --locked
       
-      - name: Check outdated dependencies
+      - name: Report outdated dependencies
+        continue-on-error: true
         run: cargo outdated --exit-code 1 || true
-      
-      - name: Report outdated
-        run: cargo outdated || true
 
   # ===========================================================================
   # Coverage Report (Monthly)
