@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.16.17] - 2026-02-16
+
+### Removed
+- **ci**: removed `cargo-outdated` from the security audit workflow entirely. The tool has a known resolver bug that creates synthetic dependency pins (`libc = "=0.2.182"`) conflicting with transitive dependencies (`nix 0.31.0` requires `libc ^0.2.180`), causing persistent CI failures unrelated to actual security issues. `cargo audit` (which checks for real CVEs) remains and works correctly. Dependency freshness can be checked locally with `cargo outdated` when needed.
+
+---
+
 ## [1.16.16] - 2026-02-16
 
 ### Fixed
