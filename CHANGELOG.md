@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.16.18] - 2026-02-16
+
+### Added
+- **tray**: version branding at the top of the system tray menu. Shows `Shroud v{version}` as a subtle disabled label above the status line. Uses `env!("CARGO_PKG_VERSION")` at compile time — always matches the binary version, no hardcoding.
+
+---
+
 ## [1.16.17] - 2026-02-16
 
 ### Removed

@@ -193,6 +193,15 @@ impl Tray for VpnTray {
             .clone();
         let mut items = Vec::new();
 
+        // Branding — subtle, disabled label at the top of the menu
+        items.push(MenuItem::Standard(StandardItem {
+            label: format!("Shroud v{}", env!("CARGO_PKG_VERSION")),
+            enabled: false,
+            ..Default::default()
+        }));
+
+        items.push(MenuItem::Separator);
+
         // Status header with clear visual indicators
         let status_text = match &state.state {
             VpnState::Connected { server } => format!("🔒 Connected: {}", server),
