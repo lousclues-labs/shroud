@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 Louis Nelson Jr. <https://lousclues.com>
+
 //! Integration tests for VPN config import.
 //!
 //! These tests require NetworkManager and are ignored by default.

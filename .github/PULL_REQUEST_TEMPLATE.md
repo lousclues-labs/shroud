@@ -16,7 +16,7 @@ Fixes #
 ## Checklist
 
 - [ ] I've read the [Principles](docs/PRINCIPLES.md) and this change aligns with them
-- [ ] I've read and agree to the [Contributor License](CONTRIBUTOR-LICENSE.md)
+- [ ] I've read and agree to the [Contributor License](licenses/CONTRIBUTOR-LICENSE.md)
 - [ ] `cargo fmt` — code is formatted
 - [ ] `cargo clippy -- -D warnings` — no lint warnings
 - [ ] `cargo test` — all tests pass

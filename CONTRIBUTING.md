@@ -18,7 +18,7 @@ Before you write any code, read the [Principles](docs/PRINCIPLES.md). Every cont
 
 ## Contributor License
 
-Shroud is dual-licensed. By submitting a pull request, you agree to the terms in [CONTRIBUTOR-LICENSE.md](CONTRIBUTOR-LICENSE.md). The short version: you keep your copyright, you license your contribution under GPL-3.0, and you grant the project permission to include it in the commercial license too. Your code always stays open source.
+Shroud is dual-licensed. By submitting a pull request, you agree to the terms in [CONTRIBUTOR-LICENSE.md](licenses/CONTRIBUTOR-LICENSE.md). The short version: you keep your copyright, you license your contribution under GPL-3.0, and you grant Louis Nelson Jr. (the project maintainer and sole copyright holder) permission to include it in the commercial license too. Your code always stays open source.
 
 ---
 

@@ -295,18 +295,25 @@ That's really it.
 
 ## License
 
-Shroud is a lousclues project, dual-licensed:
+Copyright (C) 2026 **Louis Nelson Jr.** — A [lousclues](https://lousclues.com) project.
 
-- **Source Code** — [GPL-3.0-or-later](LICENSE) for open source use, modification, and distribution under GPL terms.
-- **Commercial** — [Commercial license](LICENSE-COMMERCIAL.md) available for proprietary use cases.
-- **Documentation** — [CC BY 4.0](LICENSE-DOCS.md) for all project documentation.
-- **Third-Party** — [Dependency licenses](THIRD-PARTY-LICENSES) for all included libraries.
+Shroud is dual-licensed:
 
-"Shroud" and "lousclues" are trademarks of loujr. See [TRADEMARKS.md](TRADEMARKS.md) for usage guidelines.
+| Component | License | File |
+|-----------|---------|------|
+| Source Code | GNU GPL v3.0 or later **or** Commercial License | [LICENSE](LICENSE), [LICENSE-COMMERCIAL.md](licenses/LICENSE-COMMERCIAL.md) |
+| Documentation | Creative Commons Attribution 4.0 (CC BY 4.0) | [LICENSE-DOCS.md](licenses/LICENSE-DOCS.md) |
+| Third-Party Dependencies | MIT, Apache-2.0, and other permissive licenses | [THIRD-PARTY-LICENSES](licenses/THIRD-PARTY-LICENSES) |
 
-By contributing, you agree to the [Contributor License](CONTRIBUTOR-LICENSE.md).
+**For most users:** The GPL covers you fully. Use Shroud, connect your VPNs, run the daemon — no restrictions beyond the GPL.
 
-See [LICENSE](LICENSE) for the full GPL text.
+**For proprietary/commercial use:** If you need to embed Shroud in closed-source products or redistribute without GPL obligations, a [commercial license](licenses/LICENSE-COMMERCIAL.md) is available.
+
+**For contributors:** By submitting a pull request, you agree to the [Contributor License Agreement](licenses/CONTRIBUTOR-LICENSE.md). You keep your copyright; you grant the project permission to include your contribution under both licenses.
+
+**Trademarks:** "Shroud" and "lousclues" are trademarks of Louis Nelson Jr. See [TRADEMARKS.md](TRADEMARKS.md) for usage guidelines. The GPL does not grant trademark rights.
+
+For the complete licensing framework, see [LICENSING.md](licenses/LICENSING.md). For project governance and succession planning, see [GOVERNANCE.md](GOVERNANCE.md).
 
 ---
 

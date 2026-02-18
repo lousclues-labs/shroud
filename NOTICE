@@ -1,10 +1,66 @@
 Shroud
-Copyright (C) 2026 loujr (lousclues)
+Copyright (C) 2026 Louis Nelson Jr.
 A lousclues project — https://vpnshroud.org
 
-Licensed under the GNU General Public License v3.0 or later.
-See LICENSE for the full license text.
-Commercial licensing available — see LICENSE-COMMERCIAL.md.
+================================================================================
+IDENTITY & ATTRIBUTION
+================================================================================
 
-This product includes software developed by third parties.
-See THIRD-PARTY-LICENSES for details.
+The following names all refer to the same individual and sole copyright holder:
+
+  Legal Name:     Louis Nelson Jr.
+  Known As:       Lou Nelson Jr., Lou
+  GitHub Handle:  loujr (https://github.com/loujr)
+  Brand Name:     lousclues (https://lousclues.com)
+
+"Louis Nelson Jr." is the canonical identity for all legal, copyright, and
+licensing purposes. "Lou Nelson Jr." is a recognized professional alias.
+"loujr" is the GitHub and development identity. "lousclues" is the project
+brand and online presence. All intellectual property rights, including
+copyright and trademark rights, are held by Louis Nelson Jr.
+
+================================================================================
+PROJECT INFORMATION
+================================================================================
+
+  Project:        Shroud — A provider-agnostic VPN connection manager for Linux
+  Repository:     https://github.com/loujr/shroud
+  Website:        https://vpnshroud.org
+  Brand Website:  https://lousclues.com
+
+================================================================================
+LICENSE SUMMARY
+================================================================================
+
+  Source Code:     GNU General Public License v3.0 or later (GPL-3.0-or-later)
+                   See LICENSE for the full license text.
+
+  Commercial:     A commercial license is available for proprietary use cases.
+                   See licenses/LICENSE-COMMERCIAL.md for terms.
+
+  Documentation:  Creative Commons Attribution 4.0 International (CC BY 4.0)
+                   See licenses/LICENSE-DOCS.md for details.
+
+  SPDX ID:        GPL-3.0-or-later OR LicenseRef-Commercial
+
+================================================================================
+THIRD-PARTY ATTRIBUTION
+================================================================================
+
+This product includes software developed by third parties. All third-party
+dependencies are linked at compile time via Cargo (Rust's package manager).
+No third-party source code is modified or vendored.
+
+See licenses/THIRD-PARTY-LICENSES for the complete list of dependencies and their
+respective licenses.
+
+All direct dependencies are licensed under MIT, Apache-2.0, or compatible
+permissive licenses. See licenses/THIRD-PARTY-LICENSES for the authoritative list.
+
+================================================================================
+TRADEMARK NOTICE
+================================================================================
+
+"Shroud" and "lousclues" are trademarks of Louis Nelson Jr. The GPL license
+does not grant rights to use these trademarks. See TRADEMARKS.md for usage
+guidelines.

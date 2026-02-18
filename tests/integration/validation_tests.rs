@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 Louis Nelson Jr. <https://lousclues.com>
+
 //! Integration tests for input validation
 //!
 //! Verifies that invalid inputs are rejected end-to-end.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 Louis Nelson Jr. <https://lousclues.com>
+
 //! Integration tests for tray -> supervisor channel communication
 //!
 //! This tests the exact pattern that caused the blocking_send/try_send bug.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+// Copyright (C) 2026 Louis Nelson Jr. <https://lousclues.com>
+
 //! Integration tests for state machine transitions
 //!
 //! These tests verify the state machine correctly handles all transitions.

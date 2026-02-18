@@ -2,7 +2,7 @@
 name = "shroud"
 version = "1.16.20"
 edition = "2021"
-authors = ["loujr (lousclues)"]
+authors = ["Louis Nelson Jr. (loujr) <https://lousclues.com>"]
 description = "A provider-agnostic VPN connection manager for Linux with kill switch, auto-reconnect, and system tray integration"
 readme = "README.md"
 license = "GPL-3.0-or-later"
