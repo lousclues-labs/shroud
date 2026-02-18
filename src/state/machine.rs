@@ -29,10 +29,18 @@ impl Default for StateMachineConfig {
 /// - NetworkManager events (vpn up/down)
 /// - Health check results
 /// - System events (sleep/wake)
+///
+/// ## Retry Counter
+///
+/// `self.retries` is the **canonical source of truth** for the current retry
+/// count. `VpnState::Reconnecting { attempt, .. }` is always derived from
+/// `self.retries` during transitions — never the other way around.
+/// `max_attempts` in the variant is derived from `self.config.max_retries`.
 pub struct StateMachine {
     /// Current state
     pub state: VpnState,
-    /// Number of retry attempts in current reconnection cycle
+    /// Canonical retry counter for the current reconnection cycle.
+    /// `Reconnecting { attempt }` is always set equal to this value.
     retries: u32,
     /// Configuration
     config: StateMachineConfig,
@@ -116,7 +124,7 @@ impl StateMachine {
                     reason = TransitionReason::Retrying;
                     Some(VpnState::Reconnecting {
                         server: server.clone(),
-                        attempt: self.retries,
+                        attempt: self.retries, // derived from canonical counter
                         max_attempts: self.config.max_retries,
                     })
                 }
@@ -147,10 +155,11 @@ impl StateMachine {
                 })
             }
             (VpnState::Connected { server }, Event::NmVpnDown) => {
+                self.retries = 1;
                 reason = TransitionReason::VpnLost;
                 Some(VpnState::Reconnecting {
                     server: server.clone(),
-                    attempt: 1,
+                    attempt: self.retries, // derived from canonical counter
                     max_attempts: self.config.max_retries,
                 })
             }
@@ -169,10 +178,11 @@ impl StateMachine {
 
             // --- Degraded ---
             (VpnState::Degraded { server }, Event::HealthDead) => {
+                self.retries = 1;
                 reason = TransitionReason::HealthCheckDead;
                 Some(VpnState::Reconnecting {
                     server: server.clone(),
-                    attempt: 1,
+                    attempt: self.retries, // derived from canonical counter
                     max_attempts: self.config.max_retries,
                 })
             }
@@ -184,10 +194,11 @@ impl StateMachine {
                 })
             }
             (VpnState::Degraded { server }, Event::NmVpnDown) => {
+                self.retries = 1;
                 reason = TransitionReason::VpnLost;
                 Some(VpnState::Reconnecting {
                     server: server.clone(),
-                    attempt: 1,
+                    attempt: self.retries, // derived from canonical counter
                     max_attempts: self.config.max_retries,
                 })
             }
@@ -208,26 +219,25 @@ impl StateMachine {
                 Some(VpnState::Disconnected)
             }
             (
-                VpnState::Reconnecting {
-                    server,
-                    attempt,
-                    max_attempts,
-                },
+                VpnState::Reconnecting { server, .. },
                 Event::Timeout,
             ) => {
-                self.retries = *attempt + 1;
-                if self.retries >= *max_attempts {
+                self.retries += 1;
+                if self.retries >= self.config.max_retries {
                     reason = TransitionReason::RetriesExhausted;
                     Some(VpnState::Failed {
                         server: server.clone(),
-                        reason: format!("Max reconnection attempts ({}) exceeded", max_attempts),
+                        reason: format!(
+                            "Max reconnection attempts ({}) exceeded",
+                            self.config.max_retries
+                        ),
                     })
                 } else {
                     reason = TransitionReason::Retrying;
                     Some(VpnState::Reconnecting {
                         server: server.clone(),
-                        attempt: self.retries,
-                        max_attempts: *max_attempts,
+                        attempt: self.retries, // derived from canonical counter
+                        max_attempts: self.config.max_retries,
                     })
                 }
             }
@@ -270,6 +280,15 @@ impl StateMachine {
 
         if let Some(new) = new_state {
             self.state = new;
+
+            // Invariant: Reconnecting.attempt must always equal self.retries
+            debug_assert!(
+                !matches!(&self.state, VpnState::Reconnecting { attempt, .. } if *attempt != self.retries),
+                "Retry counter desync: state.attempt={} but self.retries={}",
+                if let VpnState::Reconnecting { attempt, .. } = &self.state { *attempt } else { 0 },
+                self.retries
+            );
+
             self.log_transition(&old_state, &self.state, &reason);
             Some(reason)
         } else {
@@ -505,6 +524,7 @@ mod tests {
             attempt: 3,
             max_attempts: 10,
         };
+        sm.retries = 3;
 
         let reason = sm.handle_event(Event::NmVpnUp {
             server: "vpn1".into(),
@@ -523,6 +543,7 @@ mod tests {
             attempt: 2,
             max_attempts: 10,
         };
+        sm.retries = 2;
 
         let reason = sm.handle_event(Event::ConnectionFailed {
             reason: "VPN not found".into(),
@@ -541,6 +562,7 @@ mod tests {
             attempt: 1,
             max_attempts: 5,
         };
+        sm.retries = 1;
 
         let reason = sm.handle_event(Event::Timeout);
 
@@ -559,6 +581,7 @@ mod tests {
             attempt: 9,
             max_attempts: 10,
         };
+        sm.retries = 9;
 
         let reason = sm.handle_event(Event::Timeout);
 

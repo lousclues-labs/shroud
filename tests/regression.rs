@@ -174,6 +174,72 @@ fn regression_state_machine_retry_exhaustion() {
     );
 }
 
+/// Regression: retry counter (retries()) must stay in sync with Reconnecting.attempt
+/// through an entire reconnect cycle.
+///
+/// Prior to the deduplication fix, `self.retries` and `Reconnecting { attempt }`
+/// were updated independently and could drift.
+#[test]
+fn regression_retry_counter_stays_in_sync() {
+    let config = StateMachineConfig { max_retries: 5 };
+    let mut sm = StateMachine::with_config(config);
+
+    // Connect and establish
+    let _ = sm.handle_event(Event::UserEnable {
+        server: "vpn".to_string(),
+    });
+    let _ = sm.handle_event(Event::NmVpnUp {
+        server: "vpn".to_string(),
+    });
+    assert_eq!(sm.retries(), 0, "retries should be 0 when Connected");
+
+    // VPN drops → first reconnect attempt
+    let _ = sm.handle_event(Event::NmVpnDown);
+    if let VpnState::Reconnecting { attempt, .. } = &sm.state {
+        assert_eq!(
+            *attempt,
+            sm.retries(),
+            "attempt and retries() must match after first reconnect"
+        );
+        assert_eq!(*attempt, 1);
+    } else {
+        panic!("Expected Reconnecting, got {:?}", sm.state);
+    }
+
+    // Timeout → second attempt
+    let _ = sm.handle_event(Event::Timeout);
+    if let VpnState::Reconnecting { attempt, .. } = &sm.state {
+        assert_eq!(
+            *attempt,
+            sm.retries(),
+            "attempt and retries() must match after timeout"
+        );
+        assert_eq!(*attempt, 2);
+    } else {
+        panic!("Expected Reconnecting, got {:?}", sm.state);
+    }
+
+    // Timeout → third attempt
+    let _ = sm.handle_event(Event::Timeout);
+    if let VpnState::Reconnecting { attempt, .. } = &sm.state {
+        assert_eq!(
+            *attempt,
+            sm.retries(),
+            "attempt and retries() must match after second timeout"
+        );
+        assert_eq!(*attempt, 3);
+    } else {
+        panic!("Expected Reconnecting, got {:?}", sm.state);
+    }
+
+    // Success → retries reset
+    let _ = sm.handle_event(Event::NmVpnUp {
+        server: "vpn".to_string(),
+    });
+    assert_eq!(sm.retries(), 0, "retries should reset to 0 on reconnect success");
+    assert!(matches!(sm.state, VpnState::Connected { .. }));
+}
+
 /// Regression: UserDisable from any state must reach Disconnected.
 #[test]
 fn regression_user_disable_always_disconnects() {
