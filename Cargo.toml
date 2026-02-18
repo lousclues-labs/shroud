@@ -13,6 +13,10 @@ keywords = ["vpn", "openvpn", "networkmanager", "linux", "tray"]
 categories = ["command-line-utilities", "network-programming"]
 rust-version = "1.85"
 
+[lib]
+name = "shroud"
+path = "src/lib.rs"
+
 [[bin]]
 name = "shroud"
 path = "src/main.rs"
