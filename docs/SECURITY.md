@@ -180,3 +180,77 @@ Shroud's job is to be the armor around your VPN. Protecting against local malwar
 Shroud's debug log (`~/.local/share/shroud/debug.log`) contains VPN connection details including server names, IPs, connection timestamps, and state transitions. This file has `0600` permissions and is only readable by the running user.
 
 Any process running as the same user can read this file. If you are concerned about local malware, consider disabling file logging (`--log-level error`) or configuring log rotation via the config file.
+
+---
+
+## IPC Security Model
+
+Shroud's CLI communicates with the daemon over a Unix domain socket using JSON messages delimited by newlines. The connection is **not encrypted**. This section explains why, and what protections are in place instead.
+
+### Why No Encryption
+
+Adding TLS or any encryption layer to the IPC would add complexity with zero security benefit. Here's why:
+
+1. **Unix domain sockets are local-only.** The kernel enforces this — they cannot be connected to from another machine. There is no network path to intercept.
+
+2. **The socket has `0600` permissions.** Only the owning user can read or write to it. The socket is created with a restrictive umask before `bind()`, so there is no window where other users can access it.
+
+3. **`XDG_RUNTIME_DIR` is per-user and mode `0700`.** On modern Linux systems, systemd creates this directory (typically `/run/user/<uid>/`) and restricts it to the owning user. The socket lives at `$XDG_RUNTIME_DIR/shroud.sock`.
+
+4. **Any process that can access the socket already has full user privileges.** It can read your SSH keys, modify your shell config, and do anything you can do. Encrypting IPC against an attacker who is already you is security theater.
+
+5. **Complexity is debt (Principle V).** TLS would require certificate management, key storage, and a trust model — all for protecting a socket that only you can access.
+
+### Socket Path Selection
+
+The socket is placed at `$XDG_RUNTIME_DIR/shroud.sock` when available. If `XDG_RUNTIME_DIR` is not set (rare on modern systems), Shroud falls back to `~/.local/share/shroud/shroud.sock` — a user-owned directory.
+
+Shroud **does not** use `/tmp` for the socket. The `/tmp` directory has the sticky bit set, which means other users can create files there that the owning user cannot remove. A local attacker could pre-create a socket at the expected path to prevent the daemon from starting (denial of service). Using `XDG_RUNTIME_DIR` or a user-owned directory eliminates this attack vector.
+
+### Symlink Protection
+
+Before removing a stale socket file on startup, Shroud checks whether the path is a symlink using `symlink_metadata()`. If the socket path is a symlink, the server refuses to proceed and logs a warning. This prevents a class of TOCTOU (time-of-check-time-of-use) attacks where an attacker replaces the socket file with a symlink to another file.
+
+> **Note:** A small TOCTOU window exists between the symlink check and the `remove_file()` call. This is acceptable because `XDG_RUNTIME_DIR` is mode `0700` — only the owning user can create files there, so there is no attacker who could exploit the window.
+
+### Peer Identification
+
+On Linux, Shroud uses `SO_PEERCRED` (via `getsockopt`) to retrieve the PID of the connecting process. Every non-trivial IPC command is logged with the peer PID:
+
+```
+INFO Received command: Connect { name: "us-east-1" } from PID 12345
+```
+
+This provides an audit trail showing which process sent which command. If something unexpected happens, the logs will tell you what initiated it.
+
+### Connection Limits
+
+Two limits prevent resource exhaustion:
+
+| Protection | Mechanism | Limit |
+|-----------|-----------|-------|
+| **Concurrent connections** | `tokio::sync::Semaphore` | 10 simultaneous connections |
+| **Message size** | `BufReader::take()` | 64 KB per message (SHROUD-VULN-026) |
+| **Commands per connection** | Counter with reject | 100 commands per session |
+
+If a connection exceeds the message size limit without a newline, the server rejects it and closes the connection. This prevents a malicious or buggy client from sending an unbounded stream of data and exhausting memory.
+
+### Protocol Versioning
+
+The IPC protocol includes a version handshake. The first message from a client must be a `Hello` with the protocol version number. If the versions don't match, the server responds with `VersionMismatch` and the client reports a clear error asking the user to restart the daemon. This prevents silent failures when the CLI and daemon are from different versions.
+
+### Trust Boundary
+
+Shroud's IPC trust boundary is the Unix user. Any process running as the same user is considered trusted. This matches the POSIX security model — if an attacker has code execution as your user, IPC encryption would not save you. They could attach a debugger to the daemon, read its memory, or replace the binary entirely.
+
+What Shroud *does* protect against:
+
+- **Other users on the same system** — socket permissions prevent cross-user access
+- **Remote attackers** — Unix domain sockets have no network exposure
+- **Accidental interference** — protocol validation rejects malformed input
+- **Resource exhaustion** — connection and message limits prevent DoS
+
+What Shroud *does not* attempt to protect against:
+
+- **Same-user malware** — this is the job of endpoint protection, not a VPN manager
+- **Root-level attackers** — root can do anything, including reading the socket
