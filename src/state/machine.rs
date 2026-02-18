@@ -218,10 +218,7 @@ impl StateMachine {
                 reason = TransitionReason::ConnectionFailed;
                 Some(VpnState::Disconnected)
             }
-            (
-                VpnState::Reconnecting { server, .. },
-                Event::Timeout,
-            ) => {
+            (VpnState::Reconnecting { server, .. }, Event::Timeout) => {
                 self.retries += 1;
                 if self.retries >= self.config.max_retries {
                     reason = TransitionReason::RetriesExhausted;
@@ -285,7 +282,11 @@ impl StateMachine {
             debug_assert!(
                 !matches!(&self.state, VpnState::Reconnecting { attempt, .. } if *attempt != self.retries),
                 "Retry counter desync: state.attempt={} but self.retries={}",
-                if let VpnState::Reconnecting { attempt, .. } = &self.state { *attempt } else { 0 },
+                if let VpnState::Reconnecting { attempt, .. } = &self.state {
+                    *attempt
+                } else {
+                    0
+                },
                 self.retries
             );
 

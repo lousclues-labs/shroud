@@ -236,7 +236,11 @@ fn regression_retry_counter_stays_in_sync() {
     let _ = sm.handle_event(Event::NmVpnUp {
         server: "vpn".to_string(),
     });
-    assert_eq!(sm.retries(), 0, "retries should reset to 0 on reconnect success");
+    assert_eq!(
+        sm.retries(),
+        0,
+        "retries should reset to 0 on reconnect success"
+    );
     assert!(matches!(sm.state, VpnState::Connected { .. }));
 }
 
