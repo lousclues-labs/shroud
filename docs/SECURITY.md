@@ -72,6 +72,68 @@ This runs in CI. If a vulnerable dependency is found:
 
 ---
 
+## Dependency Justification
+
+Every dependency is a liability. Every crate you pull in is code you didn't write, can't fully audit, and have to trust. Shroud ships 19 direct dependencies. Here's why each one exists, what it does, and what happens if it's compromised.
+
+### Runtime
+
+| Crate | What It Does in Shroud | Why It's Here | Compromise Impact |
+|-------|------------------------|---------------|-------------------|
+| `tokio` | Drives the supervisor event loop, async IPC server, signal handling, reconnect timers, and process spawning | Shroud is async. Writing a multi-threaded async runtime from scratch is not an option. | Full control of the event loop. An attacker could suppress reconnects, delay kill switch activation, or drop IPC commands silently. High risk. |
+| `async-trait` | Enables async methods on the NetworkManager client trait so the mock can swap in during tests | Rust doesn't have native async trait support in stable yet. This is the standard workaround. | Code generation at compile time only. No runtime attack surface. |
+| `scopeguard` | Ensures the reconnect guard flag is cleared even if the reconnect path panics | The alternative is manual cleanup in every error path. One missed path and the guard stays locked forever. | Could skip cleanup logic. Limited blast radius -- affects reconnect guard only. |
+
+### System Integration
+
+| Crate | What It Does in Shroud | Why It's Here | Compromise Impact |
+|-------|------------------------|---------------|-------------------|
+| `ksni` | Renders the system tray icon and menu via the StatusNotifierItem D-Bus protocol | The SNI protocol is the standard on KDE/XFCE/modern GNOME. Reimplementing it means reimplementing a D-Bus service. | Could render fake tray state (showing "connected" when you're not). Cannot affect actual VPN state or firewall rules. |
+| `zbus` | Subscribes to NetworkManager D-Bus signals for VPN state changes | NetworkManager exposes its API over D-Bus. This is the only way to get real-time VPN events without polling. | Could inject fake NetworkManager signals. Would cause Shroud to react to VPN state changes that didn't happen. |
+| `futures-lite` | Provides the async stream adapter for iterating over D-Bus signals from `zbus` | `zbus` returns async streams. You need stream combinators to process them. This is the lightest option. | Could tamper with the D-Bus message stream. Same impact as `zbus` compromise. |
+| `notify-rust` | Sends desktop notifications ("Connected to us-east-1") via D-Bus | Desktop notifications require the `org.freedesktop.Notifications` D-Bus interface. Not something you hand-roll. | Could send fake notifications or suppress real ones. Cannot affect VPN state. Annoyance-level impact. |
+| `ctrlc` | Registers the Ctrl-C handler that triggers graceful shutdown and kill switch cleanup | Signal handling is platform-specific and easy to get wrong. This crate handles the edge cases. | Could block or intercept shutdown signals. Kill switch cleanup might not run. |
+| `libc` | Provides `flock()` for the instance lock and low-level system call bindings | These are raw POSIX syscalls. There is no pure-Rust alternative. | **Full system access. This is the highest-risk dependency.** A compromised `libc` crate has access to every syscall Shroud makes. Game over. |
+
+### Serialization
+
+| Crate | What It Does in Shroud | Why It's Here | Compromise Impact |
+|-------|------------------------|---------------|-------------------|
+| `serde` | Derives `Serialize`/`Deserialize` for config structs and IPC messages | The config file and IPC protocol both need structured serialization. Writing a parser and serializer for each format by hand is fragile and slow. | Could corrupt config parsing or IPC deserialization. An attacker could inject arbitrary config values or forge IPC commands. |
+| `toml` | Parses and serializes `~/.config/shroud/config.toml` | The config file is TOML. You need a TOML parser. | Could inject malicious config values during parsing. Bounded by Shroud's config validation layer. |
+| `serde_json` | Serializes and deserializes JSON messages on the IPC socket | The IPC protocol uses JSON. You need a JSON parser. | Could forge or corrupt IPC messages. Bounded by IPC command validation and the Unix socket trust boundary. |
+
+### Utilities
+
+| Crate | What It Does in Shroud | Why It's Here | Compromise Impact |
+|-------|------------------------|---------------|-------------------|
+| `tracing` | Structured logging throughout the codebase -- state transitions, IPC commands, errors | `println!` doesn't cut it for a daemon. You need log levels, structured fields, and subscriber filtering. | Could suppress or falsify log output. An attacker could hide their tracks. |
+| `tracing-subscriber` | Configures log output format and `RUST_LOG` filtering for the tracing framework | `tracing` needs a subscriber to actually output anything. This is the official one. | Same as `tracing`. Could suppress or redirect log output. |
+| `dirs` | Resolves `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_RUNTIME_DIR` for config, logs, and socket paths | XDG directory resolution has platform-specific fallbacks. Getting it wrong means writing files to the wrong place. | Could redirect file paths. An attacker could point config or socket resolution to attacker-controlled locations. |
+| `walkdir` | Recursively traverses directories during bulk VPN config import (`shroud import ~/configs/`) | `std::fs::read_dir` is non-recursive. Reimplementing recursive traversal with proper error handling is a solved problem. | Could inject fake directory entries during import. Bounded by the config validator that runs after import. |
+| `thiserror` | Derives `Error` implementations for Shroud's error types | Writing `impl std::fmt::Display` and `impl std::error::Error` by hand for dozens of error variants is boilerplate. | Compile-time code generation only. No runtime attack surface. |
+| `ureq` | Sends HTTP GET requests for health check pings to verify the VPN tunnel is working | Health checks need to make HTTP requests through the tunnel. `std::net::TcpStream` doesn't speak HTTP. | Could redirect health check pings or return fake responses. Cannot affect VPN traffic or firewall rules. Health checks have redirect following disabled and enforce connect timeouts. |
+| `rand` | Generates random jitter for the linear backoff delay between reconnect attempts | Deterministic backoff causes thundering herd problems. You need randomness. `std::collections::hash_map::RandomState` is not a proper RNG. | Could make backoff timing predictable. Minimal security impact -- affects reconnect scheduling only. |
+
+### Transitive Dependencies
+
+The table above covers direct dependencies only. Each crate pulls in its own dependency tree. To inspect the full tree:
+
+```bash
+# Full dependency tree
+cargo tree
+
+# With duplicates shown
+cargo tree --duplicates
+
+# License audit for all transitive dependencies
+cargo license --all-deps
+```
+
+For license compatibility of every dependency (direct and transitive) against Shroud's dual-license model, see [DEPENDENCY-AUDIT.md](../licenses/DEPENDENCY-AUDIT.md). For the full generated license list, see [THIRD-PARTY-LICENSES](../licenses/THIRD-PARTY-LICENSES).
+
+---
+
 ## Security Model
 
 Shroud's security assumptions:
