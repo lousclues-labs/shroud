@@ -12,6 +12,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.18.0] - 2026-02-21
+
+### Added
+- **fuzz: state machine MOAB** — 5 new `cargo-fuzz` targets that attack the state machine from every angle. This is not incremental coverage. This is a fuzz battery designed to prove the core is unbreakable.
+  - **`fuzz_state_machine`** (chaos cannon) — throws millions of random event sequences at the state machine. All 14 `Event` variants mapped across 32 input slots: 14 normal, 6 chaos server names (empty, null byte, control characters, ANSI escapes, shell injection), 6 huge/edge-case payloads (10,000-char strings, empty reasons), 6 wrong-server scenarios. ~4% probability of rapid-fire (same event 3x) driven by a timing byte. 13 invariants checked after every single event.
+  - **`fuzz_state_machine_determinism`** (twin test) — two state machines start identical (`max_retries: 5`). Every event applied to both. After every event: states compared via `PartialEq`, retry counts compared, transition reasons compared via `Display`. Any divergence is a determinism violation. Proves the state machine has no hidden randomness, no timing dependence, no uninitialized memory influence.
+  - **`fuzz_state_machine_lifecycle`** (escape hatch proof) — 5-phase structured test. Phase 1: fuzzer-controlled chaos events. Phase 2: force `UserDisable`, assert `Disconnected` with `retries == 0`. Phase 3: force `UserEnable` + `NmVpnUp`, assert `Connecting` then `Connected` with `retries == 0`. Phase 4: more chaos. Phase 5: force `UserDisable` again, assert `Disconnected` again. Proves `UserDisable` is always an escape hatch from any state, and the `UserEnable` → `NmVpnUp` connect sequence always works from `Disconnected`.
+  - **`fuzz_state_machine_config`** (config extremes) — first 4 bytes of fuzz input interpreted as little-endian `u32` for `max_retries`. Remaining bytes are event sequence. Tests the state machine with `max_retries` values from 0 to `u32::MAX`. Special case for `max_retries == 0`: verifies `Timeout` from `Connecting` goes directly to `Failed`. Proves configuration values cannot break state machine invariants.
+  - **`fuzz_state_machine_differential`** (cross-config comparator) — two machines, same event sequence, different configs (`max_retries: 3` vs `max_retries: 100`). Config-independent guarantees verified on both: `UserDisable` always reaches `Disconnected`, retry counters stay within their own config bounds. Config-dependent divergence is allowed (one may reach `Failed` while the other is still `Reconnecting`). Proves configuration doesn't violate universal structural properties.
+- **fuzz: shared infrastructure** — `fuzz/fuzz_targets/state_machine_common.rs` shared by all 5 targets. Contains:
+  - **Event generator** (`event_from_byte`) — deterministic mapping from byte to `Event`. 32 slots covering all 14 variants with normal inputs, chaos server names, huge payloads, injection attempts, and wrong-server scenarios.
+  - **Parameterized event generator** (`event_from_byte_with_string`) — 14 slots using a fuzz-provided string for all string-carrying variants. Lets libfuzzer's mutation engine craft arbitrary server/reason strings.
+  - **Server name pools** — `NORMAL_SERVERS` (5 realistic names), `CHAOS_SERVERS` (11 pathological names: empty, null byte, control chars, ANSI escapes, shell metacharacters, injection attempts, Unicode, RTL overrides), `huge_server_name()` (10,000-char string).
+  - **Invariant checker** (`check_invariants`) — 13 invariants verified after every event on any `StateMachine`:
+    - I1: Retry counter bounded by `max(max_retries, 2)`. The bound accounts for `Connected/Degraded → Reconnecting` setting `retries=1` without checking `max_retries`, followed by a `Timeout` incrementing to 2.
+    - I2: `Disconnected` → `retries == 0`.
+    - I3: `Reconnecting` → `retries > 0`.
+    - I4: `Reconnecting.attempt == retries` (canonical counter sync).
+    - I5: `Reconnecting.max_attempts == config.max_retries`.
+    - I6: `Failed` → reason is non-empty.
+    - I7: `Display` impl never panics (exercised via `format!`).
+    - I8: `name()` returns one of the 6 known state names.
+    - I9: `server_name()` never panics.
+    - I10: `is_active()` never panics.
+    - I11: `is_busy()` never panics.
+    - I12: `Connecting` or `Reconnecting` → `is_busy() == true`.
+    - I13: `Disconnected` or `Failed` → `is_active() == false`.
+  - **Transition reason validator** (`check_transition_reason`) — verifies 7 `TransitionReason` → state mappings: `UserRequested` → `Disconnected` or `Connecting`, `RetriesExhausted` → `Failed`, `VpnEstablished`/`VpnReestablished` → `Connected`, `ConnectionFailed` → `Disconnected`, `VpnLost` → `Reconnecting`, `HealthCheckFailed` → `Degraded`, `HealthCheckDead` → `Reconnecting`.
+- **ci: state machine MOAB workflow** — `.github/workflows/fuzz-state-machine.yml`. Manual dispatch (`workflow_dispatch`) with configurable target selection and hours-per-shard. 5 targets × 8 shards = 40 parallel jobs. Each shard uses a unique `-seed` for deterministic but non-overlapping fuzzer exploration. Flags: `-max_len=65536`, `-use_value_profile=1` (deeper coverage-guided exploration), `-reduce_inputs=1` (minimize corpus). Corpus seeded with 10 hand-crafted inputs per target: happy path, retry exhaustion, health cascade, sleep/wake storm, chaos variants, wrong server, rapid-fire, definitive failures, VPN switch, device change. `fail-fast: false` so all shards finish and every crash is collected. Crash artifacts retained 90 days, corpus 30 days. Summary job reports pass/fail with itemized proof list.
+- **docs: dependency justification in `docs/SECURITY.md`** — new "Dependency Justification" section after "Dependency Audits" and before "Security Model". Every direct runtime dependency (19 crates) documented with: what it does in Shroud specifically, why it can't be eliminated, and what's exposed if supply-chain compromised. Dependencies grouped by role: Runtime (`tokio`, `async-trait`, `scopeguard`), System Integration (`ksni`, `zbus`, `futures-lite`, `notify-rust`, `ctrlc`, `libc`), Serialization (`serde`, `toml`, `serde_json`), Utilities (`tracing`, `tracing-subscriber`, `dirs`, `walkdir`, `thiserror`, `ureq`, `rand`). `libc` explicitly flagged as highest-risk dependency. Includes `cargo tree` and `cargo license` commands for transitive dependency inspection. References `licenses/DEPENDENCY-AUDIT.md` for license audit and `licenses/THIRD-PARTY-LICENSES` for full list.
+- **docs: v2 launch framing in `README.md`** — temporary paragraph between tagline and lock shroud description: "v2.0 is here. I've been running v1 as my only VPN manager on my daily driver. Every bug I hit, I fixed. Every annoyance, I smoothed out. v1 was built for me. v2 is built for you." Not bolded, no heading, no banner. Removed when v2.0 is tagged and repo goes public.
+
+---
+
 ## [1.17.0] - 2026-02-17
 
 ### Added

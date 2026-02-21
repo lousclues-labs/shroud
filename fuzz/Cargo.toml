@@ -33,3 +33,28 @@ doc = false
 name = "fuzz_vpn_name"
 path = "fuzz_targets/fuzz_vpn_name.rs"
 doc = false
+
+[[bin]]
+name = "fuzz_state_machine"
+path = "fuzz_targets/fuzz_state_machine.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_state_machine_determinism"
+path = "fuzz_targets/fuzz_state_machine_determinism.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_state_machine_lifecycle"
+path = "fuzz_targets/fuzz_state_machine_lifecycle.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_state_machine_config"
+path = "fuzz_targets/fuzz_state_machine_config.rs"
+doc = false
+
+[[bin]]
+name = "fuzz_state_machine_differential"
+path = "fuzz_targets/fuzz_state_machine_differential.rs"
+doc = false
