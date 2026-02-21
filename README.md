@@ -58,6 +58,14 @@ Read the full [Principles](docs/PRINCIPLES.md) if you want to understand what we
 
 ---
 
+## How It Gets Built
+
+I chose Rust because the compiler enforces the kind of promises security tools need to keep. I built Shroud with AI. I'm not going to pretend otherwise, because pretending would violate the same principles this tool is built on.
+
+I broke the code, found the bugs, and fixed them. Every decision is in the [CHANGELOG](CHANGELOG.md). That's where the real work lives.
+
+---
+
 ## What You Get
 
 ```

@@ -282,4 +282,10 @@ Be respectful. Be constructive.
 
 ---
 
+## A Note on How Shroud Is Built
+
+Shroud is built with AI. The code is reviewed, tested, and maintained by Lou. If you're contributing, your work goes through the same process as everything else -- CI, tests, review. The tools don't change the standard.
+
+---
+
 *Thanks for helping make Shroud better.*
