@@ -26,6 +26,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
 
@@ -68,6 +73,11 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
 
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
