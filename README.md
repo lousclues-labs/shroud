@@ -8,6 +8,8 @@
 
 **A provider-agnostic VPN connection manager for Linux.**
 
+v2.0 is here. I've been running v1 as my only VPN manager on my daily driver. Every bug I hit, I fixed. Every annoyance, I smoothed out. v1 was built for me. v2 is built for you.
+
 A **lock shroud** is the protective metal casing around a padlock's shackle. It doesn't replace the lock. It protects the lock from attack.
 
 ```
