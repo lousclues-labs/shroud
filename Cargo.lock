@@ -1197,33 +1197,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0fda2ff0d084019ba4d7c6f371c95d8fd75ce3524c3cb8fb653a3023f6323e64"
 
 [[package]]
-name = "shroud"
-version = "1.18.1"
-dependencies = [
- "async-trait",
- "ctrlc",
- "dirs",
- "futures-lite",
- "ksni",
- "libc",
- "notify-rust",
- "rand",
- "scopeguard",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 1.0.69",
- "tokio",
- "tokio-test",
- "toml",
- "tracing",
- "tracing-subscriber",
- "ureq",
- "walkdir",
- "zbus",
-]
-
-[[package]]
 name = "signal-hook-registry"
 version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1634,6 +1607,33 @@ name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ba73ea9cf16a25df0c8caa16c51acb937d5712a8429db78a3ee29d5dcacd3a65"
+
+[[package]]
+name = "vpn-shroud"
+version = "2.0.0"
+dependencies = [
+ "async-trait",
+ "ctrlc",
+ "dirs",
+ "futures-lite",
+ "ksni",
+ "libc",
+ "notify-rust",
+ "rand",
+ "scopeguard",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-test",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "ureq",
+ "walkdir",
+ "zbus",
+]
 
 [[package]]
 name = "walkdir"
