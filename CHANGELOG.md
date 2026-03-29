@@ -12,6 +12,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.1] - 2026-03-29
+
+### Security
+- **deps: fix RUSTSEC-2026-0049 (rustls-webpki CRL bypass)** — updated `rustls-webpki` from 0.103.9 to 0.103.10 via `cargo update`. The vulnerable version had faulty CRL Distribution Point matching logic that caused CRLs not to be considered authoritative, potentially allowing revoked certificates to be accepted. Dependency chain: `ureq` → `rustls` → `rustls-webpki`. Affects health check HTTPS requests to VPN exit IP validation endpoints. No direct exploit path in Shroud (health checks validate response content, not just TLS handshake), but the vulnerable dependency fails `cargo audit`.
+- **deps: resolve yanked crate warnings** — updated `js-sys` (0.3.88 → 0.3.92) and `wasm-bindgen` (0.2.111 → 0.2.115). Both were yanked upstream. Transitive dependencies of `uuid` via `zbus`/`ksni`. No runtime impact (wasm targets are not used), but yanked crates cause `cargo audit` warnings.
+
+### Changed
+- **ci: security audit schedule changed to monthly** — `scheduled.yml` cron changed from weekly (Sunday 9am UTC) to monthly (1st of each month, 9am UTC). Weekly was excessive for a project with stable dependencies. Monthly cadence still catches advisories before they age, and `workflow_dispatch` allows on-demand runs.
+
+---
+
 ## [2.0.0] - 2026-03-01
 
 ### Changed
