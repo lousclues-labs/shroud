@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.2] - 2026-03-29
+
+### Changed
+- **deps: bump MSRV from 1.85 to 1.87** — `zvariant` 5.10.0 and `zvariant_derive` 5.10.0 (transitive via `zbus` → `ksni`) raised their MSRV to 1.87. Pinning to older versions is not viable — `ksni` 0.3.3 fails to compile with `zvariant` 5.9.0 due to public dependency resolution requirements. `zbus` and `zbus_macros` pinned to 5.13.0 (MSRV 1.85) to avoid the 5.14.0 bump to 1.87. Updated `Cargo.toml` `rust-version` and README badge.
+
+---
+
 ## [2.0.1] - 2026-03-29
 
 ### Security
@@ -19,7 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **deps: resolve yanked crate warnings** — updated `js-sys` (0.3.88 → 0.3.92) and `wasm-bindgen` (0.2.111 → 0.2.115). Both were yanked upstream. Transitive dependencies of `uuid` via `zbus`/`ksni`. No runtime impact (wasm targets are not used), but yanked crates cause `cargo audit` warnings.
 
 ### Changed
-- **deps: bump MSRV from 1.85 to 1.87** — `zvariant` 5.10.0 and `zvariant_derive` 5.10.0 (transitive via `zbus` → `ksni`) raised their MSRV to 1.87. Pinning to older versions is not viable — `ksni` 0.3.3 fails to compile with `zvariant` 5.9.0 due to public dependency resolution requirements. `zbus` and `zbus_macros` pinned to 5.13.0 (MSRV 1.85) to avoid the 5.14.0 bump to 1.87. Updated `Cargo.toml` `rust-version` and README badge.
 - **ci: security audit schedule changed to monthly** — `scheduled.yml` cron changed from weekly (Sunday 9am UTC) to monthly (1st of each month, 9am UTC). Weekly was excessive for a project with stable dependencies. Monthly cadence still catches advisories before they age, and `workflow_dispatch` allows on-demand runs.
 
 ---
