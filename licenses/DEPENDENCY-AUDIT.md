@@ -4,7 +4,7 @@
 
 ## Purpose
 
-Shroud is dual-licensed under GPL-3.0-or-later and a Commercial License. Every dependency must be compatible with **both** licenses. This document provides a framework for evaluating dependencies and maintaining license compliance.
+VPNShroud is dual-licensed under GPL-3.0-or-later and a Commercial License. Every dependency must be compatible with **both** licenses. This document provides a framework for evaluating dependencies and maintaining license compliance.
 
 ## The Dual-License Compatibility Challenge
 
@@ -35,7 +35,7 @@ Shroud is dual-licensed under GPL-3.0-or-later and a Commercial License. Every d
 
 1. **Permissive licenses (MIT, Apache-2.0, BSD, ISC, etc.) are always safe.** They impose minimal obligations and are compatible with both GPL and commercial licensing.
 
-2. **Copyleft licenses (GPL, LGPL, AGPL) block commercial licensing.** If a dependency is GPL-licensed, we cannot redistribute it under the commercial license. The dependency's copyleft would extend to Shroud.
+2. **Copyleft licenses (GPL, LGPL, AGPL) block commercial licensing.** If a dependency is GPL-licensed, we cannot redistribute it under the commercial license. The dependency's copyleft would extend to VPNShroud.
 
 3. **Weak copyleft (LGPL, MPL) requires care.** These can work with commercial licensing if the dependency is dynamically linked (LGPL) or if the copyleft is file-scoped (MPL). Since Rust links statically by default, LGPL dependencies are generally **not compatible** with the commercial license in a Rust project without careful structuring.
 
@@ -92,7 +92,7 @@ cargo license -d | grep <crate-name>
 Use the compatibility table above. If the license is:
 
 - **Green (MIT, Apache-2.0, BSD, etc.):** Proceed without concern.
-- **Yellow (LGPL, MPL):** Stop and evaluate. In most cases, LGPL is incompatible with Shroud's commercial license due to Rust's static linking. Consult this document's compatibility table and consider alternatives.
+- **Yellow (LGPL, MPL):** Stop and evaluate. In most cases, LGPL is incompatible with VPNShroud's commercial license due to Rust's static linking. Consult this document's compatibility table and consider alternatives.
 - **Red (GPL, AGPL, SSPL, proprietary):** Do not add. Find an alternative.
 
 ### 3. Check Transitive Dependencies
@@ -190,4 +190,4 @@ copyleft = "deny"
 
 ## Questions
 
-For questions about dependency licensing, open an issue in the [Shroud repository](https://github.com/loujr/shroud) or contact Louis Nelson Jr. ([@loujr](https://github.com/loujr)).
+For questions about dependency licensing, open an issue in the [VPNShroud repository](https://github.com/loujr/shroud) or contact Louis Nelson Jr. ([@loujr](https://github.com/loujr)).

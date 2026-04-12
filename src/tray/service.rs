@@ -198,7 +198,7 @@ impl Tray for VpnTray {
 
         // Branding — small caps gives a quietly authoritative header
         items.push(MenuItem::Standard(StandardItem {
-            label: format!("ꜱʜʀᴏᴜᴅ  v{}", env!("CARGO_PKG_VERSION")),
+            label: format!("ᴠᴘɴꜱʜʀᴏᴜᴅ  v{}", env!("CARGO_PKG_VERSION")),
             enabled: false,
             ..Default::default()
         }));

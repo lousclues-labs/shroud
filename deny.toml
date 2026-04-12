@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
 # Copyright (C) 2026 Louis Nelson Jr. <https://lousclues.com>
 #
-# cargo-deny configuration for Shroud
+# cargo-deny configuration for VPNShroud
 # Enforces license compatibility with dual-licensing (GPL-3.0 + Commercial)
 #
 # Usage:

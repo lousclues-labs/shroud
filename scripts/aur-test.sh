@@ -367,7 +367,7 @@ main() {
 
     echo ""
     echo "╔══════════════════════════════════════════════╗"
-    echo "║      Shroud AUR Package — Dry Run Test      ║"
+    echo "║      VPNShroud AUR Package — Dry Run Test      ║"
     echo "╚══════════════════════════════════════════════╝"
     echo ""
 

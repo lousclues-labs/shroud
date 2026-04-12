@@ -1,6 +1,6 @@
 # Architecture
 
-How Shroud is built. The actual structure, not the marketing version.
+How VPNShroud is built. The actual structure, not the marketing version.
 
 ---
 
@@ -32,7 +32,7 @@ How Shroud is built. The actual structure, not the marketing version.
 └──────────────┘    └──────────────┘    └──────────────┘
 ```
 
-Shroud doesn't replace anything. It sits between you and the tools that actually do the work:
+VPNShroud doesn't replace anything. It sits between you and the tools that actually do the work:
 - **NetworkManager** handles VPN connections
 - **iptables/nftables** handles firewall rules
 - **D-Bus** handles system events
@@ -50,7 +50,7 @@ We're the glue. And the armor.
 │   (daemon mode)               (client mode)                 │
 │                                                             │
 │   ┌─────────────┐             ┌─────────────┐               │
-│   │   Shroud    │◄────────────│   Shroud    │               │
+│   │   VPNShroud    │◄────────────│   VPNShroud    │               │
 │   │   Daemon    │   command   │   Client    │               │
 │   │             │─────────────►             │               │
 │   │  (tray app) │   response  │  (one-shot) │               │
@@ -216,7 +216,7 @@ Chain SHROUD_KILLSWITCH (policy DROP)
     -j DROP
 ```
 
-Shroud prefers iptables, falls back to nftables if iptables has issues, and falls back to iptables-legacy if nftables fails. Binary paths are detected at runtime.
+VPNShroud prefers iptables, falls back to nftables if iptables has issues, and falls back to iptables-legacy if nftables fails. Binary paths are detected at runtime.
 
 ---
 

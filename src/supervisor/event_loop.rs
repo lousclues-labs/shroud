@@ -115,13 +115,13 @@ impl super::VpnSupervisor {
                 Some(server) => {
                     info!("Auto-connecting to: {}", server);
                     self.tray
-                        .notify("Shroud", &format!("Auto-connecting to {}...", server));
+                        .notify("VPNShroud", &format!("Auto-connecting to {}...", server));
                     self.handle_connect(&server).await;
                 }
                 None => {
                     warn!("auto_connect enabled but no VPN connections found in NetworkManager");
                     self.tray.notify(
-                        "Shroud",
+                        "VPNShroud",
                         "Auto-connect enabled but no VPN connections configured",
                     );
                 }
@@ -134,7 +134,7 @@ impl super::VpnSupervisor {
         if self.config_store.is_first_run && !crate::autostart::Autostart::is_enabled() {
             info!("First run detected and autostart not enabled");
             self.tray.notify(
-                "Shroud",
+                "VPNShroud",
                 "Tip: Run 'shroud autostart on' to start automatically on login",
             );
         }

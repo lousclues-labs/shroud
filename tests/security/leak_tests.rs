@@ -510,7 +510,7 @@ fn test_leak_webrtc_blocked() {
     println!("  2. Use a browser extension like uBlock Origin");
     println!("  3. Use a browser with WebRTC disabled by default");
     println!();
-    println!("This is documented behavior, not a bug in Shroud.");
+    println!("This is documented behavior, not a bug in VPNShroud.");
 
     println!("\n=== WebRTC TEST NOTED ===\n");
 }

@@ -1,4 +1,4 @@
-# Shroud Test Suite
+# VPNShroud Test Suite
 
 Every test, organized by type and purpose.
 

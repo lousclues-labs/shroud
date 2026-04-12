@@ -1,6 +1,6 @@
 # Installation
 
-Getting Shroud running on your system. No PhD required.
+Getting VPNShroud running on your system. No PhD required.
 
 ---
 
@@ -126,7 +126,7 @@ shroud --version
 
 ### Desktop Entry (Optional)
 
-If you want Shroud in your app launcher:
+If you want VPNShroud in your app launcher:
 
 ```bash
 mkdir -p ~/.local/share/applications

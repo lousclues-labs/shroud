@@ -863,7 +863,7 @@ impl super::VpnSupervisor {
         }
 
         // Show notification
-        self.tray.notify("Shroud", "Shutting down...");
+        self.tray.notify("VPNShroud", "Shutting down...");
 
         // Give notification time to show
         sleep(Duration::from_millis(300)).await;
@@ -1046,7 +1046,7 @@ impl super::VpnSupervisor {
                 self.tray.notify(
                     "Autostart",
                     if enabled {
-                        "Shroud will start and auto-connect on login"
+                        "VPNShroud will start and auto-connect on login"
                     } else {
                         "Autostart and auto-connect disabled"
                     },

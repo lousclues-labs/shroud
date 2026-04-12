@@ -4,9 +4,9 @@
 
 ## Purpose
 
-Shroud is dual-licensed under the [GNU General Public License v3.0 or later](../LICENSE) (for open-source use) and a [Commercial License](LICENSE-COMMERCIAL.md) (for proprietary use). For dual-licensing to work, the project maintainer needs the legal right to distribute all contributions under both licenses.
+VPNShroud is dual-licensed under the [GNU General Public License v3.0 or later](../LICENSE) (for open-source use) and a [Commercial License](LICENSE-COMMERCIAL.md) (for proprietary use). For dual-licensing to work, the project maintainer needs the legal right to distribute all contributions under both licenses.
 
-This Contributor License Agreement ("CLA") establishes the terms under which you ("Contributor") grant rights to **Louis Nelson Jr.** ("Maintainer"), the sole copyright holder and maintainer of the Shroud project.
+This Contributor License Agreement ("CLA") establishes the terms under which you ("Contributor") grant rights to **Louis Nelson Jr.** ("Maintainer"), the sole copyright holder and maintainer of the VPNShroud project.
 
 ## Plain-Language Summary
 
@@ -24,9 +24,9 @@ Here's what you're agreeing to, in plain English:
 
 ### 1. Definitions
 
-- **"Contribution"** means any original work of authorship, including modifications to existing work, that you intentionally submit to the Shroud project for inclusion. This includes code, documentation, configuration files, and related materials submitted via pull request, patch, issue, email, or any other method of communication with the project.
+- **"Contribution"** means any original work of authorship, including modifications to existing work, that you intentionally submit to the VPNShroud project for inclusion. This includes code, documentation, configuration files, and related materials submitted via pull request, patch, issue, email, or any other method of communication with the project.
 - **"Submit"** means any form of electronic or written communication sent to the project, including pull requests on GitHub, patches, commits, issues, and messages on project forums or mailing lists.
-- **"Project"** means the Shroud software project, maintained at https://github.com/loujr/shroud.
+- **"Project"** means the VPNShroud software project, maintained at https://github.com/loujr/shroud.
 
 ### 2. Grant of Copyright License
 
@@ -77,7 +77,7 @@ Your Contribution is provided "AS IS," without warranty of any kind, express or 
 
 ### Method: Submission Implies Agreement
 
-By submitting a Contribution to the Shroud project (via pull request, patch, or any other submission method), you signify your agreement to the terms of this CLA.
+By submitting a Contribution to the VPNShroud project (via pull request, patch, or any other submission method), you signify your agreement to the terms of this CLA.
 
 We also recommend (but do not require) including a sign-off line in your commit messages:
 
@@ -91,7 +91,7 @@ This follows the [Developer Certificate of Origin](https://developercertificate.
 
 For substantial contributions (new modules, architectural changes, or contributions involving third-party code), the Maintainer may request explicit CLA acknowledgment via a GitHub issue comment of the form:
 
-> I have read and agree to the Shroud Contributor License Agreement (CONTRIBUTOR-LICENSE.md).
+> I have read and agree to the VPNShroud Contributor License Agreement (CONTRIBUTOR-LICENSE.md).
 
 ## Governing Law
 
@@ -101,7 +101,7 @@ This CLA shall be governed by and construed in accordance with the laws of the C
 
 If you have questions about this CLA before submitting a contribution, please:
 
-- Open an issue in the [Shroud repository](https://github.com/loujr/shroud)
+- Open an issue in the [VPNShroud repository](https://github.com/loujr/shroud)
 - Contact Louis Nelson Jr. via GitHub ([@loujr](https://github.com/loujr))
 
 We're happy to clarify any terms before you contribute.

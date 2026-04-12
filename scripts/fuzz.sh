@@ -20,7 +20,7 @@ TARGETS=(fuzz_ipc_command fuzz_config_parse fuzz_vpn_name)
 FAILED=0
 
 echo "═══════════════════════════════════════════════════════════════"
-echo "  Shroud Fuzz Testing"
+echo "  VPNShroud Fuzz Testing"
 echo "═══════════════════════════════════════════════════════════════"
 echo ""
 echo "Duration: ${DURATION}s per target"

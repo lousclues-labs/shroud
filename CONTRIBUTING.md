@@ -1,4 +1,4 @@
-# Contributing to Shroud
+# Contributing to VPNShroud
 
 You want to help. That's appreciated.
 
@@ -18,7 +18,7 @@ Before you write any code, read the [Principles](docs/PRINCIPLES.md). Every cont
 
 ## Contributor License
 
-Shroud is dual-licensed. By submitting a pull request, you agree to the terms in [CONTRIBUTOR-LICENSE.md](licenses/CONTRIBUTOR-LICENSE.md). The short version: you keep your copyright, you license your contribution under GPL-3.0, and you grant Louis Nelson Jr. (the project maintainer and sole copyright holder) permission to include it in the commercial license too. Your code always stays open source.
+VPNShroud is dual-licensed. By submitting a pull request, you agree to the terms in [CONTRIBUTOR-LICENSE.md](licenses/CONTRIBUTOR-LICENSE.md). The short version: you keep your copyright, you license your contribution under GPL-3.0, and you grant Louis Nelson Jr. (the project maintainer and sole copyright holder) permission to include it in the commercial license too. Your code always stays open source.
 
 ---
 
@@ -30,7 +30,7 @@ These aren't just nice words. They're the filter for every decision.
 |-----------|--------------------------------|
 | **Wrap, Don't Replace** | Don't reinvent NetworkManager. Enhance it. |
 | **Fail Loud, Recover Quiet** | Errors must be visible. Recovery must be seamless. |
-| **Leave No Trace** | If Shroud stops, the system should be clean. |
+| **Leave No Trace** | If VPNShroud stops, the system should be clean. |
 | **The User Is Not the Enemy** | No telemetry. No analytics. No phoning home. |
 | **Complexity Is Debt** | Every dependency needs a damn good reason. |
 | **Speak the System's Language** | Use systemd, D-Bus, XDG. Be a native citizen. |

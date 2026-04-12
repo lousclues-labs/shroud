@@ -82,7 +82,7 @@ fn install_panic_hook() {
     let default_hook = std::panic::take_hook();
 
     std::panic::set_hook(Box::new(move |info| {
-        eprintln!("\n!!! SHROUD PANIC !!!");
+        eprintln!("\n!!! VPNSHROUD PANIC !!!");
         eprintln!("Kill switch rules are preserved (fail-closed).");
         eprintln!("If you're locked out, run: shroud cleanup");
         eprintln!("  (handles iptables, ip6tables, nftables, and boot chains)");
@@ -105,7 +105,7 @@ fn install_panic_hook() {
 /// Run daemon mode - start the tray application
 async fn run_daemon_mode(args: cli::Args) {
     // Print startup banner FIRST (before any async/logging setup)
-    println!("Shroud daemon starting... (use Ctrl+C to stop)");
+    println!("VPNShroud daemon starting... (use Ctrl+C to stop)");
 
     // HARDENING: Install panic hook for emergency cleanup
     // This ensures kill switch rules are cleaned up even on panic
@@ -160,7 +160,7 @@ async fn run_daemon_mode(args: cli::Args) {
     })
     .expect("Error setting Ctrl-C handler");
 
-    info!("Starting Shroud VPN Manager");
+    info!("Starting VPNShroud VPN Manager");
     let (dbus_tx, dbus_rx) = mpsc::channel(64); // NM events (larger buffer for VPN flapping)
     let (ipc_tx, ipc_rx) = mpsc::channel(32); // IPC commands
 

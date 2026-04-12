@@ -25,7 +25,7 @@ No leaks. No exceptions. No "oops, my real IP slipped out while the tunnel was r
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-When you enable the kill switch, Shroud creates an iptables chain called `SHROUD_KILLSWITCH`. This chain gets inserted into your OUTPUT chain, and it drops anything that doesn't match our allowlist.
+When you enable the kill switch, VPNShroud creates an iptables chain called `SHROUD_KILLSWITCH`. This chain gets inserted into your OUTPUT chain, and it drops anything that doesn't match our allowlist.
 
 Simple. Auditable. Effective.
 
@@ -65,7 +65,7 @@ Everything else? Dropped. Logged if you enable debug mode.
 
 A kill switch that lets DNS leak is barely a kill switch at all.
 
-Shroud has four DNS modes, controlled by `dns_mode` in your config:
+VPNShroud has four DNS modes, controlled by `dns_mode` in your config:
 
 | Mode | What Happens | When To Use It |
 |------|--------------|----------------|
@@ -78,7 +78,7 @@ Shroud has four DNS modes, controlled by `dns_mode` in your config:
 
 Modern browsers love to bypass your DNS settings. Firefox, Chrome, Edge -- they all have DNS-over-HTTPS baked in, which can leak queries even with a kill switch.
 
-When `block_doh = true` (the default), Shroud blocks connections to known DoH provider IPs on port 443. This includes:
+When `block_doh = true` (the default), VPNShroud blocks connections to known DoH provider IPs on port 443. This includes:
 
 - Cloudflare (1.1.1.1, 1.0.0.1)
 - Google (8.8.8.8, 8.8.4.4)
@@ -97,7 +97,7 @@ custom_doh_blocklist = ["208.67.222.222", "208.67.220.220"]
 
 Most VPNs don't tunnel IPv6. If your system has IPv6 enabled, traffic can leak around the tunnel on the v6 path.
 
-Shroud handles this with the `ipv6_mode` setting:
+VPNShroud handles this with the `ipv6_mode` setting:
 
 | Mode | What Happens | When To Use It |
 |------|--------------|----------------|
@@ -109,7 +109,7 @@ Shroud handles this with the `ipv6_mode` setting:
 
 ## The Rules Under The Hood
 
-If you want to see exactly what Shroud is doing:
+If you want to see exactly what VPNShroud is doing:
 
 ```bash
 # View the kill switch chain
@@ -128,7 +128,7 @@ Everything is auditable. No magic. No obscurity.
 
 ## Privileges
 
-The kill switch needs root to modify iptables. Shroud uses a sudoers rule for passwordless operation:
+The kill switch needs root to modify iptables. VPNShroud uses a sudoers rule for passwordless operation:
 
 ```bash
 # Install automatically
@@ -149,9 +149,9 @@ sudo rm /etc/sudoers.d/shroud
 
 ## Recovery
 
-### If Shroud Crashes
+### If VPNShroud Crashes
 
-Shroud cleans up stale rules on startup. Just start it again:
+VPNShroud cleans up stale rules on startup. Just start it again:
 
 ```bash
 shroud

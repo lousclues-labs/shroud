@@ -2,7 +2,7 @@
 
 *Last updated: February 2026*
 
-This document provides a comprehensive overview of how licensing applies to every file and file type in the Shroud project. It serves as the canonical reference for contributors, users, and anyone evaluating Shroud's licensing for compatibility or compliance.
+This document provides a comprehensive overview of how licensing applies to every file and file type in the VPNShroud project. It serves as the canonical reference for contributors, users, and anyone evaluating VPNShroud's licensing for compatibility or compliance.
 
 ## Copyright Holder
 
@@ -30,7 +30,7 @@ Per the [SPDX specification](https://spdx.github.io/spdx-spec/v2.3/other-licensi
 
 ```
 LicenseRef-Commercial:
-  name: Shroud Commercial License
+  name: VPNShroud Commercial License
   url: https://github.com/loujr/shroud/blob/main/licenses/LICENSE-COMMERCIAL.md
   contact: https://lousclues.com
 ```

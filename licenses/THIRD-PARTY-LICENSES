@@ -1,4 +1,4 @@
-This file lists the licenses of third-party dependencies used by Shroud.
+This file lists the licenses of third-party dependencies used by VPNShroud.
 These dependencies are included at compile time via Cargo (Rust's package manager).
 Their source code is not modified or vendored — they are linked as published crates.
 

@@ -74,44 +74,44 @@ This runs in CI. If a vulnerable dependency is found:
 
 ## Dependency Justification
 
-Every dependency is a liability. Every crate you pull in is code you didn't write, can't fully audit, and have to trust. Shroud ships 19 direct dependencies. Here's why each one exists, what it does, and what happens if it's compromised.
+Every dependency is a liability. Every crate you pull in is code you didn't write, can't fully audit, and have to trust. VPNShroud ships 19 direct dependencies. Here's why each one exists, what it does, and what happens if it's compromised.
 
 ### Runtime
 
-| Crate | What It Does in Shroud | Why It's Here | Compromise Impact |
+| Crate | What It Does in VPNShroud | Why It's Here | Compromise Impact |
 |-------|------------------------|---------------|-------------------|
-| `tokio` | Drives the supervisor event loop, async IPC server, signal handling, reconnect timers, and process spawning | Shroud is async. Writing a multi-threaded async runtime from scratch is not an option. | Full control of the event loop. An attacker could suppress reconnects, delay kill switch activation, or drop IPC commands silently. High risk. |
+| `tokio` | Drives the supervisor event loop, async IPC server, signal handling, reconnect timers, and process spawning | VPNShroud is async. Writing a multi-threaded async runtime from scratch is not an option. | Full control of the event loop. An attacker could suppress reconnects, delay kill switch activation, or drop IPC commands silently. High risk. |
 | `async-trait` | Enables async methods on the NetworkManager client trait so the mock can swap in during tests | Rust doesn't have native async trait support in stable yet. This is the standard workaround. | Code generation at compile time only. No runtime attack surface. |
 | `scopeguard` | Ensures the reconnect guard flag is cleared even if the reconnect path panics | The alternative is manual cleanup in every error path. One missed path and the guard stays locked forever. | Could skip cleanup logic. Limited blast radius -- affects reconnect guard only. |
 
 ### System Integration
 
-| Crate | What It Does in Shroud | Why It's Here | Compromise Impact |
+| Crate | What It Does in VPNShroud | Why It's Here | Compromise Impact |
 |-------|------------------------|---------------|-------------------|
 | `ksni` | Renders the system tray icon and menu via the StatusNotifierItem D-Bus protocol | The SNI protocol is the standard on KDE/XFCE/modern GNOME. Reimplementing it means reimplementing a D-Bus service. | Could render fake tray state (showing "connected" when you're not). Cannot affect actual VPN state or firewall rules. |
-| `zbus` | Subscribes to NetworkManager D-Bus signals for VPN state changes | NetworkManager exposes its API over D-Bus. This is the only way to get real-time VPN events without polling. | Could inject fake NetworkManager signals. Would cause Shroud to react to VPN state changes that didn't happen. |
+| `zbus` | Subscribes to NetworkManager D-Bus signals for VPN state changes | NetworkManager exposes its API over D-Bus. This is the only way to get real-time VPN events without polling. | Could inject fake NetworkManager signals. Would cause VPNShroud to react to VPN state changes that didn't happen. |
 | `futures-lite` | Provides the async stream adapter for iterating over D-Bus signals from `zbus` | `zbus` returns async streams. You need stream combinators to process them. This is the lightest option. | Could tamper with the D-Bus message stream. Same impact as `zbus` compromise. |
 | `notify-rust` | Sends desktop notifications ("Connected to us-east-1") via D-Bus | Desktop notifications require the `org.freedesktop.Notifications` D-Bus interface. Not something you hand-roll. | Could send fake notifications or suppress real ones. Cannot affect VPN state. Annoyance-level impact. |
 | `ctrlc` | Registers the Ctrl-C handler that triggers graceful shutdown and kill switch cleanup | Signal handling is platform-specific and easy to get wrong. This crate handles the edge cases. | Could block or intercept shutdown signals. Kill switch cleanup might not run. |
-| `libc` | Provides `flock()` for the instance lock and low-level system call bindings | These are raw POSIX syscalls. There is no pure-Rust alternative. | **Full system access. This is the highest-risk dependency.** A compromised `libc` crate has access to every syscall Shroud makes. Game over. |
+| `libc` | Provides `flock()` for the instance lock and low-level system call bindings | These are raw POSIX syscalls. There is no pure-Rust alternative. | **Full system access. This is the highest-risk dependency.** A compromised `libc` crate has access to every syscall VPNShroud makes. Game over. |
 
 ### Serialization
 
-| Crate | What It Does in Shroud | Why It's Here | Compromise Impact |
+| Crate | What It Does in VPNShroud | Why It's Here | Compromise Impact |
 |-------|------------------------|---------------|-------------------|
 | `serde` | Derives `Serialize`/`Deserialize` for config structs and IPC messages | The config file and IPC protocol both need structured serialization. Writing a parser and serializer for each format by hand is fragile and slow. | Could corrupt config parsing or IPC deserialization. An attacker could inject arbitrary config values or forge IPC commands. |
-| `toml` | Parses and serializes `~/.config/shroud/config.toml` | The config file is TOML. You need a TOML parser. | Could inject malicious config values during parsing. Bounded by Shroud's config validation layer. |
+| `toml` | Parses and serializes `~/.config/shroud/config.toml` | The config file is TOML. You need a TOML parser. | Could inject malicious config values during parsing. Bounded by VPNShroud's config validation layer. |
 | `serde_json` | Serializes and deserializes JSON messages on the IPC socket | The IPC protocol uses JSON. You need a JSON parser. | Could forge or corrupt IPC messages. Bounded by IPC command validation and the Unix socket trust boundary. |
 
 ### Utilities
 
-| Crate | What It Does in Shroud | Why It's Here | Compromise Impact |
+| Crate | What It Does in VPNShroud | Why It's Here | Compromise Impact |
 |-------|------------------------|---------------|-------------------|
 | `tracing` | Structured logging throughout the codebase -- state transitions, IPC commands, errors | `println!` doesn't cut it for a daemon. You need log levels, structured fields, and subscriber filtering. | Could suppress or falsify log output. An attacker could hide their tracks. |
 | `tracing-subscriber` | Configures log output format and `RUST_LOG` filtering for the tracing framework | `tracing` needs a subscriber to actually output anything. This is the official one. | Same as `tracing`. Could suppress or redirect log output. |
 | `dirs` | Resolves `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, and `XDG_RUNTIME_DIR` for config, logs, and socket paths | XDG directory resolution has platform-specific fallbacks. Getting it wrong means writing files to the wrong place. | Could redirect file paths. An attacker could point config or socket resolution to attacker-controlled locations. |
 | `walkdir` | Recursively traverses directories during bulk VPN config import (`shroud import ~/configs/`) | `std::fs::read_dir` is non-recursive. Reimplementing recursive traversal with proper error handling is a solved problem. | Could inject fake directory entries during import. Bounded by the config validator that runs after import. |
-| `thiserror` | Derives `Error` implementations for Shroud's error types | Writing `impl std::fmt::Display` and `impl std::error::Error` by hand for dozens of error variants is boilerplate. | Compile-time code generation only. No runtime attack surface. |
+| `thiserror` | Derives `Error` implementations for VPNShroud's error types | Writing `impl std::fmt::Display` and `impl std::error::Error` by hand for dozens of error variants is boilerplate. | Compile-time code generation only. No runtime attack surface. |
 | `ureq` | Sends HTTP GET requests for health check pings to verify the VPN tunnel is working | Health checks need to make HTTP requests through the tunnel. `std::net::TcpStream` doesn't speak HTTP. | Could redirect health check pings or return fake responses. Cannot affect VPN traffic or firewall rules. Health checks have redirect following disabled and enforce connect timeouts. |
 | `rand` | Generates random jitter for the linear backoff delay between reconnect attempts | Deterministic backoff causes thundering herd problems. You need randomness. `std::collections::hash_map::RandomState` is not a proper RNG. | Could make backoff timing predictable. Minimal security impact -- affects reconnect scheduling only. |
 
@@ -130,13 +130,13 @@ cargo tree --duplicates
 cargo license --all-deps
 ```
 
-For license compatibility of every dependency (direct and transitive) against Shroud's dual-license model, see [DEPENDENCY-AUDIT.md](../licenses/DEPENDENCY-AUDIT.md). For the full generated license list, see [THIRD-PARTY-LICENSES](../licenses/THIRD-PARTY-LICENSES).
+For license compatibility of every dependency (direct and transitive) against VPNShroud's dual-license model, see [DEPENDENCY-AUDIT.md](../licenses/DEPENDENCY-AUDIT.md). For the full generated license list, see [THIRD-PARTY-LICENSES](../licenses/THIRD-PARTY-LICENSES).
 
 ---
 
 ## Security Model
 
-Shroud's security assumptions:
+VPNShroud's security assumptions:
 
 | Trust | Don't Trust |
 |-------|-------------|
@@ -147,17 +147,17 @@ Shroud's security assumptions:
 
 ### Kill Switch Privileges
 
-The kill switch requires root for iptables. Shroud uses sudoers rules that only allow specific commands:
+The kill switch requires root for iptables. VPNShroud uses sudoers rules that only allow specific commands:
 
 ```
 %wheel ALL=(ALL) NOPASSWD: /usr/bin/iptables, /usr/bin/ip6tables, ...
 ```
 
-This limits the attack surface. If someone compromises Shroud, they can manipulate firewall rules but not run arbitrary commands as root.
+This limits the attack surface. If someone compromises VPNShroud, they can manipulate firewall rules but not run arbitrary commands as root.
 
 ### No Network Communication
 
-Shroud doesn't phone home. No telemetry. No update checks. No analytics.
+VPNShroud doesn't phone home. No telemetry. No update checks. No analytics.
 
 The only network communication is:
 1. VPN connection (through NetworkManager)
@@ -190,17 +190,17 @@ Both are initiated by the user.
 
 Security through clarity.
 
-Every firewall rule should be auditable. Every design decision should be explainable. If users can't understand what Shroud is doing, they won't trust it.
+Every firewall rule should be auditable. Every design decision should be explainable. If users can't understand what VPNShroud is doing, they won't trust it.
 
-Shroud prioritizes fewer features done right over more features with hidden risks.
+VPNShroud prioritizes fewer features done right over more features with hidden risks.
 
 ---
 
 ## Threat Model: Local Attacker Limitations
 
-Shroud protects against **network-level threats**: ISP surveillance, open WiFi sniffing, accidental VPN disconnection, DNS leaks, and IPv6 leaks.
+VPNShroud protects against **network-level threats**: ISP surveillance, open WiFi sniffing, accidental VPN disconnection, DNS leaks, and IPv6 leaks.
 
-Shroud **does not protect** against a local attacker running as the same user. This is an inherent architectural constraint of user-level security tools, not a bug.
+VPNShroud **does not protect** against a local attacker running as the same user. This is an inherent architectural constraint of user-level security tools, not a bug.
 
 ### What a same-user attacker can do
 
@@ -212,14 +212,14 @@ The IPC socket (`$XDG_RUNTIME_DIR/shroud.sock`) accepts commands from any proces
 
 ### Why this is acceptable
 
-Shroud runs as the user it protects. The alternative, running as a system service with a separate UID, would require polkit integration, a client-server architecture, and significant complexity. This contradicts Principles V (Complexity Is Debt) and VIII (One Binary, One Purpose).
+VPNShroud runs as the user it protects. The alternative, running as a system service with a separate UID, would require polkit integration, a client-server architecture, and significant complexity. This contradicts Principles V (Complexity Is Debt) and VIII (One Binary, One Purpose).
 
 If an attacker has a shell as your user, they can already:
 - Read your SSH keys, browser cookies, and GPG keys
 - Install keyloggers via `.bashrc`
 - Modify any file in your home directory
 
-Shroud's job is to be the armor around your VPN. Protecting against local malware is the job of your OS, your login security, and your endpoint protection.
+VPNShroud's job is to be the armor around your VPN. Protecting against local malware is the job of your OS, your login security, and your endpoint protection.
 
 ### Mitigations in place
 
@@ -239,7 +239,7 @@ Shroud's job is to be the armor around your VPN. Protecting against local malwar
 
 ### Debug Logs
 
-Shroud's debug log (`~/.local/share/shroud/debug.log`) contains VPN connection details including server names, IPs, connection timestamps, and state transitions. This file has `0600` permissions and is only readable by the running user.
+VPNShroud's debug log (`~/.local/share/shroud/debug.log`) contains VPN connection details including server names, IPs, connection timestamps, and state transitions. This file has `0600` permissions and is only readable by the running user.
 
 Any process running as the same user can read this file. If you are concerned about local malware, consider disabling file logging (`--log-level error`) or configuring log rotation via the config file.
 
@@ -247,7 +247,7 @@ Any process running as the same user can read this file. If you are concerned ab
 
 ## IPC Security Model
 
-Shroud's CLI communicates with the daemon over a Unix domain socket using JSON messages delimited by newlines. The connection is **not encrypted**. This section explains why, and what protections are in place instead.
+VPNShroud's CLI communicates with the daemon over a Unix domain socket using JSON messages delimited by newlines. The connection is **not encrypted**. This section explains why, and what protections are in place instead.
 
 ### Why No Encryption
 
@@ -265,19 +265,19 @@ Adding TLS or any encryption layer to the IPC would add complexity with zero sec
 
 ### Socket Path Selection
 
-The socket is placed at `$XDG_RUNTIME_DIR/shroud.sock` when available. If `XDG_RUNTIME_DIR` is not set (rare on modern systems), Shroud falls back to `~/.local/share/shroud/shroud.sock`, a user-owned directory.
+The socket is placed at `$XDG_RUNTIME_DIR/shroud.sock` when available. If `XDG_RUNTIME_DIR` is not set (rare on modern systems), VPNShroud falls back to `~/.local/share/shroud/shroud.sock`, a user-owned directory.
 
-Shroud **does not** use `/tmp` for the socket. The `/tmp` directory has the sticky bit set, which means other users can create files there that the owning user cannot remove. A local attacker could pre-create a socket at the expected path to prevent the daemon from starting (denial of service). Using `XDG_RUNTIME_DIR` or a user-owned directory eliminates this attack vector.
+VPNShroud **does not** use `/tmp` for the socket. The `/tmp` directory has the sticky bit set, which means other users can create files there that the owning user cannot remove. A local attacker could pre-create a socket at the expected path to prevent the daemon from starting (denial of service). Using `XDG_RUNTIME_DIR` or a user-owned directory eliminates this attack vector.
 
 ### Symlink Protection
 
-Before removing a stale socket file on startup, Shroud checks whether the path is a symlink using `symlink_metadata()`. If the socket path is a symlink, the server refuses to proceed and logs a warning. This prevents a class of TOCTOU (time-of-check-time-of-use) attacks where an attacker replaces the socket file with a symlink to another file.
+Before removing a stale socket file on startup, VPNShroud checks whether the path is a symlink using `symlink_metadata()`. If the socket path is a symlink, the server refuses to proceed and logs a warning. This prevents a class of TOCTOU (time-of-check-time-of-use) attacks where an attacker replaces the socket file with a symlink to another file.
 
 > **Note:** A small TOCTOU window exists between the symlink check and the `remove_file()` call. This is acceptable because `XDG_RUNTIME_DIR` is mode `0700`. Only the owning user can create files there, so there is no attacker who could exploit the window.
 
 ### Peer Identification
 
-On Linux, Shroud uses `SO_PEERCRED` (via `getsockopt`) to retrieve the PID of the connecting process. Every non-trivial IPC command is logged with the peer PID:
+On Linux, VPNShroud uses `SO_PEERCRED` (via `getsockopt`) to retrieve the PID of the connecting process. Every non-trivial IPC command is logged with the peer PID:
 
 ```
 INFO Received command: Connect { name: "us-east-1" } from PID 12345
@@ -303,16 +303,16 @@ The IPC protocol includes a version handshake. The first message from a client m
 
 ### Trust Boundary
 
-Shroud's IPC trust boundary is the Unix user. Any process running as the same user is considered trusted. This matches the POSIX security model. If an attacker has code execution as your user, IPC encryption would not save you. They could attach a debugger to the daemon, read its memory, or replace the binary entirely.
+VPNShroud's IPC trust boundary is the Unix user. Any process running as the same user is considered trusted. This matches the POSIX security model. If an attacker has code execution as your user, IPC encryption would not save you. They could attach a debugger to the daemon, read its memory, or replace the binary entirely.
 
-What Shroud *does* protect against:
+What VPNShroud *does* protect against:
 
 - **Other users on the same system** -- socket permissions prevent cross-user access
 - **Remote attackers** -- Unix domain sockets have no network exposure
 - **Accidental interference** -- protocol validation rejects malformed input
 - **Resource exhaustion** -- connection and message limits prevent DoS
 
-What Shroud *does not* attempt to protect against:
+What VPNShroud *does not* attempt to protect against:
 
 - **Same-user malware** -- this is the job of endpoint protection, not a VPN manager
 - **Root-level attackers** -- root can do anything, including reading the socket

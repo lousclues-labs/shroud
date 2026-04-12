@@ -190,7 +190,7 @@ pub async fn run_client_mode(args: &Args) -> i32 {
             Err(e) => {
                 match e {
                     ClientError::DaemonNotRunning => {
-                        eprintln!("Error: Shroud daemon is not running.");
+                        eprintln!("Error: VPNShroud daemon is not running.");
                         eprintln!("Start it with: shroud");
                     }
                     _ => {
@@ -205,7 +205,7 @@ pub async fn run_client_mode(args: &Args) -> i32 {
             Err(e) => {
                 match e {
                     ClientError::DaemonNotRunning => {
-                        eprintln!("Error: Shroud daemon is not running.");
+                        eprintln!("Error: VPNShroud daemon is not running.");
                         eprintln!("Start it with: shroud");
                         // Special exit code for daemon not running?
                         // Standard practice is 1, but maybe another is better. Sticking to 1.
@@ -276,7 +276,7 @@ fn handle_doctor_command() -> i32 {
     use crate::killswitch::paths;
     use crate::killswitch::sudo_check::{check_sudo_access, SudoAccessStatus};
 
-    println!("🔍 Shroud Doctor - Checking configuration...\n");
+    println!("🔍 VPNShroud Doctor - Checking configuration...\n");
 
     let mut issues = 0;
 
@@ -632,7 +632,7 @@ fn handle_autostart_command(action: ToggleAction, args: &Args) -> i32 {
                     if let Some(ref path) = status.desktop_file {
                         println!("  Desktop file: {}", path.display());
                     }
-                    println!("\nShroud will start and auto-connect on next login.");
+                    println!("\nVPNShroud will start and auto-connect on next login.");
                     0
                 }
                 Err(e) => {

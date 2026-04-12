@@ -35,7 +35,7 @@ use tracing::{debug, error, info, warn};
 ///
 /// Returns an error if the IPC server fails to bind the Unix socket.
 pub async fn run_headless(config: Config) -> Result<(), Box<dyn std::error::Error>> {
-    info!("Starting Shroud in headless mode");
+    info!("Starting VPNShroud in headless mode");
 
     // Notify systemd we're starting
     systemd::notify_status("Initializing...");
@@ -161,7 +161,7 @@ pub async fn run_headless(config: Config) -> Result<(), Box<dyn std::error::Erro
 
     // Step 7: Notify systemd we're ready
     systemd::notify_ready();
-    info!("Shroud headless mode ready");
+    info!("VPNShroud headless mode ready");
 
     // Step 8: Set up signal handlers
     let mut sigterm = signal(SignalKind::terminate())?;
@@ -223,7 +223,7 @@ pub async fn run_headless(config: Config) -> Result<(), Box<dyn std::error::Erro
     )
     .await;
 
-    info!("Shroud headless shutdown complete");
+    info!("VPNShroud headless shutdown complete");
     Ok(())
 }
 

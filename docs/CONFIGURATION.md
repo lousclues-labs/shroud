@@ -1,12 +1,12 @@
 # Configuration
 
-Shroud stores its config in `~/.config/shroud/config.toml`. Plain TOML. Edit it with any text editor.
+VPNShroud stores its config in `~/.config/shroud/config.toml`. Plain TOML. Edit it with any text editor.
 
 ---
 
 ## The Defaults
 
-When you first run Shroud, it creates a config with sensible defaults:
+When you first run VPNShroud, it creates a config with sensible defaults:
 
 ```toml
 version = 1
@@ -55,7 +55,7 @@ When the VPN drops, try to reconnect automatically.
 |------|--------|
 | boolean | `false` |
 
-Automatically connect to a VPN when Shroud starts. Connects to `last_server` if set, otherwise connects to the first available VPN in NetworkManager.
+Automatically connect to a VPN when VPNShroud starts. Connects to `last_server` if set, otherwise connects to the first available VPN in NetworkManager.
 
 Managed automatically by `shroud autostart on/off`. You can also set it independently by editing the config.
 ### `kill_switch_enabled`
@@ -78,7 +78,7 @@ The last VPN you connected to. Used for quick reconnect.
 
 ## Health Check Options
 
-Shroud monitors your VPN connection and detects problems before you notice them.
+VPNShroud monitors your VPN connection and detects problems before you notice them.
 
 ### `health_check_interval_secs`
 
@@ -102,7 +102,7 @@ If latency exceeds this (milliseconds), connection is marked "degraded."
 |------|---------|
 | list of strings | `[]` (uses built-in defaults) |
 
-Custom URLs to check for VPN health. If empty, Shroud uses its built-in endpoints (Cloudflare, ifconfig.me, ipify). Each endpoint must return HTTP 2xx/3xx to be considered healthy.
+Custom URLs to check for VPN health. If empty, VPNShroud uses its built-in endpoints (Cloudflare, ifconfig.me, ipify). Each endpoint must return HTTP 2xx/3xx to be considered healthy.
 
 ```toml
 health_check_endpoints = [
@@ -197,7 +197,7 @@ allow_lan = true
 |------|---------|
 | boolean | `true` |
 
-Allow traffic to local network. Shroud auto-detects your actual LAN subnet and only allows traffic to that range (not the entire RFC1918 space). You probably want this so you can still print and access local shares.
+Allow traffic to local network. VPNShroud auto-detects your actual LAN subnet and only allows traffic to that range (not the entire RFC1918 space). You probably want this so you can still print and access local shares.
 
 ### `lan_restrict_ports`
 
@@ -238,7 +238,7 @@ reconnect_delay_secs = 5
 | `startup_server` | string | none | Which VPN to connect to |
 | `kill_switch_on_boot` | bool | `true` | Block traffic until VPN connects |
 | `require_kill_switch` | bool | `true` | Fail if kill switch can't enable |
-| `persist_kill_switch` | bool | `false` | Keep kill switch after Shroud exits |
+| `persist_kill_switch` | bool | `false` | Keep kill switch after VPNShroud exits |
 | `max_reconnect_attempts` | int | `0` | Retry limit (0 = infinite) |
 | `reconnect_delay_secs` | int | `5` | Initial retry delay |
 
@@ -271,7 +271,7 @@ shroud restart
 
 ## Reset to Defaults
 
-Remove the config and let Shroud recreate it:
+Remove the config and let VPNShroud recreate it:
 
 ```bash
 rm ~/.config/shroud/config.toml
@@ -294,7 +294,7 @@ auto_reconnect = true
 # Auto-connect to last VPN on startup (managed by 'shroud autostart on/off')
 auto_connect = true
 
-# Last connected VPN (managed by Shroud)
+# Last connected VPN (managed by VPNShroud)
 last_server = "mullvad-us1"
 
 # Check VPN health every 30 seconds

@@ -249,7 +249,7 @@ pub fn cleanup_stale_on_startup() {
     warn!("STALE KILL SWITCH RULES DETECTED");
     warn!("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     warn!("");
-    warn!("Found firewall rules from a previous Shroud instance.");
+    warn!("Found firewall rules from a previous VPNShroud instance.");
     warn!("Attempting cleanup...");
     warn!("");
 

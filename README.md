@@ -1,8 +1,8 @@
-# Shroud
+# VPNShroud
 
 [![CI](https://github.com/loujr/shroud/actions/workflows/ci.yml/badge.svg)](https://github.com/loujr/shroud/actions/workflows/ci.yml)
 [![Security Audit](https://github.com/loujr/shroud/actions/workflows/scheduled.yml/badge.svg)](https://github.com/loujr/shroud/actions/workflows/scheduled.yml)
-[![Version](https://img.shields.io/badge/version-2.0.0-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.0.3-blue)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.87%2B-orange.svg)](https://www.rust-lang.org/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
@@ -24,9 +24,9 @@ A **lock shroud** is the protective metal casing around a padlock's shackle. It 
 └─────────────────────────────────────────┘
 ```
 
-That's what Shroud does:
+That's what VPNShroud does:
 
-| Lock Shroud | Shroud (This Tool) |
+| Lock Shroud | VPNShroud (This Tool) |
 |-------------|-------------------|
 | Wraps the lock | Wraps NetworkManager |
 | Protects the mechanism | Kill switch protects against leaks |
@@ -44,15 +44,15 @@ The name works on three levels:
 
 Most VPN tools want to own your system. They install kernel modules, replace your DNS, spawn seventeen daemons, and phone home to tell someone you're using them.
 
-Shroud doesn't do any of that.
+VPNShroud doesn't do any of that.
 
 **We wrap, we don't replace.** NetworkManager already knows how to connect to VPNs. OpenVPN and WireGuard already work. We're not here to reinvent the wheel. We're here to put armor around it.
 
 **We fail loud, recover quiet.** When something breaks, you'll know. When it heals, you won't need to lift a finger.
 
-**We leave no trace.** When Shroud stops, your system is exactly as it was. No orphaned firewall rules. No zombie processes. No "please run this cleanup script to fix your networking."
+**We leave no trace.** When VPNShroud stops, your system is exactly as it was. No orphaned firewall rules. No zombie processes. No "please run this cleanup script to fix your networking."
 
-**We respect your privacy.** No telemetry. No analytics. No phoning home. If you want to run Shroud in a bunker with nothing but a VPN tunnel to the outside world, that's your right.
+**We respect your privacy.** No telemetry. No analytics. No phoning home. If you want to run VPNShroud in a bunker with nothing but a VPN tunnel to the outside world, that's your right.
 
 Read the full [Principles](docs/PRINCIPLES.md) if you want to understand what we're about.
 
@@ -60,7 +60,7 @@ Read the full [Principles](docs/PRINCIPLES.md) if you want to understand what we
 
 ## How It Gets Built
 
-I chose Rust because the compiler enforces the kind of promises security tools need to keep. I built Shroud with AI. I'm not going to pretend otherwise, because pretending would violate the same principles this tool is built on.
+I chose Rust because the compiler enforces the kind of promises security tools need to keep. I built VPNShroud with AI. I'm not going to pretend otherwise, because pretending would violate the same principles this tool is built on.
 
 I broke the code, found the bugs, and fixed them. Every decision is in the [CHANGELOG](CHANGELOG.md). That's where the real work lives.
 
@@ -97,7 +97,7 @@ I broke the code, found the bugs, and fixed them. Every decision is in the [CHAN
 
 ---
 
-## Why Shroud is Fast
+## Why VPNShroud is Fast
 - One lean Rust binary. No Electron, no heavyweight GUI stack.
 - No provider handshake. We talk straight to NetworkManager with your OpenVPN/WireGuard profiles.
 - Minimal background daemons. A single supervisor, no telemetry or auto-updaters.
@@ -141,7 +141,7 @@ You're protected.
 
 ## The Basics
 
-### Starting Shroud
+### Starting VPNShroud
 
 ```bash
 shroud                    # Start with system tray
@@ -208,7 +208,7 @@ shroud import ~/vpn.conf --connect             # Import and connect immediately
 
 ## Configuration
 
-Shroud keeps its config in `~/.config/shroud/config.toml`. Here's what matters:
+VPNShroud keeps its config in `~/.config/shroud/config.toml`. Here's what matters:
 
 ```toml
 auto_reconnect = true              # Get back up when you fall
@@ -223,7 +223,7 @@ See [Configuration](docs/CONFIGURATION.md) for the full reference.
 
 ## The State Machine
 
-Shroud knows exactly what state it's in at all times. No guessing. No "it says connected but nothing works."
+VPNShroud knows exactly what state it's in at all times. No guessing. No "it says connected but nothing works."
 
 ```
     Disconnected ──────► Connecting ──────► Connected
@@ -236,7 +236,7 @@ Shroud knows exactly what state it's in at all times. No guessing. No "it says c
          └────────────────────┴────► Reconnecting
 ```
 
-Every transition is logged. Every state is real. If Shroud says you're connected, you're connected.
+Every transition is logged. Every state is real. If VPNShroud says you're connected, you're connected.
 
 ---
 
@@ -255,7 +255,7 @@ shroud doctor              # Run diagnostics
 
 ### Stuck with no internet?
 
-If Shroud crashes with the kill switch on:
+If VPNShroud crashes with the kill switch on:
 
 ```bash
 shroud ks off              # Try this first
@@ -306,7 +306,7 @@ That's really it.
 
 Copyright (C) 2026 **Louis Nelson Jr.** -- a [lousclues](https://lousclues.com) project.
 
-Shroud is dual-licensed:
+VPNShroud is dual-licensed:
 
 | Component | License | File |
 |-----------|---------|------|
@@ -314,19 +314,19 @@ Shroud is dual-licensed:
 | Documentation | Creative Commons Attribution 4.0 (CC BY 4.0) | [LICENSE-DOCS.md](licenses/LICENSE-DOCS.md) |
 | Third-Party Dependencies | MIT, Apache-2.0, and other permissive licenses | [THIRD-PARTY-LICENSES](licenses/THIRD-PARTY-LICENSES) |
 
-**For most users:** The GPL covers you fully. Use Shroud, connect your VPNs, run the daemon. No restrictions beyond the GPL.
+**For most users:** The GPL covers you fully. Use VPNShroud, connect your VPNs, run the daemon. No restrictions beyond the GPL.
 
-**For proprietary/commercial use:** If you need to embed Shroud in closed-source products or redistribute without GPL obligations, a [commercial license](licenses/LICENSE-COMMERCIAL.md) is available.
+**For proprietary/commercial use:** If you need to embed VPNShroud in closed-source products or redistribute without GPL obligations, a [commercial license](licenses/LICENSE-COMMERCIAL.md) is available.
 
 **For contributors:** By submitting a pull request, you agree to the [Contributor License Agreement](licenses/CONTRIBUTOR-LICENSE.md). You keep your copyright; you grant the project permission to include your contribution under both licenses.
 
-**Trademarks:** "Shroud" and "lousclues" are trademarks of Louis Nelson Jr. See [TRADEMARKS.md](TRADEMARKS.md) for usage guidelines. The GPL does not grant trademark rights.
+**Trademarks:** "VPNShroud" is the composite project name and is not a claim of rights over "VPN" or "Shroud" individually. "lousclues" is a trademark of Louis Nelson Jr. See [TRADEMARKS.md](TRADEMARKS.md) for usage guidelines. The GPL does not grant trademark rights.
 
 For the complete licensing framework, see [LICENSING.md](licenses/LICENSING.md). For project governance and succession planning, see [GOVERNANCE.md](GOVERNANCE.md).
 
 ---
 
-*Shroud: Wrap your VPN in armor, not bloatware.*
+*VPNShroud: Wrap your VPN in armor, not bloatware.*
 
 *We protect. We recover. We disappear.*
 

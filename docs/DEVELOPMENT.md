@@ -1,6 +1,6 @@
 # Development Setup
 
-You want to hack on Shroud. Good.
+You want to hack on VPNShroud. Good.
 
 This guide gets you from zero to a working development environment. No fluff.
 
@@ -108,7 +108,7 @@ Kill switch tests need root:
 
 ## Fuzz Testing
 
-Shroud includes fuzz targets for critical parsers: IPC commands, config files, and VPN name validation. Fuzzing finds crashes and edge cases that unit tests miss.
+VPNShroud includes fuzz targets for critical parsers: IPC commands, config files, and VPN name validation. Fuzzing finds crashes and edge cases that unit tests miss.
 
 ### Setup
 
@@ -201,7 +201,7 @@ cargo run -- ks toggle
 
 ### Quick Rebuild and Restart
 
-If you have Shroud installed:
+If you have VPNShroud installed:
 
 ```bash
 shroud update

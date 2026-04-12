@@ -50,7 +50,7 @@ fn test_config_directory_permissions() {
 
     println!("Config directory permissions: {:o}", perms);
 
-    // Shroud's config directory should not be world-writable
+    // VPNShroud's config directory should not be world-writable
     // (world-readable is acceptable, world-writable is a security risk)
     let world_writable = perms & 0o002;
     assert_eq!(
@@ -168,7 +168,11 @@ fn test_malformed_config_handled() {
             .args(["--help"]) // Simple command that loads config
             .output();
 
-        assert!(output.is_ok(), "Shroud crashed on malformed config {}", i);
+        assert!(
+            output.is_ok(),
+            "VPNShroud crashed on malformed config {}",
+            i
+        );
     }
 
     // Restore backup
@@ -211,7 +215,7 @@ fn test_config_values_bounds_checked() {
             .output();
 
         // Should handle gracefully (use defaults or clamp values)
-        assert!(output.is_ok(), "Shroud crashed on boundary config {}", i);
+        assert!(output.is_ok(), "VPNShroud crashed on boundary config {}", i);
     }
 
     // Restore

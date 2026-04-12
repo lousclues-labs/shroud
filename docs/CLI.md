@@ -1,6 +1,6 @@
 # CLI Reference
 
-Every command Shroud understands. No hidden features.
+Every command VPNShroud understands. No hidden features.
 
 ---
 
@@ -11,7 +11,7 @@ shroud [OPTIONS]              # Start the daemon (tray app)
 shroud [OPTIONS] <COMMAND>    # Send command to running daemon
 ```
 
-The first form starts Shroud. The second talks to an already-running Shroud.
+The first form starts VPNShroud. The second talks to an already-running VPNShroud.
 
 ---
 
@@ -175,7 +175,7 @@ shroud import ~/configs/ --dry-run            # Preview only
 
 ### `shroud autostart on` / `shroud startup on`
 
-Launch Shroud on login.
+Launch VPNShroud on login.
 
 ```bash
 shroud autostart on
@@ -392,7 +392,7 @@ fi
 ## Examples
 
 ```bash
-# Start Shroud
+# Start VPNShroud
 shroud
 
 # Connect and enable kill switch

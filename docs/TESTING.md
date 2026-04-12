@@ -1,6 +1,6 @@
 # Testing Strategy
 
-How we test Shroud, and how you can run them locally.
+How we test VPNShroud, and how you can run them locally.
 
 ## Test Categories
 

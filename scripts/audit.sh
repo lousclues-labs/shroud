@@ -1,7 +1,7 @@
 #!/bin/bash
 # SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
 # Copyright (C) 2026 Louis Nelson Jr. <https://lousclues.com>
-# Security audit for Shroud dependencies
+# Security audit for VPNShroud dependencies
 #
 # This script checks for known vulnerabilities in dependencies
 # using cargo-audit (RustSec Advisory Database).
@@ -16,7 +16,7 @@ PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_DIR"
 
 echo "=================================="
-echo " Shroud Dependency Security Audit"
+echo " VPNShroud Dependency Security Audit"
 echo "=================================="
 echo ""
 
@@ -48,6 +48,6 @@ else
     echo "If a vulnerability cannot be fixed immediately:"
     echo "  - Document it in SECURITY.md"
     echo "  - Create a tracking issue"
-    echo "  - Assess actual risk to Shroud users"
+    echo "  - Assess actual risk to VPNShroud users"
     exit 1
 fi

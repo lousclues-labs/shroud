@@ -1,4 +1,4 @@
-Shroud
+VPNShroud
 Copyright (C) 2026 Louis Nelson Jr.
 A lousclues project — https://vpnshroud.org
 
@@ -23,7 +23,7 @@ copyright and trademark rights, are held by Louis Nelson Jr.
 PROJECT INFORMATION
 ================================================================================
 
-  Project:        Shroud — A provider-agnostic VPN connection manager for Linux
+  Project:        VPNShroud — A provider-agnostic VPN connection manager for Linux
   Repository:     https://github.com/loujr/shroud
   Website:        https://vpnshroud.org
   Brand Website:  https://lousclues.com
@@ -61,6 +61,10 @@ permissive licenses. See licenses/THIRD-PARTY-LICENSES for the authoritative lis
 TRADEMARK NOTICE
 ================================================================================
 
-"Shroud" and "lousclues" are trademarks of Louis Nelson Jr. The GPL license
+"VPNShroud" is the composite project name and is not a claim of rights over
+"VPN" or "Shroud" individually. "VPN" is a generic technology term. "Shroud"
+is not claimed as a trademark by this project. This project is not associated
+with, endorsed by, or affiliated with any other entity using the name "Shroud."
+"lousclues" is a trademark of Louis Nelson Jr. The GPL license
 does not grant rights to use these trademarks. See TRADEMARKS.md for usage
 guidelines.

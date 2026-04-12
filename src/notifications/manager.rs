@@ -180,7 +180,7 @@ impl NotificationManager {
                 .body(&body)
                 .icon(&icon)
                 .timeout(timeout_ms)
-                .appname("Shroud VPN")
+                .appname("VPNShroud VPN")
                 .show();
 
             if let Err(e) = result {
@@ -306,7 +306,7 @@ impl NotificationManager {
     pub fn first_run_tip(&mut self, message: &str) {
         self.show(Notification::new(
             NotificationCategory::FirstRun,
-            "Shroud VPN",
+            "VPNShroud VPN",
             message,
         ));
     }

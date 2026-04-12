@@ -1,3 +1,27 @@
+VPNShroud — A provider-agnostic VPN connection manager for Linux
+Copyright (C) 2026 Louis Nelson Jr. (lousclues) <https://lousclues.com>
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+TRADEMARK DISCLAIMER: "VPNShroud" is the composite project name and
+is not a claim of rights over "VPN" or "Shroud" individually. "VPN"
+is a generic technology term. "Shroud" is not claimed as a trademark
+by this project. This project is not associated with, endorsed by,
+or affiliated with any other entity using the name "Shroud."
+
+---
+
                     GNU GENERAL PUBLIC LICENSE
                        Version 3, 29 June 2007
 

@@ -8,13 +8,13 @@ Something broke. Let's get you back online.
 
 ### "I have no internet"
 
-If Shroud crashed with the kill switch enabled, your traffic is blocked. That's the kill switch doing its job, just a bit too enthusiastically.
+If VPNShroud crashed with the kill switch enabled, your traffic is blocked. That's the kill switch doing its job, just a bit too enthusiastically.
 
 ```bash
 # Try this first
 shroud ks off
 
-# If Shroud isn't responding
+# If VPNShroud isn't responding
 sudo iptables -D OUTPUT -j SHROUD_KILLSWITCH
 sudo iptables -F SHROUD_KILLSWITCH
 sudo iptables -X SHROUD_KILLSWITCH
@@ -164,7 +164,7 @@ sudo modprobe ip_tables ip6_tables nf_tables
 
 ### Connection List Is Empty
 
-Shroud only sees VPN connections that NetworkManager knows about.
+VPNShroud only sees VPN connections that NetworkManager knows about.
 
 ```bash
 # Check what NM sees
@@ -179,7 +179,7 @@ shroud refresh
 
 ### Config File Corrupted
 
-Shroud will back up corrupted configs and create a fresh one. But if you need to manually reset:
+VPNShroud will back up corrupted configs and create a fresh one. But if you need to manually reset:
 
 ```bash
 # Backup and remove
@@ -204,7 +204,7 @@ shroud
 
 ### "Connection already active" Spam
 
-This happens when Shroud's state diverges from NetworkManager. Usually after connecting/disconnecting via nm-applet or GNOME Settings.
+This happens when VPNShroud's state diverges from NetworkManager. Usually after connecting/disconnecting via nm-applet or GNOME Settings.
 
 Fixed in v1.8.4. If you're seeing this, update:
 ```bash

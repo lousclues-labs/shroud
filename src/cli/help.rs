@@ -6,7 +6,7 @@
 /// Print main help message
 pub fn print_main_help() {
     println!(
-        r#"Shroud - VPN connection manager for Linux
+        r#"VPNShroud - VPN connection manager for Linux
 
 USAGE:
     shroud [OPTIONS]              Start the daemon (tray application)
@@ -240,7 +240,7 @@ ACTIONS:
 ALIASES:
     ar, autoreconnect
 
-When enabled, Shroud will automatically attempt to reconnect if the
+When enabled, VPNShroud will automatically attempt to reconnect if the
 VPN connection drops unexpectedly."#
         ),
 
@@ -371,7 +371,7 @@ USAGE:
 Returns exit code 0 if the daemon is running, 2 if not.
 
 OUTPUT:
-    Shroud daemon is running (PID: 12345, uptime: 2h 15m)"#
+    VPNShroud daemon is running (PID: 12345, uptime: 2h 15m)"#
         ),
 
         "refresh" => println!(

@@ -4,13 +4,13 @@
 
 ## Current Governance
 
-Shroud is a single-maintainer project. All decisions regarding the project's direction, licensing, releases, and intellectual property are made by:
+VPNShroud is a single-maintainer project. All decisions regarding the project's direction, licensing, releases, and intellectual property are made by:
 
 **Louis Nelson Jr.**
 - GitHub: [@loujr](https://github.com/loujr)
 - Brand: lousclues ([lousclues.com](https://lousclues.com))
 
-Louis Nelson Jr. is the sole copyright holder, trademark owner, and licensing authority for the Shroud project. There is no governance board, steering committee, or co-maintainer structure at this time.
+Louis Nelson Jr. is the sole copyright holder, trademark owner, and licensing authority for the VPNShroud project. There is no governance board, steering committee, or co-maintainer structure at this time.
 
 ## Decision-Making
 
@@ -19,7 +19,7 @@ As a single-maintainer project, the decision-making process is straightforward:
 - **Code changes:** All pull requests are reviewed and merged (or rejected) by the maintainer.
 - **Releases:** The maintainer determines the release schedule and version numbering.
 - **Licensing:** Only the maintainer can authorize changes to the project's licensing terms, grant commercial licenses, or modify the CLA.
-- **Trademarks:** Only the maintainer can authorize use of the Shroud and lousclues trademarks.
+- **Trademarks:** Only the maintainer can authorize use of the VPNShroud and lousclues trademarks.
 
 ## Succession Plan
 
@@ -51,7 +51,7 @@ If the maintainer becomes permanently unavailable:
 - If a business entity (e.g., "lousclues LLC") is formed in the future, it would assume commercial licensing authority, and standard business succession rules would apply.
 
 **Trademarks:**
-- Trademark rights may lapse if not actively maintained (under U.S. common-law trademark rules). This means forks could eventually use the name "Shroud" if the mark is abandoned — but this process takes years, not days.
+- Trademark rights may lapse if not actively maintained (under U.S. common-law trademark rules). This means forks could eventually use the name "VPNShroud" if the mark is abandoned — but this process takes years, not days.
 - The [Trademark Policy](TRADEMARKS.md) remains in effect unless formally revoked or the mark lapses.
 
 ### Scenario 3: Voluntary Transfer

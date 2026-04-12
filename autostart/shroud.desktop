@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Shroud
+Name=VPNShroud
 GenericName=VPN Manager
 Comment=Provider-agnostic VPN connection manager with kill switch
 Exec=shroud

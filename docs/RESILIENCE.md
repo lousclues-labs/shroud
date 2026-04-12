@@ -1,6 +1,6 @@
 # Resilience
 
-How Shroud handles failure. Because things break.
+How VPNShroud handles failure. Because things break.
 
 ---
 
@@ -31,7 +31,7 @@ Nothing waits forever. Every external call has a timeout.
 
 ### 2. Graceful Degradation
 
-When components fail, Shroud keeps running in a reduced capacity:
+When components fail, VPNShroud keeps running in a reduced capacity:
 
 | Failure | What Happens |
 |---------|--------------|
@@ -44,7 +44,7 @@ We'd rather work partially than crash completely.
 
 ### 3. State Reconciliation
 
-Shroud periodically verifies its internal state matches reality:
+VPNShroud periodically verifies its internal state matches reality:
 
 - `sync_state_from_nm()` -- query NM for actual VPN state
 - `sync_killswitch_state()` -- verify iptables rules exist
@@ -54,7 +54,7 @@ Trust, but verify. Every 30 seconds.
 
 ### 4. Crash Recovery
 
-On startup, Shroud cleans up from potential previous crashes:
+On startup, VPNShroud cleans up from potential previous crashes:
 
 | Artifact | Recovery |
 |----------|----------|
@@ -119,7 +119,7 @@ These reduce capability but keep basic function:
 If you can't reach the network because the kill switch is stuck:
 
 ```bash
-# Option 1: Use Shroud's cleanup
+# Option 1: Use VPNShroud's cleanup
 shroud ks off
 
 # Option 2: Manual cleanup
@@ -218,7 +218,7 @@ WatchdogSec=30
 NotifyAccess=main
 ```
 
-Shroud sends watchdog notifications in headless mode. If it stops responding, systemd restarts it.
+VPNShroud sends watchdog notifications in headless mode. If it stops responding, systemd restarts it.
 
 ### Health Checks
 
@@ -287,7 +287,7 @@ The 10s timeout ensures we fail fast with a clear error.
 
 Resilience isn't about preventing failure. It's about recovering from failure.
 
-Things will break. Networks drop. Processes crash. Kernels panic. The question is: when it breaks, does the user end up worse off than if they'd never installed Shroud?
+Things will break. Networks drop. Processes crash. Kernels panic. The question is: when it breaks, does the user end up worse off than if they'd never installed VPNShroud?
 
 The answer must always be no.
 
