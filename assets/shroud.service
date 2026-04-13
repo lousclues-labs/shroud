@@ -13,7 +13,7 @@
 
 [Unit]
 Description=Shroud VPN Manager
-Documentation=https://github.com/loujr/shroud
+Documentation=https://github.com/lousclues-labs/shroud
 
 # Start after network is available
 After=network-online.target NetworkManager.service

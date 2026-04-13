@@ -29,7 +29,7 @@ The following uses are permitted without written authorization:
 
 - **Descriptive reference** — Referring to the VPN Shroud project by name in articles, blog posts, documentation, or conversations (e.g., "compatible with VPN Shroud," "tested against VPN Shroud").
 - **Attribution** — Stating that your project is "based on VPN Shroud" or "derived from VPN Shroud" when this is factually accurate.
-- **Linking** — Linking to the official repository (https://github.com/loujr/shroud) or website (https://vpnshroud.org).
+- **Linking** — Linking to the official repository (https://github.com/lousclues-labs/shroud) or website (https://vpnshroud.org).
 - **Academic and research use** — Referencing VPN Shroud in academic papers, benchmarks, or security research.
 - **Package naming** — Using the name "shroud" or "vpnshroud" in system package repositories (e.g., AUR, Debian) when distributing the unmodified or minimally patched official release, provided it links back to the official repository.
 
@@ -58,7 +58,7 @@ If you fork or create a derivative work from VPN Shroud's source code (as permit
 
 **Acceptable examples:**
 - ✅ "MyVPNManager — a fork of VPN Shroud"
-- ✅ "VeilNet, based on VPN Shroud (https://github.com/loujr/shroud)"
+- ✅ "VeilNet, based on VPN Shroud (https://github.com/lousclues-labs/shroud)"
 
 **Unacceptable examples:**
 - ❌ "VPN Shroud Enhanced"
@@ -80,7 +80,7 @@ The name "lou" is a common personal name and is not claimed as a trademark. No t
 
 If you believe someone is using the VPN Shroud or lousclues branding in violation of this policy, please report it by:
 
-- Opening an issue in the [official repository](https://github.com/loujr/shroud)
+- Opening an issue in the [official repository](https://github.com/lousclues-labs/shroud)
 - Contacting Louis Nelson Jr. via GitHub ([@loujr](https://github.com/loujr))
 
 ## Licensing

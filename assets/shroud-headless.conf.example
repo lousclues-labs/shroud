@@ -3,7 +3,7 @@
 # This is an example configuration for running Shroud in headless/server mode.
 # Copy to /etc/shroud/config.toml and customize.
 #
-# Documentation: https://github.com/loujr/shroud/blob/main/docs/HEADLESS.md
+# Documentation: https://github.com/lousclues-labs/shroud/blob/main/docs/HEADLESS.md
 
 # =============================================================================
 # HEADLESS MODE SETTINGS

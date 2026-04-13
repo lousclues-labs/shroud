@@ -1,8 +1,8 @@
 # VPN Shroud
 
-[![CI](https://github.com/loujr/shroud/actions/workflows/ci.yml/badge.svg)](https://github.com/loujr/shroud/actions/workflows/ci.yml)
-[![Security Audit](https://github.com/loujr/shroud/actions/workflows/scheduled.yml/badge.svg)](https://github.com/loujr/shroud/actions/workflows/scheduled.yml)
-[![Version](https://img.shields.io/badge/version-2.0.4-blue)](CHANGELOG.md)
+[![CI](https://github.com/lousclues-labs/shroud/actions/workflows/ci.yml/badge.svg)](https://github.com/lousclues-labs/shroud/actions/workflows/ci.yml)
+[![Security Audit](https://github.com/lousclues-labs/shroud/actions/workflows/scheduled.yml/badge.svg)](https://github.com/lousclues-labs/shroud/actions/workflows/scheduled.yml)
+[![Version](https://img.shields.io/badge/version-2.0.5-blue)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.87%2B-orange.svg)](https://www.rust-lang.org/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
@@ -120,7 +120,7 @@ A system tray icon that stays out of your way. Left-click for the menu. That's i
 ## Quick Start
 
 ```bash
-git clone https://github.com/loujr/shroud.git
+git clone https://github.com/lousclues-labs/shroud.git
 cd shroud
 ./setup.sh
 ```

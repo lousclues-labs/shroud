@@ -190,4 +190,4 @@ copyleft = "deny"
 
 ## Questions
 
-For questions about dependency licensing, open an issue in the [VPN Shroud repository](https://github.com/loujr/shroud) or contact Louis Nelson Jr. ([@loujr](https://github.com/loujr)).
+For questions about dependency licensing, open an issue in the [VPN Shroud repository](https://github.com/lousclues-labs/shroud) or contact Louis Nelson Jr. ([@loujr](https://github.com/loujr)).

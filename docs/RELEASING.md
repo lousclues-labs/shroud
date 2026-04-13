@@ -101,7 +101,7 @@ git push --tags
 Test from a clean environment:
 
 ```bash
-git clone https://github.com/loujr/shroud.git
+git clone https://github.com/lousclues-labs/shroud.git
 cd shroud
 ./setup.sh
 shroud --version
@@ -128,7 +128,7 @@ Don't let users sit on a broken release.
 
 ## Version Numbering
 
-VPN Shroud follows [Semantic Versioning](https://semver.org/):
+Shroud follows [Semantic Versioning](https://semver.org/):
 
 | Change | Example | Bump |
 |--------|---------|------|
@@ -136,7 +136,7 @@ VPN Shroud follows [Semantic Versioning](https://semver.org/):
 | New feature | New command added | Minor (1.8.x → 1.9.0) |
 | Bug fix | Crash fixed | Patch (1.8.7 → 1.8.8) |
 
-For VPN Shroud specifically:
+For Shroud specifically:
 
 - **Major**: Breaking config changes, removed commands
 - **Minor**: New features, new config options

@@ -68,7 +68,7 @@ sudo dnf install NetworkManager NetworkManager-openvpn NetworkManager-wireguard 
 ### Build and Test
 
 ```bash
-git clone https://github.com/loujr/shroud.git
+git clone https://github.com/lousclues-labs/shroud.git
 cd shroud
 
 cargo build           # Debug build

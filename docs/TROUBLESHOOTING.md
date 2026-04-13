@@ -275,7 +275,7 @@ If you're stuck:
 
 1. **Run diagnostics**: `shroud doctor`
 2. **Check logs**: `shroud debug on && shroud debug tail`
-3. **Search issues**: [GitHub Issues](https://github.com/loujr/shroud/issues)
+3. **Search issues**: [GitHub Issues](https://github.com/lousclues-labs/shroud/issues)
 4. **Open a new issue** with:
    - `shroud --version` output
    - `shroud doctor` output

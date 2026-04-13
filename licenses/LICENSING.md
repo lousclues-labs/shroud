@@ -31,7 +31,7 @@ Per the [SPDX specification](https://spdx.github.io/spdx-spec/v2.3/other-licensi
 ```
 LicenseRef-Commercial:
   name: VPN Shroud Commercial License
-  url: https://github.com/loujr/shroud/blob/main/licenses/LICENSE-COMMERCIAL.md
+  url: https://github.com/lousclues-labs/shroud/blob/main/licenses/LICENSE-COMMERCIAL.md
   contact: https://lousclues.com
 ```
 

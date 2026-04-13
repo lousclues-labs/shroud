@@ -73,7 +73,7 @@ ALIASES:
     startup              Alias for 'autostart'
     stop, exit           Aliases for 'quit'
 
-For more information, visit: https://github.com/loujr/shroud"#
+For more information, visit: https://github.com/lousclues-labs/shroud"#
     );
 }
 

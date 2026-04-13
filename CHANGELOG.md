@@ -12,6 +12,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [2.0.5] - 2026-04-13
+
+### Changed
+- **repo: migrate repository URLs from `loujr/shroud` to `lousclues-labs/shroud`** — updated all hardcoded repository references across documentation, metadata, legal files, assets, and CLI help text to reflect the canonical repository location after transfer. No code or build logic changes. GitHub maintains automatic redirects from the old URL.
+
+---
+
 ## [2.0.4] - 2026-04-11
 
 ### Security

@@ -7,7 +7,7 @@ Getting VPN Shroud running on your system. No PhD required.
 ## The Easy Way
 
 ```bash
-git clone https://github.com/loujr/shroud.git
+git clone https://github.com/lousclues-labs/shroud.git
 cd shroud
 ./setup.sh
 ```
@@ -105,7 +105,7 @@ If you prefer doing it yourself:
 
 ```bash
 # Clone
-git clone https://github.com/loujr/shroud.git
+git clone https://github.com/lousclues-labs/shroud.git
 cd shroud
 
 # Build

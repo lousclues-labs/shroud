@@ -4,7 +4,7 @@
  "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
 <policyconfig>
   <vendor>Shroud VPN Manager</vendor>
-  <vendor_url>https://github.com/loujr/shroud</vendor_url>
+  <vendor_url>https://github.com/lousclues-labs/shroud</vendor_url>
 
   <!--
     Shroud Kill Switch Privilege Policy

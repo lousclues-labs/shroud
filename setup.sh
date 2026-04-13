@@ -35,7 +35,7 @@
 #   ./setup.sh uninstall        # Uninstall
 #   ./setup.sh --force update   # Update without prompts
 #
-# For more information: https://github.com/loujr/shroud
+# For more information: https://github.com/lousclues-labs/shroud
 
 set -euo pipefail
 
@@ -625,7 +625,7 @@ create_default_config() {
     
     cat > "$config_file" << 'EOF'
 # VPN Shroud Configuration
-# https://github.com/loujr/shroud
+# https://github.com/lousclues-labs/shroud
 
 # Config file version (do not modify)
 version = 1
@@ -1528,7 +1528,7 @@ Examples:
   ./setup.sh --dry-run install  # See what would be installed
   ./setup.sh --force uninstall  # Uninstall without prompts
 
-For more information: https://github.com/loujr/shroud
+For more information: https://github.com/lousclues-labs/shroud
 EOF
 }
 

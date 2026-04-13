@@ -67,7 +67,7 @@ Want to help?
 - **Main README**: [../README.md](../README.md)
 - **Changelog**: [../CHANGELOG.md](../CHANGELOG.md)
 - **License**: [../LICENSE](../LICENSE)
-- **GitHub**: [github.com/loujr/shroud](https://github.com/loujr/shroud)
+- **GitHub**: [github.com/lousclues-labs/shroud](https://github.com/lousclues-labs/shroud)
 
 ---
 
@@ -75,4 +75,4 @@ Want to help?
 
 Documentation should help you accomplish something, not impress you with its completeness.
 
-If you're looking for something and can't find it, that's a bug. [Open an issue](https://github.com/loujr/shroud/issues).
+If you're looking for something and can't find it, that's a bug. [Open an issue](https://github.com/lousclues-labs/shroud/issues).

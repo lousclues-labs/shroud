@@ -1,12 +1,12 @@
 [package]
 name = "vpn-shroud"
-version = "2.0.4"
+version = "2.0.5"
 edition = "2021"
 authors = ["Louis Nelson Jr. (loujr) <https://lousclues.com>"]
 description = "A provider-agnostic VPN connection manager for Linux with kill switch, auto-reconnect, and system tray integration"
 readme = "README.md"
 license = "GPL-3.0-or-later"
-repository = "https://github.com/loujr/shroud"
+repository = "https://github.com/lousclues-labs/shroud"
 homepage = "https://vpnshroud.org"
 documentation = "https://vpnshroud.org/docs"
 keywords = ["vpn", "openvpn", "networkmanager", "linux", "tray"]

@@ -19,7 +19,7 @@ post_install() {
     echo ":: Autostart on login:"
     echo "::   shroud autostart on"
     echo "::"
-    echo ":: Documentation: https://github.com/loujr/shroud/tree/main/docs"
+    echo ":: Documentation: https://github.com/lousclues-labs/shroud/tree/main/docs"
 }
 
 post_upgrade() {

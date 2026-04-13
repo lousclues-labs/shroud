@@ -2,7 +2,7 @@
 
 No GUI? No problem.
 
-Headless mode runs VPN Shroud as a system service on servers, containers, or any system without a desktop. Same protection, no tray icon required.
+Headless mode runs Shroud as a system service on servers, containers, or any system without a desktop. Same protection, no tray icon required.
 
 ---
 
@@ -38,7 +38,7 @@ Headless mode runs VPN Shroud as a system service on servers, containers, or any
 ### 1. Install
 
 ```bash
-git clone https://github.com/loujr/shroud
+git clone https://github.com/lousclues-labs/shroud
 cd shroud
 cargo build --release
 
@@ -93,14 +93,14 @@ You're done. The server is protected.
 
 ## How It Works
 
-When VPN Shroud starts in headless mode, here's what happens:
+When Shroud starts in headless mode, here's what happens:
 
 1. **Boot kill switch activates** -- all traffic blocked except loopback and LAN
 2. **VPN connects** -- using the connection named in `startup_server`
 3. **Kill switch transfers** -- boot rules replaced with normal kill switch rules
 4. **Monitoring begins** -- health checks, auto-reconnect, the usual
 
-If the VPN drops, VPN Shroud reconnects. If VPN Shroud crashes, systemd restarts it. If the server reboots, everything comes back up automatically.
+If the VPN drops, Shroud reconnects. If Shroud crashes, systemd restarts it. If the server reboots, everything comes back up automatically.
 
 The goal: you configure it once and forget about it.
 
@@ -112,7 +112,7 @@ All headless options live in the `[headless]` section of your config:
 
 ```toml
 [headless]
-# Connect to VPN when VPN Shroud starts
+# Connect to VPN when Shroud starts
 auto_connect = true
 
 # Which VPN to connect to
@@ -124,7 +124,7 @@ kill_switch_on_boot = true
 # Fail to start if kill switch can't be enabled
 require_kill_switch = true
 
-# Keep kill switch active even after VPN Shroud exits
+# Keep kill switch active even after Shroud exits
 persist_kill_switch = false
 
 # Never stop trying to reconnect (0 = infinite)
@@ -229,7 +229,7 @@ nmcli connection show | grep vpn
 # Test the connection directly
 nmcli connection up "your-vpn-name"
 
-# Check VPN Shroud logs
+# Check Shroud logs
 journalctl -u shroud -f
 ```
 
@@ -256,7 +256,7 @@ sudo iptables -X SHROUD_BOOT_KS
 
 - **Runs as root** -- required for iptables. This is intentional.
 - **Boot kill switch** -- blocks ALL traffic until VPN connects. This includes SSH unless you're on the LAN.
-- **persist_kill_switch** -- if set to `true`, traffic stays blocked even after VPN Shroud exits. Use carefully.
+- **persist_kill_switch** -- if set to `true`, traffic stays blocked even after Shroud exits. Use carefully.
 - **Config permissions** -- should be 600 (owner read/write only).
 
 ---
