@@ -144,6 +144,41 @@ For Shroud specifically:
 
 ---
 
+## Multi-distro packaging (.deb / .rpm)
+
+Shroud ships `.deb` and `.rpm` artifacts for the noble, jammy, bookworm,
+el9, and fedora distros via the `lousclues-labs/lousclues-pkg` release
+pipeline. That pipeline is the consumer; this repository is the
+**producer**, and the producer–consumer contract is defined entirely by
+[`pkg/build.sh`](../pkg/build.sh).
+
+The contract is:
+
+- Inputs: `DISTRO`, `VERSION`, `OUTDIR` environment variables.
+- Output: exactly one `.deb` or `.rpm` in `$OUTDIR`.
+- Side output: a `ARTIFACT=… SHA256=… SIZE=…` line on stdout.
+- Exit codes: `0` success, `1` build failure, `2` invalid input.
+
+Every change that could affect packaging is validated end-to-end by the
+`pkg-build` workflow at
+[`.github/workflows/pkg-build.yml`](../.github/workflows/pkg-build.yml).
+The workflow runs the script in real per-distro containers, installs
+the produced artifact, and verifies the installed layout. The full
+design — phases, performance knobs, CI structure, asset layout, local
+validation recipes, and a porting checklist for new repos — is
+documented in [`pkg/README.md`](../pkg/README.md).
+
+When cutting a release:
+
+1. Bump `Cargo.toml` `version` as described above. `pkg/build.sh`'s
+   phase 0 will refuse to build if `VERSION` drifts from `Cargo.toml`.
+2. Push the tag. `lousclues-pkg` is what produces the published
+   artifacts — this repo does not upload `.deb`/`.rpm` itself.
+3. If `pkg-build` is red on `main`, do not tag. The producer contract
+   must be green for the consumer pipeline to succeed.
+
+---
+
 ## The Philosophy
 
 Ship often. Ship small. Ship working code.

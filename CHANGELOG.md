@@ -14,16 +14,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-05-16
+
 ### Added
 
-- **Source-project contract for lousclues-pkg.** Added `pkg/build.sh`
-  so the lousclues-pkg release-build workflow can build `.deb` and
-  `.rpm` artifacts for this project across the noble, jammy,
-  bookworm, el9, and fedora distros. The script is currently a
-  fail-loud scaffold; the operator must fill in the per-distro
-  cargo and fpm calls before the first release. See
-  `lousclues-labs/lousclues-pkg` for the release pipeline that
-  consumes this contract.
+- **`pkg/build.sh` — full source-project packaging contract for `lousclues-pkg`.**
+  Replaced the fail-loud scaffold introduced in the previous cycle with an
+  end-to-end cargo + fpm pipeline. The script takes `DISTRO`, `VERSION`, and
+  `OUTDIR` from the environment, validates them, optionally installs system
+  dependencies and the Rust + fpm toolchain, builds the release binary,
+  stages every shipped asset (binary, systemd unit, sudoers file, polkit
+  policy, desktop entry, docs), emits exactly one `.deb` or `.rpm` into
+  `$OUTDIR`, and prints a machine-readable `ARTIFACT=… SHA256=… SIZE=…`
+  line for the wrapping workflow to grep. Eight numbered phases, ~370 lines,
+  shellcheck-clean. Exit codes are `0` success / `1` build failure /
+  `2` invalid input. Skip knobs (`SHROUD_SKIP_DEPS`, `SHROUD_SKIP_TOOLCHAIN`,
+  `SHROUD_CARGO_TARGET_DIR`) let warm runners or local re-runs reuse work.
+- **`.github/workflows/pkg-build.yml` — three-layer CI validation of the
+  packaging contract.** New workflow with four jobs:
+  - `lint` runs `shellcheck -x` and `bash -n` on `pkg/build.sh`.
+  - `input-tests` runs seven negative input cases (missing
+    `DISTRO`/`VERSION`/`OUTDIR`, unknown distro, leading `v` on version,
+    relative `OUTDIR`, version drift vs `Cargo.toml`) and asserts the
+    script rejects each with the correct exit code.
+  - `build` is a five-leg matrix (`ubuntu:24.04`, `ubuntu:22.04`,
+    `debian:12`, `rockylinux:9`, `fedora:latest`) that runs `pkg/build.sh`
+    end-to-end, asserts exactly one artifact lands in `$OUTDIR`,
+    inspects the package contents with `dpkg-deb`/`rpm`, performs a
+    smoke install, and verifies the installed layout (binary executable,
+    sudoers mode 0440, systemd unit in the per-family path with the
+    `/usr/local/bin` path rewritten, docs present, polkit policy present,
+    `shroud --help` exits 0). Artifacts are uploaded via
+    `actions/upload-artifact@v4` for 14-day retention.
+  - `pkg-success` is an aggregate gate suitable for branch protection.
+  Triggers are scoped to packaging-relevant paths only (`pkg/**`,
+  `Cargo.toml`, `Cargo.lock`, `assets/**`, `autostart/**`, the workflow
+  itself) so unrelated `src/**` changes don't burn container minutes.
+  `fail-fast: false` so all five legs always finish — partial signal is
+  better than first-failure abort.
+- **`pkg/README.md` — template-quality documentation of the packaging
+  contract.** Captures the contract surface, the eight phases, every
+  performance optimization knob with rationale, the three-layer CI
+  design, the asset layout produced inside the package, local-validation
+  recipes (including a `podman run` one-liner for end-to-end builds
+  without docker), an iterative bug log of the three real container
+  failures the first CI runs caught, and a porting checklist for adapting
+  the pattern to other `lousclues-labs` repositories.
+- **Performance optimizations baked into the packaging pipeline.**
+  `apt-get` uses `--no-install-recommends -o Acquire::Languages=none`;
+  `dnf` uses `--setopt=install_weak_deps=False --setopt=tsflags=nodocs`;
+  `rustup` uses `--profile minimal --no-modify-path`; `gem install fpm`
+  uses `--no-document`; `cargo build` runs with `CARGO_NET_RETRY=10`
+  and `CARGO_INCREMENTAL=0`. Toolchain and dep installs are skipped
+  when already present, allowing warm-runner reuse. Optional
+  `SHROUD_CARGO_TARGET_DIR` enables persistent cargo cache mounts.
+  `SOURCE_DATE_EPOCH` is auto-derived from `git log -1 --pretty=%ct` for
+  reproducible timestamps when invoked from a git checkout.
+
+### Fixed
+
+- **pkg-build CI: dash-vs-bash on `container:` jobs.** GitHub Actions
+  defaults to `/bin/sh` (dash) inside `container:` jobs, causing
+  `[[ ... ]]` conditionals in `run:` blocks to fail with `[[: not found`
+  across every distro on the first run. Resolved by setting
+  `defaults.run.shell: bash` on the `build` job. The two bootstrap
+  steps that install bash itself remain on `shell: sh` to stay
+  POSIX-compatible.
+- **pkg-build CI: `curl-minimal` conflicts with `curl` on Rocky 9.**
+  Rocky 9 base ships `curl-minimal`; installing `curl` fails with a
+  package-conflict error. Resolved by passing `--allowerasing` to `dnf`
+  in both the workflow bootstrap step and `install_rpm_deps` inside the
+  script.
+- **pkg-build CI: fpm `LoadError: cannot load such file -- json`
+  on Fedora / RHEL 9.** fpm 1.17.0's `package/python.rb` is `require`d
+  at load time and itself `require`s `json`; RHEL-family `rubygems`
+  does not pull `json` as a default. Resolved by adding `rubygem-json`
+  to `install_rpm_deps`.
+- **pkg-build CI: docs stripped at install time on slim Ubuntu/Debian
+  images.** The official `ubuntu:*` and `debian:*` slim base images
+  ship `/etc/dpkg/dpkg.cfg.d/excludes`, which strips `/usr/share/doc/*`
+  during `dpkg -i`, causing the layout-verify step to spuriously fail
+  on `missing: README under /usr/share/doc/shroud`. Resolved by
+  removing the exclude file before `dpkg -i` in the smoke step only.
+  Real end-user systems do not ship this exclude, so the produced
+  `.deb` itself is correct — the workaround is CI-only.
 
 ## [2.0.6] - 2026-05-10
 
