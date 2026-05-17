@@ -277,6 +277,22 @@ See [Troubleshooting](docs/TROUBLESHOOTING.md) for more.
 
 ---
 
+## Installation
+
+### From lousclues packages
+
+Once the first release is published, this project will be installable
+via the lousclues package repository. See the install instructions at
+<https://pkg.lousclues.com/install/>.
+
+```bash
+# Ubuntu/Debian:
+sudo apt install shroud
+
+# RHEL/Fedora:
+sudo dnf install shroud
+```
+
 ## Contributing
 
 Contributions are welcome. But first, read the [Principles](docs/PRINCIPLES.md). Every contribution should align with them.
