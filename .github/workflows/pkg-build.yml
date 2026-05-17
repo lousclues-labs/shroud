@@ -216,6 +216,16 @@ jobs:
       - name: Install artifact in container (smoke)
         run: |
           if [[ "${{ matrix.ext }}" == "deb" ]]; then
+              # Ubuntu/Debian slim base images ship
+              # /etc/dpkg/dpkg.cfg.d/excludes which strips /usr/share/doc/*
+              # (and /usr/share/man/*, locales, etc.) to keep image size
+              # down. That exclude applies at dpkg install time, so docs
+              # we deliberately package would be silently dropped here
+              # and the layout-verify step below would fail spuriously.
+              # Real end-user systems don't ship this exclude, so the
+              # package itself is correct — we just neutralise the
+              # exclude for the CI smoke install.
+              rm -f /etc/dpkg/dpkg.cfg.d/excludes
               # --force-depends because runtime deps like network-manager
               # aren't required to be present in the build container —
               # we only want to validate the package layout installs.
