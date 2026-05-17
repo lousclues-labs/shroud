@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **Source-project contract for lousclues-pkg.** Added `pkg/build.sh`
+  so the lousclues-pkg release-build workflow can build `.deb` and
+  `.rpm` artifacts for this project across the noble, jammy,
+  bookworm, el9, and fedora distros. The script is currently a
+  fail-loud scaffold; the operator must fill in the per-distro
+  cargo and fpm calls before the first release. See
+  `lousclues-labs/lousclues-pkg` for the release pipeline that
+  consumes this contract.
+
 ## [2.0.6] - 2026-05-10
 
 ### Security
