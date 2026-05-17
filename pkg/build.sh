@@ -226,6 +226,11 @@ ensure_toolchain() {
     fi
     if ! command -v fpm >/dev/null 2>&1; then
         run gem install --no-document fpm --version "$FPM_VERSION"
+        # fpm 1.16.0 requires ostruct, which Fedora's Ruby 3.4+ no longer
+        # ships as a default gem (slated for removal in Ruby 4.0). Install
+        # it via gem so the same line works on every distro: where ostruct
+        # is already bundled (Ubuntu, Debian, EL9), this is a no-op.
+        run gem install --no-document ostruct
         # Default rubygems bin dir varies. Surface it for fpm calls.
         local gem_bin
         gem_bin=$(gem environment gemdir)/bin
