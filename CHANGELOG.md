@@ -14,6 +14,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-05-17
+
+### Changed
+
+- **pkg-build: bring Shroud's source-project packaging contract up to the
+  current vigil standard.** `lousclues-labs/vigil/pkg/build.sh` is now the
+  design reference for reproducibility, staged-tree validation, sidecar
+  manifests, logging, and the CI gate. Shroud keeps its own architecture:
+  sudoers plus polkit remain the privilege model, so the postinst validates
+  `/etc/sudoers.d/shroud` and runs `systemctl daemon-reload` without adding
+  file capabilities. The package still ships no man pages or shell
+  completions because Shroud is the tray app with a thin CLI surface, not a
+  document-heavy command suite. RPM metadata keeps Shroud's
+  `GPL-3.0-or-later` license tag instead of vigil's `GPL-3.0-only`.
+  Packaging now exports a hermetic build environment (`LC_ALL=C`, `TZ=UTC`,
+  fixed cargo color, compile-time symbol stripping), pins every staged mtime
+  to `SOURCE_DATE_EPOCH`, compresses `changelog.gz` with `gzip -9n`, uses
+  `strip-nondeterminism` for deb artifacts, passes rpmbuild reproducibility
+  macros for rpm artifacts, builds through `cargo fetch --locked` followed
+  by `cargo build --frozen --offline`, validates the staged tree before fpm,
+  emits `${artifact}.manifest.json`, and prints `MANIFEST=...` on the
+  machine-readable summary line. The `pkg-build` workflow now rebuilds each
+  matrix leg twice with the same epoch, requires byte-identical artifacts,
+  validates manifest sha/version/commit fields, checks the Debian copyright
+  file, keeps the sudoers mode assertion, and uploads manifests with the
+  package artifacts.
+
 ## [2.1.0] - 2026-05-16
 
 ### Added

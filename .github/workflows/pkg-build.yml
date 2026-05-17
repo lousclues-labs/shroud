@@ -1,13 +1,13 @@
 name: pkg-build
 
-# Validates pkg/build.sh — the source-project contract that lousclues-pkg
+# Validates pkg/build.sh - the source-project contract that lousclues-pkg
 # invokes inside per-distro containers to produce .deb / .rpm artifacts.
 #
 # Three layers, fastest first:
-#   1. lint         — shellcheck + bash -n. Always runs.
-#   2. input-tests  — negative tests for the script's input handling.
+#   1. lint         - shellcheck + bash -n. Always runs.
+#   2. input-tests  - negative tests for the script's input handling.
 #                     Always runs. ~10s.
-#   3. build        — real container build per supported distro, gated on
+#   3. build        - real container build per supported distro, gated on
 #                     paths that actually affect packaging.
 
 on:
@@ -39,7 +39,7 @@ permissions:
 
 jobs:
   # ===========================================================================
-  # Layer 1 — Lint
+  # Layer 1 - Lint
   # ===========================================================================
   lint:
     name: Lint pkg/build.sh
@@ -55,7 +55,7 @@ jobs:
         run: bash -n pkg/build.sh
 
   # ===========================================================================
-  # Layer 2 — Input validation tests (cheap, always runs)
+  # Layer 2 - Input validation tests (cheap, always runs)
   # ===========================================================================
   input-tests:
     name: Input validation tests
@@ -66,7 +66,7 @@ jobs:
       - name: Resolve real Cargo.toml version
         id: ver
         run: |
-          ACTUAL=$(awk -F\" '/^version *=/ { print $2; exit }' Cargo.toml)
+          ACTUAL=$(awk -F\" '/^version[[:space:]]*=/ { print $2; exit }' Cargo.toml)
           echo "actual=$ACTUAL" >> "$GITHUB_OUTPUT"
       - name: Run negative tests
         env:
@@ -106,7 +106,7 @@ jobs:
           [[ "$FAIL" -eq 0 ]]
 
   # ===========================================================================
-  # Layer 3 — Real container build per supported distro
+  # Layer 3 - Real container build per supported distro
   # ===========================================================================
   build:
     name: Build (${{ matrix.distro }})
@@ -168,8 +168,10 @@ jobs:
       - name: Resolve version from Cargo.toml
         id: ver
         run: |
-          VER=$(awk -F\" '/^version *=/ { print $2; exit }' Cargo.toml)
+          VER=$(awk -F\" '/^version[[:space:]]*=/ { print $2; exit }' Cargo.toml)
           echo "version=$VER" >> "$GITHUB_OUTPUT"
+          EPOCH=$(git log -1 --pretty=%ct 2>/dev/null || echo 1700000000)
+          echo "epoch=$EPOCH" >> "$GITHUB_OUTPUT"
           echo "Building shroud $VER for ${{ matrix.distro }}"
 
       - name: Run pkg/build.sh
@@ -177,10 +179,43 @@ jobs:
           DISTRO: ${{ matrix.distro }}
           VERSION: ${{ steps.ver.outputs.version }}
           OUTDIR: ${{ github.workspace }}/out
+          SOURCE_DATE_EPOCH: ${{ steps.ver.outputs.epoch }}
           # Honour the script's documented opt-out for callers that
-          # already prepared the toolchain — we still let the script
+          # already prepared the toolchain. We still let the script
           # install rustup + fpm so the contract is exercised end-to-end.
         run: bash pkg/build.sh
+
+      - name: Reproducibility check
+        env:
+          DISTRO: ${{ matrix.distro }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          OUTDIR: ${{ github.workspace }}/out2
+          SOURCE_DATE_EPOCH: ${{ steps.ver.outputs.epoch }}
+        run: |
+          bash pkg/build.sh
+
+          FIRST=$(find out -maxdepth 1 -type f -name "*.${{ matrix.ext }}")
+          SECOND=$(find out2 -maxdepth 1 -type f -name "*.${{ matrix.ext }}")
+          sha256sum "$FIRST" "$SECOND"
+
+          FIRST_SHA=$(sha256sum "$FIRST" | awk '{print $1}')
+          SECOND_SHA=$(sha256sum "$SECOND" | awk '{print $1}')
+          if [[ "$FIRST_SHA" != "$SECOND_SHA" ]]; then
+              mkdir -p repro-failure
+              cp "$FIRST" "repro-failure/first-$(basename "$FIRST")"
+              cp "$SECOND" "repro-failure/second-$(basename "$SECOND")"
+              echo "build is not reproducible"
+              exit 1
+          fi
+
+      - name: Upload reproducibility failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shroud-${{ matrix.distro }}-repro-failure
+          path: repro-failure/*
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Verify exactly one artifact
         run: |
@@ -192,6 +227,43 @@ jobs:
           fi
           ARTIFACT=$(find out -maxdepth 1 -type f -name "*.${{ matrix.ext }}")
           echo "ARTIFACT=$ARTIFACT" >> "$GITHUB_ENV"
+
+          MANIFEST_COUNT=$(find out -maxdepth 1 -type f -name "*.${{ matrix.ext }}.manifest.json" | wc -l)
+          if [[ "$MANIFEST_COUNT" -ne 1 ]]; then
+              echo "ERROR: expected exactly 1 manifest sidecar, found $MANIFEST_COUNT"
+              ls -la out
+              exit 1
+          fi
+          MANIFEST="${ARTIFACT}.manifest.json"
+          test -f "$MANIFEST" || { echo "missing: $MANIFEST"; exit 1; }
+          echo "MANIFEST=$MANIFEST" >> "$GITHUB_ENV"
+
+          ARTIFACT_SHA=$(sha256sum "$ARTIFACT" | awk '{print $1}')
+          MANIFEST_SHA=$(sed -n 's/^  "sha256": "\([0-9a-f]\{64\}\)",$/\1/p' "$MANIFEST")
+          if [[ -z "$MANIFEST_SHA" ]]; then
+              echo "manifest sha256 is missing or malformed"
+              cat "$MANIFEST"
+              exit 1
+          fi
+          if [[ "$ARTIFACT_SHA" != "$MANIFEST_SHA" ]]; then
+              echo "manifest sha256 mismatch"
+              echo "artifact: $ARTIFACT_SHA"
+              echo "manifest: $MANIFEST_SHA"
+              exit 1
+          fi
+
+          MANIFEST_COMMIT=$(sed -n 's/^  "git_commit": "\([0-9a-f]\{40\}\)"$/\1/p' "$MANIFEST")
+          if [[ -z "$MANIFEST_COMMIT" ]]; then
+              echo "manifest git_commit is missing or malformed"
+              cat "$MANIFEST"
+              exit 1
+          fi
+
+          MANIFEST_VERSION=$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' "$MANIFEST")
+          if [[ "$MANIFEST_VERSION" != "${{ steps.ver.outputs.version }}" ]]; then
+              echo "manifest version mismatch: $MANIFEST_VERSION vs ${{ steps.ver.outputs.version }}"
+              exit 1
+          fi
 
       - name: Inspect .deb contents
         if: matrix.ext == 'deb'
@@ -223,15 +295,17 @@ jobs:
               # we deliberately package would be silently dropped here
               # and the layout-verify step below would fail spuriously.
               # Real end-user systems don't ship this exclude, so the
-              # package itself is correct — we just neutralise the
+              # package itself is correct. We just neutralise the
               # exclude for the CI smoke install.
               rm -f /etc/dpkg/dpkg.cfg.d/excludes
               # --force-depends because runtime deps like network-manager
-              # aren't required to be present in the build container —
+              # aren't required to be present in the build container.
               # we only want to validate the package layout installs.
               dpkg -i --force-depends "$ARTIFACT"
+              test $? -eq 0
           else
               rpm -i --nodeps "$ARTIFACT"
+              test $? -eq 0
           fi
 
       - name: Verify installed layout
@@ -243,6 +317,11 @@ jobs:
           test -f /usr/share/polkit-1/actions/com.shroud.killswitch.policy \
               || { echo "missing: polkit policy"; exit 1; }
           test -f /usr/share/doc/shroud/README.md                       || { echo "missing: README under /usr/share/doc/shroud"; exit 1; }
+          if [[ "${{ matrix.ext }}" == "deb" ]]; then
+              test -f /usr/share/doc/shroud/copyright                   || { echo "missing: Debian copyright file"; exit 1; }
+          else
+              test -f /usr/share/doc/shroud/LICENSE                     || { echo "missing: RPM LICENSE file"; exit 1; }
+          fi
           # Systemd unit lives in distro-appropriate path
           if [[ -f /lib/systemd/system/shroud.service ]]; then
               UNIT=/lib/systemd/system/shroud.service
@@ -271,7 +350,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: shroud-${{ matrix.distro }}-${{ matrix.ext }}
-          path: out/*.${{ matrix.ext }}
+          path: |
+            out/*.${{ matrix.ext }}
+            out/*.${{ matrix.ext }}.manifest.json
           if-no-files-found: error
           retention-days: 14
 
