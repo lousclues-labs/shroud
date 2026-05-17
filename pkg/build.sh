@@ -33,17 +33,25 @@
 #   SHROUD_KEEP_STAGE=1      preserve the staged tree for failure debugging
 #   SHROUD_MANIFEST_COMMIT   override manifest git_commit for attestation
 #   CARGO_BUILD_JOBS=N       passed through to cargo. Default: auto
+#   FPM_VERSION              pinned fpm gem version installed by ensure_toolchain
 #
 # Reference: lousclues-labs/lousclues-pkg/docs/operator-runbook-releases.md
 
 set -euo pipefail
 
-# 1. Required env. Contract pinned by .github/workflows/pkg-build.yml.
+# Pinned fpm version. Bumping requires verifying the deb/rpm output still
+# matches the reproducibility check. fpm has shipped breaking changes
+# inside minor releases before.
+FPM_VERSION='1.16.0'
+
+# ─── 1. Required env ───
+# Contract pinned by .github/workflows/pkg-build.yml.
 : "${DISTRO:?DISTRO must be set (one of: noble, jammy, bookworm, el9, fedora)}"
 : "${VERSION:?VERSION must be set (semver, no leading v)}"
 : "${OUTDIR:?OUTDIR must be set (absolute path; one .deb or .rpm emitted here)}"
 
-# 2. Input validation. Exit code 2 means invalid value.
+# ─── 2. Input validation ───
+# Exit code 2 means invalid value.
 case "$DISTRO" in
     noble|jammy|bookworm|el9|fedora) ;;
     *)
@@ -96,7 +104,8 @@ fi
 
 mkdir -p "$OUTDIR"
 
-# 3. Global environment. Hermetic, reproducible, quiet.
+# ─── 3. Global environment ───
+# Hermetic, reproducible, quiet.
 umask 022
 export LC_ALL=C
 export TZ=UTC
@@ -125,10 +134,27 @@ fi
 STAGE="$(mktemp -d -t shroud-stage.XXXXXX)"
 trap '[ "${SHROUD_KEEP_STAGE:-0}" = "1" ] || rm -rf "$STAGE"' EXIT INT TERM
 
-# 4. Helpers.
+# ─── 4. Helpers ───
 log()    { printf '[pkg/build.sh] %s\n' "$*" >&2; }
-section(){ printf '\n[pkg/build.sh] -- %s --\n' "$*" >&2; }
+section(){ printf '\n[pkg/build.sh] ── %s ──\n' "$*" >&2; }
 run()    { log "+ $*"; "$@"; }
+
+# retry <attempts> <initial_sleep_seconds> -- <command...>
+# Exponential backoff. Used only for commands that touch the network.
+retry() {
+    local attempts="$1" sleep_s="$2"; shift 2
+    [ "$1" = "--" ] && shift
+    local i=1 rc=0
+    while [ "$i" -le "$attempts" ]; do
+        if "$@"; then return 0; fi
+        rc=$?
+        log "retry: attempt $i/$attempts failed (rc=$rc); sleeping ${sleep_s}s"
+        sleep "$sleep_s"
+        i=$((i + 1))
+        sleep_s=$((sleep_s * 2))
+    done
+    return "$rc"
+}
 
 # install_to <mode> <src> <dst-under-STAGE>
 install_to() {
@@ -144,12 +170,12 @@ log "repo: $REPO_DIR"
 log "epoch: $SOURCE_DATE_EPOCH"
 log "cargo target: $CARGO_TARGET_DIR"
 
-# 5. System build dependencies.
+# ─── 5. System build dependencies ───
 install_deb_deps() {
     [ "${SHROUD_SKIP_DEPS:-0}" = "1" ] && { log "SHROUD_SKIP_DEPS=1. Skipping apt-get install."; return 0; }
     section "install_deb_deps"
     export DEBIAN_FRONTEND=noninteractive
-    run apt-get update -qq -o Acquire::Languages=none
+    retry 3 5 -- apt-get update -qq
     # strip-nondeterminism post-processes .deb to scrub embedded
     # timestamps that fpm does not honour SOURCE_DATE_EPOCH for
     # (ar entry mtimes, gzip headers, tar entry mtimes/ordering).
@@ -181,19 +207,17 @@ install_rpm_deps() {
     # --allowerasing handles curl-minimal to curl on EL9 and Fedora.
     # rubygem-json is required because fpm loads package/python.rb and
     # that file requires json at load time on RHEL-family rubygems.
-    run dnf install -y -q --allowerasing \
-        --setopt=install_weak_deps=False \
-        --setopt=tsflags=nodocs \
+    retry 3 5 -- dnf install -y --allowerasing --setopt=install_weak_deps=False \
         ca-certificates curl gcc gcc-c++ pkgconf-pkg-config dbus-devel \
         ruby ruby-devel rubygems rubygem-json rpm-build
 }
 
-# 6. Rust toolchain + fpm.
+# ─── 6. Rust toolchain + fpm ───
 ensure_toolchain() {
     [ "${SHROUD_SKIP_TOOLCHAIN:-0}" = "1" ] && { log "SHROUD_SKIP_TOOLCHAIN=1. Assuming cargo and fpm on PATH."; return 0; }
     section "ensure_toolchain"
     if ! command -v cargo >/dev/null 2>&1; then
-        run curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+        retry 3 10 -- curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
             -o /tmp/rustup-init.sh
         run sh /tmp/rustup-init.sh -y --default-toolchain stable --profile minimal --no-modify-path
         # shellcheck source=/dev/null
@@ -201,7 +225,7 @@ ensure_toolchain() {
         export PATH="$HOME/.cargo/bin:$PATH"
     fi
     if ! command -v fpm >/dev/null 2>&1; then
-        run gem install --no-document fpm
+        run gem install --no-document fpm --version "$FPM_VERSION"
         # Default rubygems bin dir varies. Surface it for fpm calls.
         local gem_bin
         gem_bin=$(gem environment gemdir)/bin
@@ -211,7 +235,7 @@ ensure_toolchain() {
     run fpm --version
 }
 
-# 7. Build the binary.
+# ─── 7. Build the binary ───
 build_binary() {
     section "build_binary"
     # Two-step pattern to keep the compile step provably offline while
@@ -232,7 +256,7 @@ build_binary() {
         --manifest-path "$REPO_DIR/Cargo.toml"
 }
 
-# 8. Stage the on-disk layout.
+# ─── 8. Stage the on-disk layout ───
 # Arg 1: unit_dir (deb: /lib/systemd/system, rpm: /usr/lib/systemd/system)
 stage_assets() {
     section "stage_assets unit_dir=$1"
@@ -294,7 +318,8 @@ stage_assets() {
     find "$STAGE" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
 }
 
-# 9. Debian copyright file. Machine-readable format 1.0.
+# ─── 9. Debian copyright file ───
+# Machine-readable format 1.0.
 emit_debian_copyright() {
     cat <<EOF
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
@@ -320,7 +345,7 @@ License: GPL-3.0-or-later
 EOF
 }
 
-# 10. postinst scriptlet.
+# ─── 10. postinst scriptlet ───
 # Shroud has two post-install responsibilities:
 #   1. validate the sudoers rule before sudo refuses to load it.
 #   2. daemon-reload so systemd picks up unit changes, then refresh the
@@ -365,7 +390,7 @@ exit 0
 EOF
 }
 
-# 11. fpm invocations.
+# ─── 11. fpm invocations ───
 PKG_MAINTAINER='lousclues <pkg@lousclues.com>'
 PKG_VENDOR='lousclues-labs'
 PKG_URL='https://github.com/lousclues-labs/shroud'
@@ -459,7 +484,7 @@ fpm_rpm() {
     echo "$out"
 }
 
-# 12. Self-validation + manifest.
+# ─── 12. Self-validation + manifest ───
 # The workflow runs an exhaustive layout check on the installed package.
 # This self-check runs against the staged tree before fpm packs it, so
 # failures surface inside this script with stage paths preserved when
@@ -467,12 +492,10 @@ fpm_rpm() {
 validate_stage() {
     section "validate_stage"
     local unit_dir="$1"
-    local missing=0
     local failures=0
     check() {
         if [ ! -e "$STAGE/$1" ]; then
             echo "stage MISSING: /$1" >&2
-            missing=$((missing + 1))
             failures=$((failures + 1))
         fi
     }
@@ -502,7 +525,6 @@ validate_stage() {
     fi
 
     if [ "$failures" -gt 0 ]; then
-        echo "ERROR: $missing missing file(s) in staged tree" >&2
         echo "ERROR: $failures staged tree validation failure(s)" >&2
         exit 1
     fi
@@ -630,32 +652,38 @@ print_summary() {
     echo "ARTIFACT=$artifact SHA256=$sha SIZE=$size MANIFEST=${artifact}.manifest.json"
 }
 
-# 13. Per-distro dispatch.
+# ─── 13. Per-distro dispatch ───
+# Arms do distro-specific work only (deps + stage + fpm builder choice).
+# The post-fpm pipeline (reproducibility post-process, artifact validation,
+# manifest emit, summary line) runs once, below the case statement.
 case "$DISTRO" in
     noble|jammy|bookworm)
         export FPM_TARGET=deb
         install_deb_deps
         ensure_toolchain
         build_binary
-        stage_assets /lib/systemd/system
+        stage_assets   /lib/systemd/system
         validate_stage /lib/systemd/system
         artifact=$(fpm_deb | tail -n1)
-        make_reproducible "$artifact"
-        validate_artifact "$artifact" deb
-        emit_manifest "$artifact"
-        print_summary "$artifact"
+        ext=deb
         ;;
     el9|fedora)
         export FPM_TARGET=rpm
         install_rpm_deps
         ensure_toolchain
         build_binary
-        stage_assets /usr/lib/systemd/system
+        stage_assets   /usr/lib/systemd/system
         validate_stage /usr/lib/systemd/system
         artifact=$(fpm_rpm | tail -n1)
-        make_reproducible "$artifact"
-        validate_artifact "$artifact" rpm
-        emit_manifest "$artifact"
-        print_summary "$artifact"
+        ext=rpm
         ;;
 esac
+
+if [ ! -f "$artifact" ]; then
+    echo "ERROR: fpm reported success but $artifact is missing" >&2
+    exit 1
+fi
+make_reproducible "$artifact"
+validate_artifact  "$artifact" "$ext"
+emit_manifest      "$artifact"
+print_summary      "$artifact"

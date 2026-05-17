@@ -14,6 +14,62 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.3.0] - 2026-05-17
+
+### Changed
+
+- **pkg-build: harmonize with vigil and land high-leverage automation.** This release brings `pkg/build.sh`, `.github/workflows/pkg-build.yml`, and `pkg/README.md` into convergence with `lousclues-labs/vigil`'s post-harmonization shape. Vigil is now the design reference; eight intentional divergences remain and are catalogued in `pkg/README.md`.
+
+#### Automation (CI and reproducibility)
+
+- **`actions/cache@v4` for cargo registry and target dir.** The build job now mounts two caches before any cargo invocation. The registry cache keys on `Cargo.lock` content; the target-dir cache keys on `Cargo.lock` + `rust-toolchain*` + `Cargo.toml` and is namespaced per matrix `distro`. Cold-cache wall time is unchanged; warm runs amortize the dependency resolve and compile entirely.
+- **Reproducibility pass gated on non-PR events.** Pass 2 (the second full container build that asserts byte-identical artifacts) now runs only on `push`, `workflow_dispatch`, and scheduled events. PRs run pass 1 only, which roughly halves PR wall time on the build matrix. The reproducibility step gained `id: repro` and emits `repro=fail` to `$GITHUB_OUTPUT` on mismatch; the failure-artifact upload narrows its `if:` to `failure() && github.event_name != 'pull_request' && steps.repro.outputs.repro == 'fail'`.
+- **Manifest validation via `jq` instead of sed.** The previous block parsed `*.manifest.json` with sed patterns hardcoded to two-space JSON indentation; any formatter change would silently break validation. Replaced with `jq -r` reads of `.sha256`, `.version`, `.distro`, and `.git_commit`, plus an accumulating `fails=()` block that surfaces every mismatch in one run. `jq` is now installed in both bootstrap variants (deb and rpm).
+- **`retry 3` wrapper on three network commands.** New shell helper in `pkg/build.sh`: `retry <attempts> <initial_sleep_seconds> -- <command...>` with exponential backoff. Applied to `apt-get update` (3 attempts, 5s base) in `install_deb_deps`, `dnf install` (3 attempts, 5s base) in `install_rpm_deps`, and the rustup-init download (3 attempts, 10s base) in `ensure_toolchain`. `cargo fetch` and `gem install` are deliberately not wrapped; their own retry/idempotency handling is sufficient.
+- **`FPM_VERSION='1.16.0'` pinned constant.** fpm has shipped breaking changes inside minor releases before; the version is now declared at the top of `pkg/build.sh` and passed as `gem install --no-document fpm --version "$FPM_VERSION"`. Documented in the header knob block alongside `SHROUD_SKIP_*`. Bumping requires re-running the reproducibility check.
+
+#### Harmonization (shape changes adopted from vigil)
+
+- **Section banner style.** `pkg/build.sh`'s `section()` helper now prints `── %s ──` Unicode separators. Section comments renumbered to vigil's `─── N. Title ───` form (sections 1–13).
+- **Workflow file header.** Replaced the short top comment with the full SPDX + design-notes header from vigil's `pkg-build.yml`, adapted for shroud (one binary, sudoers + polkit privilege model, desktop integration). Documents the three-layer structure and explicitly names the eight shroud-specific adaptations.
+- **Input-tests helper renamed to `check` with `--` separator.** Adopts vigil's `check "label" <expected-exit> -- <command...>` convention and discard-stdout-stderr pattern (`>/dev/null 2>&1`). Added a second unknown-distro case (`gentoo`) alongside the existing `arch` variant. The `nonexistent-parent` case from earlier drafts is deliberately omitted (it was broken in vigil and dropped during harmonization).
+- **Installed-layout step uses an aggregating `FAILS=()` pattern.** Previously the step used `set -e` plus one-shot `test ... || { echo missing; exit 1; }` checks, so the first failure hid every subsequent issue. Rewritten with `fail()`/`ok()` helpers that accumulate; a single run now surfaces every layout problem with grouped sections (Binary, Sudoers, Polkit + desktop, Systemd unit + dev-path regression guard, Docs, Runtime smoke). Final summary prints `installed-layout check found N failure(s):` with each item listed.
+- **Smoke install split into two `if`-gated steps.** Replaces the combined `if [[ "$ext" == "deb" ]]; then ... else ... fi` with one deb step and one rpm step, each gated on `matrix.ext`. Dropped the dead `test $? -eq 0` line; `set -e` is bash's default in `run:` blocks.
+- **Aggregate gate accumulates failures.** `pkg-success` no longer short-circuits on the first non-success dependency. It prints `lint=... input-tests=... build=...`, emits a `::error::` annotation per failed job, and exits non-zero only at the end. Branch protection sees the same green/red signal; operators see every failing job at once.
+- **Workspace-trust step folded into version-resolve.** The standalone `git config --global --add safe.directory` step is gone. The line moved into the first command of the `Resolve version + SOURCE_DATE_EPOCH` step (with `|| true`) since both run in the same container.
+- **Post-fpm pipeline moved out of case arms.** Previously `make_reproducible`, `validate_artifact`, `emit_manifest`, and `print_summary` were duplicated inside both the `noble|jammy|bookworm)` and `el9|fedora)` arms. The arms now do distro-specific work only (install deps, build, stage, choose fpm builder, set `artifact` and `ext`); the post-pipeline runs once below the case. Single source of truth for the reproducibility, validation, manifest, and summary contract.
+- **`validate_stage` simplified.** Dropped the redundant `missing` counter; the function now reports only `failures`. No more confusing `0 missing file(s)` line when only mode checks failed.
+- **`install_rpm_deps` drops `--setopt=tsflags=nodocs`.** Matches vigil's flag set. The flag was premature optimization on a step that runs once per build.
+- **`install_deb_deps` drops `-o Acquire::Languages=none`.** Same rationale.
+
+#### Documentation
+
+- **`pkg/README.md` restructured to vigil's section order.** Seven sections instead of nine, in vigil's order: Contract / Optional knobs / Reproducibility / Manifest sidecar / Local invocation / CI gate / Differences from sibling project. The optional-knobs table now lists `FPM_VERSION`. The reproducibility section lifts prose from the script comments explaining why deb uses `strip-nondeterminism` and rpm uses rpmbuild macros. The manifest section documents the four-level `git_commit` precedence (`SHROUD_MANIFEST_COMMIT` → `SOURCE_SHA` → `git rev-parse HEAD` → `"unknown"` only outside CI).
+- **`pkg/README.md` adds "Differences from sibling project (vigil)".** Eight-item enumerated list of every intentional divergence from vigil's `pkg/build.sh`:
+  1. Sudoers 0440 + visudo in postinst (vigil uses file caps + setcap).
+  2. One binary, not vigil's two.
+  3. No generated man pages or shell completions.
+  4. No package-manager hooks (`hooks/apt/`, `hooks/dnf/`).
+  5. Desktop integration: `.desktop` + polkit + `update-desktop-database` in postinst.
+  6. License tag: `GPL-3.0-or-later` (vigil: `GPL-3.0-only`).
+  7. No `fix-debian-deps.sh` (shroud's deb dep graph does not trigger the libsystemd0 skew).
+  8. Runtime deps are divergent by construction (NM + dbus + iptables for shroud).
+
+  Closes with: *Any divergence outside this list is debt. Fix it or document it here.*
+
+#### Files touched
+
+- `pkg/build.sh` (~660 lines): added `FPM_VERSION`, `retry()`, section-banner Unicode, post-fpm pipeline relocation, `validate_stage` simplification, dnf/apt flag drops.
+- `.github/workflows/pkg-build.yml` (~370 lines): full file rewrite. New header, cargo caches, PR-gated repro pass with `id: repro`, jq manifest validation, aggregating layout-verify, split smoke-install steps, renamed `check` helper with second unknown-distro case, accumulating aggregate gate, folded workspace-trust step.
+- `pkg/README.md`: full restructure to vigil's seven-section order with the new "Differences from sibling project" enumeration.
+- `Cargo.toml` + `Cargo.lock`: version bump `2.2.0 → 2.3.0`.
+
+#### Voice and safety
+
+- Zero em-dashes (U+2014) across all touched files, per `lousclues_website/LOU_VOICE.md`.
+- `bash -n pkg/build.sh` clean.
+- No architectural divergences from vigil were collapsed; the eight documented differences are preserved.
+
 ## [2.2.0] - 2026-05-17
 
 ### Changed

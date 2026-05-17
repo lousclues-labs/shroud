@@ -1,14 +1,28 @@
-name: pkg-build
-
-# Validates pkg/build.sh - the source-project contract that lousclues-pkg
-# invokes inside per-distro containers to produce .deb / .rpm artifacts.
+# SPDX-License-Identifier: GPL-3.0-or-later
 #
-# Three layers, fastest first:
-#   1. lint         - shellcheck + bash -n. Always runs.
-#   2. input-tests  - negative tests for the script's input handling.
-#                     Always runs. ~10s.
-#   3. build        - real container build per supported distro, gated on
-#                     paths that actually affect packaging.
+# pkg-build.yml -- packaging-contract gate for shroud.
+#
+# Validates pkg/build.sh -- the source-project contract that
+# lousclues-pkg invokes at release time to produce signed
+# .deb and .rpm artifacts. Three layers, fastest first:
+#   1. lint         -- shellcheck + bash -n, ~seconds.
+#   2. input-tests  -- pkg/build.sh refusal paths, ~seconds.
+#   3. build        -- per-distro container build + install
+#                       smoke + installed-layout assertions
+#                       + reproducibility check on non-PR (~minutes).
+#
+# Aggregate gate: `pkg-success`. Single required check for
+# branch protection.
+#
+# Pattern adopted from lousclues-labs/vigil's pkg-build.yml.
+# Shroud-specific adaptations:
+#   * One binary (shroud), not vigil's two.
+#   * Sudoers + polkit privilege model, not file caps.
+#   * Desktop file + update-desktop-database in postinst.
+#
+# Out of scope: signing, publishing, AUR, cross-arch.
+
+name: pkg-build
 
 on:
   pull_request:
@@ -38,9 +52,9 @@ permissions:
   contents: read
 
 jobs:
-  # ===========================================================================
-  # Layer 1 - Lint
-  # ===========================================================================
+  # =========================================================================
+  # Layer 1 -- Lint
+  # =========================================================================
   lint:
     name: Lint pkg/build.sh
     runs-on: ubuntu-latest
@@ -54,9 +68,9 @@ jobs:
       - name: bash -n syntax check
         run: bash -n pkg/build.sh
 
-  # ===========================================================================
-  # Layer 2 - Input validation tests (cheap, always runs)
-  # ===========================================================================
+  # =========================================================================
+  # Layer 2 -- Input validation tests
+  # =========================================================================
   input-tests:
     name: Input validation tests
     runs-on: ubuntu-latest
@@ -75,39 +89,38 @@ jobs:
           set -u
           PASS=0
           FAIL=0
-          run_test() {
-              local name="$1" expected="$2"
-              shift 2
-              local out rc
-              out=$("$@" 2>&1) && rc=0 || rc=$?
-              if [[ "$rc" -eq "$expected" ]]; then
-                  echo "  PASS  $name (exit $rc)"
-                  PASS=$((PASS+1))
-              else
-                  echo "  FAIL  $name (got $rc, want $expected)"
-                  echo "------ output ------"
-                  echo "$out"
-                  echo "--------------------"
-                  FAIL=$((FAIL+1))
-              fi
+          check() {
+            local label="$1" expected="$2"; shift 2
+            [ "$1" = "--" ] && shift
+            local actual=0
+            ( "$@" ) >/dev/null 2>&1 || actual=$?
+            if [ "$actual" -eq "$expected" ]; then
+              echo "PASS  $label (exit $actual)"
+              PASS=$((PASS+1))
+            else
+              echo "FAIL  $label (expected $expected, got $actual)"
+              FAIL=$((FAIL+1))
+            fi
           }
 
-          # Each negative case the script must reject before doing work.
-          run_test "missing DISTRO"      1 env -u DISTRO VERSION="$ACTUAL" OUTDIR=/tmp/out bash pkg/build.sh
-          run_test "missing VERSION"     1 env -u VERSION DISTRO=noble OUTDIR=/tmp/out bash pkg/build.sh
-          run_test "missing OUTDIR"      1 env -u OUTDIR DISTRO=noble VERSION="$ACTUAL" bash pkg/build.sh
-          run_test "unknown DISTRO"      2 env DISTRO=arch VERSION="$ACTUAL" OUTDIR=/tmp/out bash pkg/build.sh
-          run_test "leading 'v' in VER"  2 env DISTRO=noble VERSION="v$ACTUAL" OUTDIR=/tmp/out bash pkg/build.sh
-          run_test "relative OUTDIR"     2 env DISTRO=noble VERSION="$ACTUAL" OUTDIR=relative/out bash pkg/build.sh
-          run_test "VERSION mismatch"    2 env DISTRO=noble VERSION=99.99.99  OUTDIR=/tmp/out bash pkg/build.sh
+          OUT=/tmp/out
+
+          check "missing DISTRO"        1 -- env -u DISTRO  VERSION="$ACTUAL"  OUTDIR="$OUT"      bash pkg/build.sh
+          check "missing VERSION"       1 -- env -u VERSION DISTRO=noble       OUTDIR="$OUT"      bash pkg/build.sh
+          check "missing OUTDIR"        1 -- env -u OUTDIR  DISTRO=noble       VERSION="$ACTUAL" bash pkg/build.sh
+          check "unknown DISTRO arch"   2 -- env DISTRO=arch   VERSION="$ACTUAL" OUTDIR="$OUT" bash pkg/build.sh
+          check "unknown DISTRO gentoo" 2 -- env DISTRO=gentoo VERSION="$ACTUAL" OUTDIR="$OUT" bash pkg/build.sh
+          check "leading 'v' in VER"    2 -- env DISTRO=noble VERSION="v$ACTUAL" OUTDIR="$OUT" bash pkg/build.sh
+          check "relative OUTDIR"       2 -- env DISTRO=noble VERSION="$ACTUAL" OUTDIR=relative/out bash pkg/build.sh
+          check "VERSION mismatch"      2 -- env DISTRO=noble VERSION=99.99.99  OUTDIR="$OUT" bash pkg/build.sh
 
           echo
           echo "RESULT: $PASS passed, $FAIL failed"
-          [[ "$FAIL" -eq 0 ]]
+          [ "$FAIL" -eq 0 ]
 
-  # ===========================================================================
-  # Layer 3 - Real container build per supported distro
-  # ===========================================================================
+  # =========================================================================
+  # Layer 3 -- Real container build per supported distro
+  # =========================================================================
   build:
     name: Build (${{ matrix.distro }})
     needs: [lint, input-tests]
@@ -149,9 +162,9 @@ jobs:
         shell: sh
         run: |
           export DEBIAN_FRONTEND=noninteractive
-          apt-get update -qq -o Acquire::Languages=none
+          apt-get update -qq
           apt-get install -y -qq --no-install-recommends \
-              ca-certificates git curl bash
+              ca-certificates git curl bash jq
       - name: Bootstrap checkout deps (rpm)
         if: matrix.ext == 'rpm'
         shell: sh
@@ -160,17 +173,33 @@ jobs:
           # Rocky 9 / Fedora) for the full curl package without erroring.
           dnf install -y -q --allowerasing \
               --setopt=install_weak_deps=False \
-              --setopt=tsflags=nodocs \
-              ca-certificates git curl bash
+              ca-certificates git curl bash jq
 
       - uses: actions/checkout@v4
 
-      - name: Trust workspace checkout
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: cache cargo registry + git index
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            cargo-registry-
 
-      - name: Resolve version from Cargo.toml
+      - name: cache cargo target dir
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: cargo-target-${{ matrix.distro }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain*', 'Cargo.toml') }}
+          restore-keys: |
+            cargo-target-${{ matrix.distro }}-
+
+      - name: Resolve version + SOURCE_DATE_EPOCH
         id: ver
         run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE" || true
           VER=$(awk -F\" '/^version[[:space:]]*=/ { print $2; exit }' Cargo.toml)
           echo "version=$VER" >> "$GITHUB_OUTPUT"
           EPOCH=$(git log -1 --pretty=%ct 2>/dev/null || echo 1700000000)
@@ -184,12 +213,11 @@ jobs:
           OUTDIR: ${{ github.workspace }}/out
           SOURCE_DATE_EPOCH: ${{ steps.ver.outputs.epoch }}
           SHROUD_MANIFEST_COMMIT: ${{ github.sha }}
-          # Honour the script's documented opt-out for callers that
-          # already prepared the toolchain. We still let the script
-          # install rustup + fpm so the contract is exercised end-to-end.
         run: bash pkg/build.sh
 
       - name: Reproducibility check
+        id: repro
+        if: github.event_name != 'pull_request'
         env:
           DISTRO: ${{ matrix.distro }}
           VERSION: ${{ steps.ver.outputs.version }}
@@ -199,22 +227,23 @@ jobs:
         run: |
           bash pkg/build.sh
 
-          FIRST=$(find out -maxdepth 1 -type f -name "*.${{ matrix.ext }}")
+          FIRST=$(find out  -maxdepth 1 -type f -name "*.${{ matrix.ext }}")
           SECOND=$(find out2 -maxdepth 1 -type f -name "*.${{ matrix.ext }}")
           sha256sum "$FIRST" "$SECOND"
 
-          FIRST_SHA=$(sha256sum "$FIRST" | awk '{print $1}')
+          FIRST_SHA=$(sha256sum "$FIRST"  | awk '{print $1}')
           SECOND_SHA=$(sha256sum "$SECOND" | awk '{print $1}')
-          if [[ "$FIRST_SHA" != "$SECOND_SHA" ]]; then
+          if [ "$FIRST_SHA" != "$SECOND_SHA" ]; then
               mkdir -p repro-failure
-              cp "$FIRST" "repro-failure/first-$(basename "$FIRST")"
+              cp "$FIRST"  "repro-failure/first-$(basename "$FIRST")"
               cp "$SECOND" "repro-failure/second-$(basename "$SECOND")"
-              echo "build is not reproducible"
+              echo "repro=fail" >> "$GITHUB_OUTPUT"
+              echo "::error::build is not reproducible: $FIRST_SHA != $SECOND_SHA"
               exit 1
           fi
 
       - name: Upload reproducibility failure artifacts
-        if: failure()
+        if: failure() && github.event_name != 'pull_request' && steps.repro.outputs.repro == 'fail'
         uses: actions/upload-artifact@v4
         with:
           name: shroud-${{ matrix.distro }}-repro-failure
@@ -225,7 +254,7 @@ jobs:
       - name: Verify exactly one artifact
         run: |
           COUNT=$(find out -maxdepth 1 -type f -name "*.${{ matrix.ext }}" | wc -l)
-          if [[ "$COUNT" -ne 1 ]]; then
+          if [ "$COUNT" -ne 1 ]; then
               echo "ERROR: expected exactly 1 .${{ matrix.ext }}, found $COUNT"
               ls -la out
               exit 1
@@ -233,42 +262,39 @@ jobs:
           ARTIFACT=$(find out -maxdepth 1 -type f -name "*.${{ matrix.ext }}")
           echo "ARTIFACT=$ARTIFACT" >> "$GITHUB_ENV"
 
-          MANIFEST_COUNT=$(find out -maxdepth 1 -type f -name "*.${{ matrix.ext }}.manifest.json" | wc -l)
-          if [[ "$MANIFEST_COUNT" -ne 1 ]]; then
-              echo "ERROR: expected exactly 1 manifest sidecar, found $MANIFEST_COUNT"
-              ls -la out
-              exit 1
-          fi
-          MANIFEST="${ARTIFACT}.manifest.json"
-          test -f "$MANIFEST" || { echo "missing: $MANIFEST"; exit 1; }
-          echo "MANIFEST=$MANIFEST" >> "$GITHUB_ENV"
-
-          ARTIFACT_SHA=$(sha256sum "$ARTIFACT" | awk '{print $1}')
-          MANIFEST_SHA=$(sed -n 's/^  "sha256": "\([0-9a-f]\{64\}\)",$/\1/p' "$MANIFEST")
-          if [[ -z "$MANIFEST_SHA" ]]; then
-              echo "manifest sha256 is missing or malformed"
-              cat "$MANIFEST"
-              exit 1
-          fi
-          if [[ "$ARTIFACT_SHA" != "$MANIFEST_SHA" ]]; then
-              echo "manifest sha256 mismatch"
-              echo "artifact: $ARTIFACT_SHA"
-              echo "manifest: $MANIFEST_SHA"
-              exit 1
+      - name: verify manifest sidecar
+        env:
+          ACTUAL: ${{ steps.ver.outputs.version }}
+          EXT: ${{ matrix.ext }}
+        run: |
+          set -e
+          artifact=$(ls out/*."${EXT}")
+          manifest="${artifact}.manifest.json"
+          if [ ! -f "$manifest" ]; then
+            echo "::error::manifest sidecar missing: $manifest"
+            exit 1
           fi
 
-          MANIFEST_COMMIT=$(sed -n 's/^  "git_commit": "\([0-9a-f]\{40\}\)"$/\1/p' "$MANIFEST")
-          if [[ -z "$MANIFEST_COMMIT" ]]; then
-              echo "manifest git_commit is missing or malformed"
-              cat "$MANIFEST"
-              exit 1
-          fi
+          msha=$(jq -r '.sha256'      "$manifest")
+          mver=$(jq -r '.version'     "$manifest")
+          mcom=$(jq -r '.git_commit'  "$manifest")
+          mdis=$(jq -r '.distro'      "$manifest")
 
-          MANIFEST_VERSION=$(sed -n 's/^  "version": "\([^"]*\)",$/\1/p' "$MANIFEST")
-          if [[ "$MANIFEST_VERSION" != "${{ steps.ver.outputs.version }}" ]]; then
-              echo "manifest version mismatch: $MANIFEST_VERSION vs ${{ steps.ver.outputs.version }}"
-              exit 1
+          asha=$(sha256sum "$artifact" | awk '{print $1}')
+
+          fails=()
+          [ "$msha" = "$asha"    ] || fails+=("manifest sha256 ($msha) != artifact sha256 ($asha)")
+          [ "$mver" = "$ACTUAL"  ] || fails+=("manifest version ($mver) != Cargo.toml ($ACTUAL)")
+          [ "$mdis" = "${{ matrix.distro }}" ] || fails+=("manifest distro ($mdis) != matrix distro (${{ matrix.distro }})")
+          echo "$mcom" | grep -Eq '^[0-9a-f]{40}$' \
+            || fails+=("manifest git_commit ($mcom) is not 40-char hex")
+
+          if [ ${#fails[@]} -gt 0 ]; then
+            echo "::error::manifest sidecar failed validation:"
+            for f in "${fails[@]}"; do echo " - $f"; done
+            exit 1
           fi
+          echo "manifest OK: sha=$msha version=$mver distro=$mdis commit=$mcom"
 
       - name: Inspect .deb contents
         if: matrix.ext == 'deb'
@@ -290,66 +316,95 @@ jobs:
           rpm -qlp "$ARTIFACT"
           echo "::endgroup::"
 
-      - name: Install artifact in container (smoke)
+      - name: smoke install (deb)
+        if: matrix.ext == 'deb'
         run: |
-          if [[ "${{ matrix.ext }}" == "deb" ]]; then
-              # Ubuntu/Debian slim base images ship
-              # /etc/dpkg/dpkg.cfg.d/excludes which strips /usr/share/doc/*
-              # (and /usr/share/man/*, locales, etc.) to keep image size
-              # down. That exclude applies at dpkg install time, so docs
-              # we deliberately package would be silently dropped here
-              # and the layout-verify step below would fail spuriously.
-              # Real end-user systems don't ship this exclude, so the
-              # package itself is correct. We just neutralise the
-              # exclude for the CI smoke install.
-              rm -f /etc/dpkg/dpkg.cfg.d/excludes
-              # --force-depends because runtime deps like network-manager
-              # aren't required to be present in the build container.
-              # we only want to validate the package layout installs.
-              dpkg -i --force-depends "$ARTIFACT"
-              test $? -eq 0
+          # Ubuntu/Debian slim base images ship /etc/dpkg/dpkg.cfg.d/excludes
+          # which strips /usr/share/doc/* at install time. Real end-user
+          # systems do not ship this exclude, so the package itself is
+          # correct. Neutralise it for the CI smoke install only.
+          rm -f /etc/dpkg/dpkg.cfg.d/excludes
+          # --force-depends because runtime deps like network-manager are
+          # not required to be present in the build container.
+          dpkg -i --force-depends out/*.deb
+
+      - name: smoke install (rpm)
+        if: matrix.ext == 'rpm'
+        run: |
+          rpm -i --nodeps out/*.rpm
+
+      - name: verify installed layout
+        env:
+          ACTUAL: ${{ steps.ver.outputs.version }}
+          EXT: ${{ matrix.ext }}
+        run: |
+          FAILS=()
+          fail() { FAILS+=("$1"); echo "FAIL: $1"; }
+          ok()   { echo "OK:   $1"; }
+
+          # -- Binary --
+          if [ -x /usr/bin/shroud ]; then ok "/usr/bin/shroud exists and is executable"
+          else fail "/usr/bin/shroud missing or not executable"; fi
+
+          # -- Sudoers --
+          if [ -f /etc/sudoers.d/shroud ]; then
+            mode=$(stat -c %a /etc/sudoers.d/shroud)
+            [ "$mode" = "440" ] && ok "/etc/sudoers.d/shroud mode 440" \
+              || fail "/etc/sudoers.d/shroud mode is $mode, expected 440"
           else
-              rpm -i --nodeps "$ARTIFACT"
-              test $? -eq 0
+            fail "/etc/sudoers.d/shroud missing"
           fi
 
-      - name: Verify installed layout
-        run: |
-          set -e
-          test -x /usr/bin/shroud                                       || { echo "missing: /usr/bin/shroud";                                       exit 1; }
-          test -f /etc/sudoers.d/shroud                                 || { echo "missing: /etc/sudoers.d/shroud";                                 exit 1; }
-          test -f /usr/share/applications/shroud.desktop                || { echo "missing: /usr/share/applications/shroud.desktop";                exit 1; }
-          test -f /usr/share/polkit-1/actions/com.shroud.killswitch.policy \
-              || { echo "missing: polkit policy"; exit 1; }
-          test -f /usr/share/doc/shroud/README.md                       || { echo "missing: README under /usr/share/doc/shroud"; exit 1; }
-          if [[ "${{ matrix.ext }}" == "deb" ]]; then
-              test -f /usr/share/doc/shroud/copyright                   || { echo "missing: Debian copyright file"; exit 1; }
+          # -- Polkit + desktop --
+          for f in \
+            /usr/share/polkit-1/actions/com.shroud.killswitch.policy \
+            /usr/share/applications/shroud.desktop
+          do
+            [ -f "$f" ] && ok "$f" || fail "$f missing"
+          done
+
+          # -- Systemd unit + dev-path regression guard --
+          UNIT=""
+          for cand in /lib/systemd/system/shroud.service /usr/lib/systemd/system/shroud.service; do
+            [ -f "$cand" ] && UNIT="$cand" && break
+          done
+          if [ -z "$UNIT" ]; then
+            fail "shroud.service not found in /lib or /usr/lib systemd dirs"
           else
-              test -f /usr/share/doc/shroud/LICENSE                     || { echo "missing: RPM LICENSE file"; exit 1; }
+            ok "shroud.service at $UNIT"
+            if grep -q '/usr/local/bin/shroud' "$UNIT"; then
+              fail "regression: $UNIT references /usr/local/bin/shroud (dev-only path)"
+            else
+              ok "$UNIT does not reference /usr/local/bin"
+            fi
           fi
-          # Systemd unit lives in distro-appropriate path
-          if [[ -f /lib/systemd/system/shroud.service ]]; then
-              UNIT=/lib/systemd/system/shroud.service
-          elif [[ -f /usr/lib/systemd/system/shroud.service ]]; then
-              UNIT=/usr/lib/systemd/system/shroud.service
+
+          # -- Docs --
+          for d in /usr/share/doc/shroud/README.md /usr/share/doc/shroud/changelog.gz; do
+            [ -f "$d" ] && ok "$d" || fail "$d missing"
+          done
+          if [ "$EXT" = "deb" ]; then
+            [ -f /usr/share/doc/shroud/copyright ] && ok "/usr/share/doc/shroud/copyright" \
+              || fail "/usr/share/doc/shroud/copyright missing (Debian policy)"
           else
-              echo "missing: shroud.service in /lib or /usr/lib systemd dirs"
-              exit 1
+            [ -f /usr/share/doc/shroud/LICENSE ] && ok "/usr/share/doc/shroud/LICENSE" \
+              || fail "/usr/share/doc/shroud/LICENSE missing"
           fi
-          # Unit must not still reference the dev-only /usr/local/bin path
-          if grep -q '/usr/local/bin/shroud' "$UNIT"; then
-              echo "regression: $UNIT still references /usr/local/bin/shroud"
-              exit 1
+
+          # -- Runtime smoke --
+          if [ -x /usr/bin/shroud ]; then
+            /usr/bin/shroud --help >/dev/null 2>&1 && ok "shroud --help exited 0" \
+              || fail "shroud --help failed"
           fi
-          # Sudoers file must be mode 0440 (sudo refuses to load otherwise)
-          MODE=$(stat -c %a /etc/sudoers.d/shroud)
-          if [[ "$MODE" != "440" ]]; then
-              echo "regression: /etc/sudoers.d/shroud mode is $MODE, expected 440"
-              exit 1
+
+          echo
+          if [ ${#FAILS[@]} -eq 0 ]; then
+            echo "installed-layout check passed."
+          else
+            echo "::error::installed-layout check found ${#FAILS[@]} failure(s):"
+            for f in "${FAILS[@]}"; do echo " - $f"; done
+            exit 1
           fi
-          # Binary actually runs (CLI parser smoke; --help must not require runtime deps)
-          /usr/bin/shroud --help >/dev/null
-          echo "Layout OK on ${{ matrix.distro }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -361,21 +416,29 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # ===========================================================================
-  # Aggregate gate so branch protection can require a single check.
-  # ===========================================================================
+  # =========================================================================
+  # Aggregate gate. Single required check for branch protection.
+  # =========================================================================
   pkg-success:
     name: pkg-build success
     needs: [lint, input-tests, build]
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - name: Check results
+      - name: verify all dependencies succeeded
         run: |
-          if [[ "${{ needs.lint.result }}"        != "success" ]] || \
-             [[ "${{ needs.input-tests.result }}" != "success" ]] || \
-             [[ "${{ needs.build.result }}"       != "success" ]]; then
-              echo "One or more pkg-build jobs failed"
-              exit 1
+          lint_r='${{ needs.lint.result }}'
+          inp_r='${{ needs.input-tests.result }}'
+          bld_r='${{ needs.build.result }}'
+          echo "lint=$lint_r input-tests=$inp_r build=$bld_r"
+          rc=0
+          if [ "$lint_r" != "success" ]; then
+            echo "::error::lint job did not succeed ($lint_r)"; rc=1
           fi
-          echo "pkg-build: all jobs green"
+          if [ "$inp_r" != "success" ]; then
+            echo "::error::input-tests job did not succeed ($inp_r)"; rc=1
+          fi
+          if [ "$bld_r" != "success" ]; then
+            echo "::error::build job did not succeed ($bld_r)"; rc=1
+          fi
+          exit "$rc"
