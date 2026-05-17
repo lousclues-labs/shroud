@@ -149,12 +149,16 @@ install_rpm_deps() {
         return 0
     fi
     echo "==> [deps] installing build dependencies (dnf)"
+    # --allowerasing  : swap curl-minimal for curl on EL9 / Fedora bases.
     # nodocs + no weak deps shave a noticeable amount off cold installs.
-    dnf install -y -q \
+    # rubygem-json    : fpm requires `json` at load time (its package/python.rb
+    #                   handler is loaded unconditionally); RHEL/Fedora's
+    #                   `rubygems` package does not pull it as a default.
+    dnf install -y -q --allowerasing \
         --setopt=install_weak_deps=False \
         --setopt=tsflags=nodocs \
         ca-certificates curl gcc gcc-c++ pkgconf-pkg-config dbus-devel \
-        ruby ruby-devel rubygems rpm-build
+        ruby ruby-devel rubygems rubygem-json rpm-build
 }
 
 # ----------------------------------------------------------------------------

@@ -134,23 +134,34 @@ jobs:
             ext: rpm
     container:
       image: ${{ matrix.image }}
+    # GitHub Actions defaults to /bin/sh inside containers; force bash so
+    # the [[ ... ]] conditionals in run: blocks work consistently.
+    defaults:
+      run:
+        shell: bash
     steps:
       # actions/checkout needs git on the container PATH for some images;
-      # install it before the checkout step where missing.
+      # install it before the checkout step where missing. Bootstrap runs
+      # before `defaults.run.shell` can apply (bash may not be on PATH yet
+      # in the most minimal images), so keep these POSIX-compatible.
       - name: Bootstrap checkout deps (deb)
         if: matrix.ext == 'deb'
+        shell: sh
         run: |
           export DEBIAN_FRONTEND=noninteractive
           apt-get update -qq -o Acquire::Languages=none
           apt-get install -y -qq --no-install-recommends \
-              ca-certificates git curl
+              ca-certificates git curl bash
       - name: Bootstrap checkout deps (rpm)
         if: matrix.ext == 'rpm'
+        shell: sh
         run: |
-          dnf install -y -q \
+          # --allowerasing lets dnf swap curl-minimal (preinstalled on
+          # Rocky 9 / Fedora) for the full curl package without erroring.
+          dnf install -y -q --allowerasing \
               --setopt=install_weak_deps=False \
               --setopt=tsflags=nodocs \
-              ca-certificates git curl
+              ca-certificates git curl bash
 
       - uses: actions/checkout@v4
 
