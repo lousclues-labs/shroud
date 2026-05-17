@@ -165,6 +165,9 @@ jobs:
 
       - uses: actions/checkout@v4
 
+      - name: Trust workspace checkout
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
       - name: Resolve version from Cargo.toml
         id: ver
         run: |
@@ -180,6 +183,7 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
           OUTDIR: ${{ github.workspace }}/out
           SOURCE_DATE_EPOCH: ${{ steps.ver.outputs.epoch }}
+          SHROUD_MANIFEST_COMMIT: ${{ github.sha }}
           # Honour the script's documented opt-out for callers that
           # already prepared the toolchain. We still let the script
           # install rustup + fpm so the contract is exercised end-to-end.
@@ -191,6 +195,7 @@ jobs:
           VERSION: ${{ steps.ver.outputs.version }}
           OUTDIR: ${{ github.workspace }}/out2
           SOURCE_DATE_EPOCH: ${{ steps.ver.outputs.epoch }}
+          SHROUD_MANIFEST_COMMIT: ${{ github.sha }}
         run: |
           bash pkg/build.sh
 
