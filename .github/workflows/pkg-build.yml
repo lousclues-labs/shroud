@@ -1,0 +1,274 @@
+name: pkg-build
+
+# Validates pkg/build.sh — the source-project contract that lousclues-pkg
+# invokes inside per-distro containers to produce .deb / .rpm artifacts.
+#
+# Three layers, fastest first:
+#   1. lint         — shellcheck + bash -n. Always runs.
+#   2. input-tests  — negative tests for the script's input handling.
+#                     Always runs. ~10s.
+#   3. build        — real container build per supported distro, gated on
+#                     paths that actually affect packaging.
+
+on:
+  pull_request:
+    paths:
+      - 'pkg/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'assets/**'
+      - 'autostart/**'
+      - '.github/workflows/pkg-build.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'pkg/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'assets/**'
+      - 'autostart/**'
+      - '.github/workflows/pkg-build.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: pkg-build-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ===========================================================================
+  # Layer 1 — Lint
+  # ===========================================================================
+  lint:
+    name: Lint pkg/build.sh
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+      - name: shellcheck
+        run: shellcheck -x pkg/build.sh
+      - name: bash -n syntax check
+        run: bash -n pkg/build.sh
+
+  # ===========================================================================
+  # Layer 2 — Input validation tests (cheap, always runs)
+  # ===========================================================================
+  input-tests:
+    name: Input validation tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve real Cargo.toml version
+        id: ver
+        run: |
+          ACTUAL=$(awk -F\" '/^version *=/ { print $2; exit }' Cargo.toml)
+          echo "actual=$ACTUAL" >> "$GITHUB_OUTPUT"
+      - name: Run negative tests
+        env:
+          ACTUAL: ${{ steps.ver.outputs.actual }}
+        run: |
+          set -u
+          PASS=0
+          FAIL=0
+          run_test() {
+              local name="$1" expected="$2"
+              shift 2
+              local out rc
+              out=$("$@" 2>&1) && rc=0 || rc=$?
+              if [[ "$rc" -eq "$expected" ]]; then
+                  echo "  PASS  $name (exit $rc)"
+                  PASS=$((PASS+1))
+              else
+                  echo "  FAIL  $name (got $rc, want $expected)"
+                  echo "------ output ------"
+                  echo "$out"
+                  echo "--------------------"
+                  FAIL=$((FAIL+1))
+              fi
+          }
+
+          # Each negative case the script must reject before doing work.
+          run_test "missing DISTRO"      1 env -u DISTRO VERSION="$ACTUAL" OUTDIR=/tmp/out bash pkg/build.sh
+          run_test "missing VERSION"     1 env -u VERSION DISTRO=noble OUTDIR=/tmp/out bash pkg/build.sh
+          run_test "missing OUTDIR"      1 env -u OUTDIR DISTRO=noble VERSION="$ACTUAL" bash pkg/build.sh
+          run_test "unknown DISTRO"      2 env DISTRO=arch VERSION="$ACTUAL" OUTDIR=/tmp/out bash pkg/build.sh
+          run_test "leading 'v' in VER"  2 env DISTRO=noble VERSION="v$ACTUAL" OUTDIR=/tmp/out bash pkg/build.sh
+          run_test "relative OUTDIR"     2 env DISTRO=noble VERSION="$ACTUAL" OUTDIR=relative/out bash pkg/build.sh
+          run_test "VERSION mismatch"    2 env DISTRO=noble VERSION=99.99.99  OUTDIR=/tmp/out bash pkg/build.sh
+
+          echo
+          echo "RESULT: $PASS passed, $FAIL failed"
+          [[ "$FAIL" -eq 0 ]]
+
+  # ===========================================================================
+  # Layer 3 — Real container build per supported distro
+  # ===========================================================================
+  build:
+    name: Build (${{ matrix.distro }})
+    needs: [lint, input-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - distro: noble
+            image: ubuntu:24.04
+            ext: deb
+          - distro: jammy
+            image: ubuntu:22.04
+            ext: deb
+          - distro: bookworm
+            image: debian:12
+            ext: deb
+          - distro: el9
+            image: rockylinux:9
+            ext: rpm
+          - distro: fedora
+            image: fedora:latest
+            ext: rpm
+    container:
+      image: ${{ matrix.image }}
+    steps:
+      # actions/checkout needs git on the container PATH for some images;
+      # install it before the checkout step where missing.
+      - name: Bootstrap checkout deps (deb)
+        if: matrix.ext == 'deb'
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt-get update -qq -o Acquire::Languages=none
+          apt-get install -y -qq --no-install-recommends \
+              ca-certificates git curl
+      - name: Bootstrap checkout deps (rpm)
+        if: matrix.ext == 'rpm'
+        run: |
+          dnf install -y -q \
+              --setopt=install_weak_deps=False \
+              --setopt=tsflags=nodocs \
+              ca-certificates git curl
+
+      - uses: actions/checkout@v4
+
+      - name: Resolve version from Cargo.toml
+        id: ver
+        run: |
+          VER=$(awk -F\" '/^version *=/ { print $2; exit }' Cargo.toml)
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Building shroud $VER for ${{ matrix.distro }}"
+
+      - name: Run pkg/build.sh
+        env:
+          DISTRO: ${{ matrix.distro }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          OUTDIR: ${{ github.workspace }}/out
+          # Honour the script's documented opt-out for callers that
+          # already prepared the toolchain — we still let the script
+          # install rustup + fpm so the contract is exercised end-to-end.
+        run: bash pkg/build.sh
+
+      - name: Verify exactly one artifact
+        run: |
+          COUNT=$(find out -maxdepth 1 -type f -name "*.${{ matrix.ext }}" | wc -l)
+          if [[ "$COUNT" -ne 1 ]]; then
+              echo "ERROR: expected exactly 1 .${{ matrix.ext }}, found $COUNT"
+              ls -la out
+              exit 1
+          fi
+          ARTIFACT=$(find out -maxdepth 1 -type f -name "*.${{ matrix.ext }}")
+          echo "ARTIFACT=$ARTIFACT" >> "$GITHUB_ENV"
+
+      - name: Inspect .deb contents
+        if: matrix.ext == 'deb'
+        run: |
+          echo "::group::dpkg-deb --info"
+          dpkg-deb --info "$ARTIFACT"
+          echo "::endgroup::"
+          echo "::group::dpkg-deb --contents"
+          dpkg-deb --contents "$ARTIFACT"
+          echo "::endgroup::"
+
+      - name: Inspect .rpm contents
+        if: matrix.ext == 'rpm'
+        run: |
+          echo "::group::rpm -qip"
+          rpm -qip "$ARTIFACT"
+          echo "::endgroup::"
+          echo "::group::rpm -qlp"
+          rpm -qlp "$ARTIFACT"
+          echo "::endgroup::"
+
+      - name: Install artifact in container (smoke)
+        run: |
+          if [[ "${{ matrix.ext }}" == "deb" ]]; then
+              # --force-depends because runtime deps like network-manager
+              # aren't required to be present in the build container —
+              # we only want to validate the package layout installs.
+              dpkg -i --force-depends "$ARTIFACT"
+          else
+              rpm -i --nodeps "$ARTIFACT"
+          fi
+
+      - name: Verify installed layout
+        run: |
+          set -e
+          test -x /usr/bin/shroud                                       || { echo "missing: /usr/bin/shroud";                                       exit 1; }
+          test -f /etc/sudoers.d/shroud                                 || { echo "missing: /etc/sudoers.d/shroud";                                 exit 1; }
+          test -f /usr/share/applications/shroud.desktop                || { echo "missing: /usr/share/applications/shroud.desktop";                exit 1; }
+          test -f /usr/share/polkit-1/actions/com.shroud.killswitch.policy \
+              || { echo "missing: polkit policy"; exit 1; }
+          test -f /usr/share/doc/shroud/README.md                       || { echo "missing: README under /usr/share/doc/shroud"; exit 1; }
+          # Systemd unit lives in distro-appropriate path
+          if [[ -f /lib/systemd/system/shroud.service ]]; then
+              UNIT=/lib/systemd/system/shroud.service
+          elif [[ -f /usr/lib/systemd/system/shroud.service ]]; then
+              UNIT=/usr/lib/systemd/system/shroud.service
+          else
+              echo "missing: shroud.service in /lib or /usr/lib systemd dirs"
+              exit 1
+          fi
+          # Unit must not still reference the dev-only /usr/local/bin path
+          if grep -q '/usr/local/bin/shroud' "$UNIT"; then
+              echo "regression: $UNIT still references /usr/local/bin/shroud"
+              exit 1
+          fi
+          # Sudoers file must be mode 0440 (sudo refuses to load otherwise)
+          MODE=$(stat -c %a /etc/sudoers.d/shroud)
+          if [[ "$MODE" != "440" ]]; then
+              echo "regression: /etc/sudoers.d/shroud mode is $MODE, expected 440"
+              exit 1
+          fi
+          # Binary actually runs (CLI parser smoke; --help must not require runtime deps)
+          /usr/bin/shroud --help >/dev/null
+          echo "Layout OK on ${{ matrix.distro }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: shroud-${{ matrix.distro }}-${{ matrix.ext }}
+          path: out/*.${{ matrix.ext }}
+          if-no-files-found: error
+          retention-days: 14
+
+  # ===========================================================================
+  # Aggregate gate so branch protection can require a single check.
+  # ===========================================================================
+  pkg-success:
+    name: pkg-build success
+    needs: [lint, input-tests, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        run: |
+          if [[ "${{ needs.lint.result }}"        != "success" ]] || \
+             [[ "${{ needs.input-tests.result }}" != "success" ]] || \
+             [[ "${{ needs.build.result }}"       != "success" ]]; then
+              echo "One or more pkg-build jobs failed"
+              exit 1
+          fi
+          echo "pkg-build: all jobs green"
