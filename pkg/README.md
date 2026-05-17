@@ -45,6 +45,7 @@ Optional knobs (default off / unset):
 | `SHROUD_CARGO_TARGET_DIR` | Path to a persistent cargo target dir to reuse across containers (caching).                            |
 | `SHROUD_KEEP_STAGE=1`     | Preserve the staged tree after exit. Use when debugging `validate_stage` or fpm input layout failures. |
 | `SHROUD_MANIFEST_COMMIT`  | Override the `git_commit` recorded in the sidecar manifest. Must be 40 lowercase hex characters. CI fails loudly if this and git are absent. |
+| `SOURCE_SHA`              | Generic source commit exported by `lousclues-pkg`. Used when `SHROUD_MANIFEST_COMMIT` is unset. Must be 40 lowercase hex characters. |
 | `CARGO_BUILD_JOBS`        | Passed straight through to cargo. Defaults to all cores.                                               |
 | `SOURCE_DATE_EPOCH`       | Reproducible-build timestamp. Auto-derived from `git log -1 --pretty=%ct` when unset and inside a repo. |
 
@@ -84,8 +85,9 @@ source commit that produced the package.
 ```
 
 `git_commit` resolves in this order: `SHROUD_MANIFEST_COMMIT`, then
-`git rev-parse HEAD`, then `unknown` only outside CI. In CI, an unresolved
-commit exits 1 because a silent `unknown` would break attestation later.
+`SOURCE_SHA`, then `git rev-parse HEAD`, then `unknown` only outside CI. In
+CI, an unresolved commit exits 1 because a silent `unknown` would break
+attestation later.
 
 ---
 

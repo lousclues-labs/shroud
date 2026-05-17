@@ -35,8 +35,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   macros for rpm artifacts, builds through `cargo fetch --locked` followed
   by `cargo build --frozen --offline`, validates the staged tree before fpm,
   emits `${artifact}.manifest.json`, and prints `MANIFEST=...` on the
-  machine-readable summary line. The `pkg-build` workflow now rebuilds each
-  matrix leg twice with the same epoch, requires byte-identical artifacts,
+  machine-readable summary line. Manifest commit resolution also accepts the
+  generic `SOURCE_SHA` exported by `lousclues-pkg`. The `pkg-build` workflow
+  now rebuilds each matrix leg twice with the same epoch, requires
+  byte-identical artifacts,
   validates manifest sha/version/commit fields, checks the Debian copyright
   file, keeps the sudoers mode assertion, and uploads manifests with the
   package artifacts.

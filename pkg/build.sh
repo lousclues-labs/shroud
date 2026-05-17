@@ -568,15 +568,23 @@ emit_manifest() {
     #   1. SHROUD_MANIFEST_COMMIT  -- explicit override. lousclues-pkg
     #      sets this to the exact tag commit so downstream attestations
     #      pin to source even when this script runs from a non-repo copy.
-    #   2. git rev-parse HEAD      -- the common case, deterministic
+    #   2. SOURCE_SHA              -- generic source commit from the
+    #      lousclues-pkg release-build orchestrator.
+    #   3. git rev-parse HEAD      -- the common case, deterministic
     #      across CI re-runs of the same SHA.
-    #   3. "unknown"              -- last resort, allowed ONLY when
+    #   4. "unknown"              -- last resort, allowed ONLY when
     #      not running in CI. In CI a missing git_commit silently breaks
     #      attestation reproducibility downstream, so fail loudly.
     if [ -n "${SHROUD_MANIFEST_COMMIT:-}" ]; then
         git_commit="$SHROUD_MANIFEST_COMMIT"
         if ! validate_git_commit_hex "$git_commit"; then
             echo "ERROR: SHROUD_MANIFEST_COMMIT must be 40 lowercase hex characters" >&2
+            exit 2
+        fi
+    elif [ -n "${SOURCE_SHA:-}" ]; then
+        git_commit="$SOURCE_SHA"
+        if ! validate_git_commit_hex "$git_commit"; then
+            echo "ERROR: SOURCE_SHA must be 40 lowercase hex characters" >&2
             exit 2
         fi
     else
@@ -586,7 +594,7 @@ emit_manifest() {
             exit 1
         elif [ -z "$git_commit" ]; then
             if [ -n "${CI:-}" ]; then
-                echo "::error::emit_manifest: git_commit unresolved in CI. Set SHROUD_MANIFEST_COMMIT or fix checkout depth." >&2
+                echo "::error::emit_manifest: git_commit unresolved in CI. Set SHROUD_MANIFEST_COMMIT, SOURCE_SHA, or fix checkout depth." >&2
                 exit 1
             fi
             git_commit="unknown"
