@@ -58,9 +58,15 @@ PKG_COPYRIGHT_YEAR="2026"
 PKG_BINARIES=(shroud)
 
 # Debian runtime deps. Names follow debian/ubuntu conventions.
+# libdbus-1-3 is the libdbus client shared library shroud's zbus-based
+# NetworkManager monitor links against; the `dbus` package above is the
+# bus daemon and on most distros pulls libdbus-1-3 as a dep, but we
+# declare it explicitly so the dependency is visible to apt-cache /
+# audits and so reductions in `dbus`'s deps cannot silently break us.
 PKG_DEB_DEPENDS=(
     network-manager
     dbus
+    "libdbus-1-3"
     iptables
 )
 
@@ -69,12 +75,24 @@ PKG_DEB_DEPENDS=(
 # =========================================================================
 
 # RPM runtime deps. Package names diverge from debian: NetworkManager is
-# capitalized on rpm distros.
+# capitalized on rpm distros and the libdbus client library is
+# `dbus-libs` rather than `libdbus-1-3`. Declared explicitly so the
+# framework's deb -> rpm name-stripping fallback does not emit a wrong
+# name.
 PKG_RPM_REQUIRES=(
     NetworkManager
     dbus
+    dbus-libs
     iptables
 )
+
+# Build-time native deps. The libdbus-sys crate (transitive dep of
+# zbus) needs the libdbus development headers at compile time to
+# generate its bindings. The framework installs PKG_EXTRA_*_BUILD_DEPS
+# with apt / dnf right before the rust toolchain bootstrap, so these
+# land in the build container before `cargo build` runs.
+PKG_EXTRA_DEB_BUILD_DEPS=(libdbus-1-dev)
+PKG_EXTRA_RPM_BUILD_DEPS=(dbus-devel)
 
 # Staged-tree assertions. Walked by both the framework's pre-fpm
 # _pkg_validate_stage and the post-install layout-check.sh. Modes are
