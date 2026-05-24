@@ -146,36 +146,54 @@ For Shroud specifically:
 
 ## Multi-distro packaging (.deb / .rpm)
 
-Shroud ships `.deb` and `.rpm` artifacts for the noble, jammy, bookworm,
-el9, and fedora distros via the `lousclues-labs/lousclues-pkg` release
-pipeline. That pipeline is the consumer; this repository is the
-**producer**, and the producer–consumer contract is defined entirely by
-[`pkg/build.sh`](../pkg/build.sh).
+Shroud ships `.deb` and `.rpm` artifacts via the
+`lousclues-labs/lousclues-pkg` release pipeline. That pipeline is the
+consumer; this repository is the **producer**. As of v2.4.0 the
+producer side is the shared
+[`lousclues-labs/pkg-integration`](https://github.com/lousclues-labs/pkg-integration)
+build framework (`pkg-framework`), vendored at v1.2.4. The framework
+ships the deb/rpm pipeline once; shroud declares its package surface in
+[`pkg/project.sh`](../pkg/project.sh).
 
-The contract is:
+The producer-consumer contract is:
 
-- Inputs: `DISTRO`, `VERSION`, `OUTDIR` environment variables.
+- Inputs: `DISTRO` (one of `deb`, `rpm`), `VERSION`, `OUTDIR`
+  environment variables.
 - Output: exactly one `.deb` or `.rpm` in `$OUTDIR`.
-- Side output: a `ARTIFACT=… SHA256=… SIZE=…` line on stdout.
+- Side output: an `ARTIFACT=... SHA256=... SIZE=...` line on stdout.
 - Exit codes: `0` success, `1` build failure, `2` invalid input.
 
-Every change that could affect packaging is validated end-to-end by the
-`pkg-build` workflow at
-[`.github/workflows/pkg-build.yml`](../.github/workflows/pkg-build.yml).
-The workflow runs the script in real per-distro containers, installs
-the produced artifact, and verifies the installed layout. The full
-design — phases, performance knobs, CI structure, asset layout, local
-validation recipes, and a porting checklist for new repos — is
-documented in [`pkg/README.md`](../pkg/README.md).
+The matrix of underlying base images (debian:12 / ubuntu:24.04 /
+rockylinux:9 / fedora:latest) lives inside the vendored workflow at
+[`.github/workflows/pkg-build.yml`](../.github/workflows/pkg-build.yml);
+shroud no longer needs to enumerate distros directly.
+
+The framework files are sha256-pinned by `pkg-framework verify`:
+
+- [`pkg/build.sh`](../pkg/build.sh) -- thin entry point. Do not edit;
+  drift fails CI.
+- [`pkg/lib/framework.sh`](../pkg/lib/framework.sh),
+  [`layout-check.sh`](../pkg/lib/layout-check.sh),
+  [`input-tests.sh`](../pkg/lib/input-tests.sh),
+  [`VERSION`](../pkg/lib/VERSION) -- vendored helpers and version pin.
+- `.github/workflows/pkg-build.yml` -- vendored CI workflow template.
+
+Project-specific behavior (description, dependencies, layout checks,
+postinst body, fpm flag overrides) lives in
+[`pkg/project.sh`](../pkg/project.sh).
 
 When cutting a release:
 
-1. Bump `Cargo.toml` `version` as described above. `pkg/build.sh`'s
+1. Bump `Cargo.toml` `version` as described above. The framework's
    phase 0 will refuse to build if `VERSION` drifts from `Cargo.toml`.
 2. Push the tag. `lousclues-pkg` is what produces the published
-   artifacts — this repo does not upload `.deb`/`.rpm` itself.
+   artifacts -- this repo does not upload `.deb` / `.rpm` itself.
 3. If `pkg-build` is red on `main`, do not tag. The producer contract
    must be green for the consumer pipeline to succeed.
+
+To bump the framework version: edit `FRAMEWORK_VERSION` in
+`pkg/project.sh`, run `pkg-framework upgrade` to re-vendor the pinned
+files, then `pkg-framework verify` to confirm zero drift.
 
 ---
 

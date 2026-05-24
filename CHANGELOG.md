@@ -14,6 +14,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **pkg-build: migrate to shared `pkg-framework` v1.2.4.** Replaced the
+  bespoke ~660-line `pkg/build.sh` and ~440-line
+  `.github/workflows/pkg-build.yml` with the vendored deb/rpm build
+  framework from
+  [`lousclues-labs/pkg-integration`](https://github.com/lousclues-labs/pkg-integration)
+  v1.2.4. shroud's package-specific surface (description, dependencies,
+  layout checks, postinst body, fpm flag overrides) now lives in
+  `pkg/project.sh`; the build entry point at `pkg/build.sh` is a thin
+  wrapper that sources `project.sh` then `pkg/lib/framework.sh`. The
+  vendored framework files (`pkg/lib/framework.sh`,
+  `pkg/lib/layout-check.sh`, `pkg/lib/input-tests.sh`, `pkg/lib/VERSION`,
+  and the workflow template) are sha256-pinned and drift-gated by
+  `pkg-framework verify`. Producer-consumer contract changes: the
+  workflow accepts `DISTRO=deb|rpm` (the framework workflow expands
+  these into the underlying ubuntu / debian / rocky / fedora matrix
+  internally) rather than the prior per-distro names (`noble`, `jammy`,
+  `bookworm`, `el9`, `fedora`). Pre-migration files are archived under
+  `.archive/` for reference.
+
+### Added
+
+- **`pkg/project.sh`.** Manifest declaring shroud's package data
+  (summary, description, vendor, maintainer, license, deb depends, rpm
+  requires, layout checks, doc files, conffiles) plus four hooks:
+  `project_stage_extra` (installs the systemd unit with the
+  `/usr/local/bin/shroud` -> `/usr/bin/shroud` rewrite, sudoers
+  fragment, polkit policy, .desktop entry, and the `docs/` tree under
+  `/usr/share/doc/shroud/docs/`), `project_validate_stage_extra`
+  (regression guard that the staged unit does not reference the dev
+  path), `project_postinst_body` (visudo validation of
+  `/etc/sudoers.d/shroud`, `systemctl daemon-reload`, and
+  `update-desktop-database`), `project_fpm_deb_extra_args` (preserves
+  the pre-migration `--deb-recommends nftables`, `--deb-recommends
+  polkit`, `--deb-suggests network-manager-openvpn`), and
+  `project_install_layout_check_extra` (binary smoke test plus
+  installed-unit and visudo checks).
+
+### Notes
+
+- **Hermetic build preserved.** `PKG_CARGO_OFFLINE=1` keeps the
+  framework's `cargo fetch --locked` then `cargo build --release
+  --frozen --offline` pattern, matching the pre-migration behavior.
+- **Installed paths preserved.** Binary at `/usr/bin/shroud`, sudoers
+  at `/etc/sudoers.d/shroud` (mode 440), polkit at
+  `/usr/share/polkit-1/actions/com.shroud.killswitch.policy`, desktop
+  entry at `/usr/share/applications/shroud.desktop`, systemd unit at
+  `/lib/systemd/system/shroud.service`, headless config example at
+  `/usr/share/doc/shroud/shroud-headless.conf.example`, docs tree at
+  `/usr/share/doc/shroud/docs/`.
+- **Runtime behavior unchanged.** No source code under `src/`,
+  `Cargo.toml`, or `assets/` was modified.
+
 ## [2.3.0] - 2026-05-17
 
 ### Changed
