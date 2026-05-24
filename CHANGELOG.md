@@ -16,6 +16,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **pkg-build: bump pinned `pkg-framework` from v1.2.4 to v1.3.0.**
+  Upstream v1.3.0 is an operator-installer-only release (new
+  versioned `$PKG_FRAMEWORK_ROOT/versions/<id>/` + `current` symlink
+  layout, atomic retarget, `PKG_FRAMEWORK_KEEP` retention, automatic
+  rename of pre-v1.2.5 flat layout to `$ROOT.legacy.<epoch>`) plus
+  framework-repo housekeeping (LICENSE / COPYRIGHT split for GitHub's
+  detector, SECURITY.md PGP-URL claim removed, `lint-voice` Makefile
+  rewrite, three install.sh hardening folds). The consumer-vendored
+  files (`pkg/lib/framework.sh`, `pkg/lib/layout-check.sh`,
+  `pkg/lib/input-tests.sh`, `.github/workflows/pkg-build.yml`) are
+  byte-identical between v1.2.4 and v1.3.0; this commit only bumps
+  `pkg/lib/VERSION` and `FRAMEWORK_VERSION` in `pkg/project.sh` so
+  `pkg-framework verify` does not report a pin drift in CI. No
+  manifest change, no hook change, no runtime change.
+
 - **pkg-build: migrate to shared `pkg-framework` v1.2.4.** Replaced the
   bespoke ~660-line `pkg/build.sh` and ~440-line
   `.github/workflows/pkg-build.yml` with the vendored deb/rpm build
