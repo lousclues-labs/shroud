@@ -14,7 +14,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.0] - 2026-05-24
+
 ### Changed
+
+- **Release profile retuned for daemon workload.** `[profile.release]`
+  in `Cargo.toml` switches `opt-level` from `"s"` (size) to `3`
+  (speed). Shroud is a long-lived process; the supervisor event loop,
+  NM polling path, and health checker all benefit from the more
+  aggressive inlining, vectorization, and loop unrolling that
+  `opt-level = 3` enables. The size cost on a stripped binary is
+  approximately 1.7 MB (5.5 MB -> 7.17 MB), which is acceptable for a
+  system-level daemon. `lto = true`, `codegen-units = 1`,
+  `strip = true`, and `panic = "unwind"` are unchanged.
+  Additionally, `[profile.release.package."*"]` now pins
+  `opt-level = 3` so a future profile-wide change cannot silently
+  regress dependency optimization.
+
+- **`pkg-build` bumps `libdbus` dependency declarations.** `pkg/project.sh`
+  now explicitly declares `libdbus-1-dev` (deb) and `dbus-devel` (rpm) as
+  build dependencies and `libdbus-1-3` (deb) / `dbus-libs` (rpm) as runtime
+  dependencies. Previously these were satisfied transitively by the
+  systemd / NetworkManager dep chain; the explicit declaration matches
+  shroud's actual link surface (D-Bus is consumed directly via the `zbus`
+  crate plus `notify-rust`'s D-Bus backend) and protects against a future
+  upstream that drops the transitive carrier.
 
 - **pkg-build: bump pinned `pkg-framework` from v1.2.4 to v1.3.0.**
   Upstream v1.3.0 is an operator-installer-only release (new
@@ -50,7 +74,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bookworm`, `el9`, `fedora`). Pre-migration files are archived under
   `.archive/` for reference.
 
+- **NM output parsers consolidated into `src/nm/parsing.rs`.** The
+  `parse_active_vpns`, `parse_vpn_connections`, `parse_vpn_uuid`, and
+  `select_best_vpn` helpers in `src/nm/parsing.rs` previously carried
+  `#[allow(dead_code)]` because `src/nm/client.rs` shipped private
+  duplicates of the same logic. The duplicates are gone; `client.rs`
+  now imports the canonical parsers via `use super::parsing::{...}`.
+  The parsers themselves were rewritten to use `rsplit_once` and
+  `split_once` chains directly, eliminating the per-line
+  `Vec<&str>` allocation in the NM poll hot path (the
+  `NAME:TYPE:STATE` poll runs every `NM_POLL_INTERVAL_SECS` seconds
+  for the lifetime of the daemon). Behavior is unchanged; the
+  existing test coverage in both `nm/parsing.rs` and `nm/client.rs`
+  is preserved and all 259 lib + 778 integration + 35 security + 15
+  regression + 12 ipc-mock tests pass.
+
 ### Added
+
+- **`[profile.release-with-debug]` in `Cargo.toml`.** Inherits from
+  `release` but disables `strip` and sets `debug = 2`. Build with
+  `cargo build --profile release-with-debug` when you need symbol
+  names and full DWARF for `perf`, flamegraph, or valgrind work
+  against a near-production binary without giving up the release
+  optimization profile.
 
 - **`pkg/project.sh`.** Manifest declaring shroud's package data
   (summary, description, vendor, maintainer, license, deb depends, rpm
@@ -70,6 +116,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Notes
 
+- **History maintenance.** v2.1.0, v2.2.0, and v2.3.0 were version-bumped
+  in `Cargo.toml` and documented in this changelog but were never tagged
+  on the remote. They were retro-tagged on 2026-05-24 from re-signed
+  history; the three `pkg: add source-project contract for lousclues-pkg`
+  commits that originally landed unsigned were re-signed during the same
+  rebase. Tags now exist for every released version from `v1.x` through
+  `v2.4.0`. Consumers pinning to a SHA will need to repoint to the new
+  SHAs for any commit at or after `b87c745` (original) /
+  `ea7ba69` (re-signed). The pre-rewrite head is preserved at the
+  `backup/pre-resign-2026-05-24` tag.
+
 - **Hermetic build preserved.** `PKG_CARGO_OFFLINE=1` keeps the
   framework's `cargo fetch --locked` then `cargo build --release
   --frozen --offline` pattern, matching the pre-migration behavior.
@@ -80,8 +137,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/lib/systemd/system/shroud.service`, headless config example at
   `/usr/share/doc/shroud/shroud-headless.conf.example`, docs tree at
   `/usr/share/doc/shroud/docs/`.
-- **Runtime behavior unchanged.** No source code under `src/`,
-  `Cargo.toml`, or `assets/` was modified.
+- **Runtime behavior unchanged by the packaging migration.** The
+  `pkg-framework` adoption, libdbus declaration, and pkg-framework
+  v1.3.0 bump touch only `pkg/`, `.github/workflows/pkg-build.yml`,
+  and `.archive/`. The NM parser dedupe touches `src/nm/client.rs` and
+  `src/nm/parsing.rs` with no observable behavior change. The release
+  profile retune changes generated code but not source semantics.
 
 ## [2.3.0] - 2026-05-17
 
