@@ -5,35 +5,60 @@
 //!
 //! Extracts the nmcli output parsing logic from `nm::client` so it
 //! can be unit-tested without needing a running NetworkManager.
+//!
+//! ## Performance
+//!
+//! All parsers operate line-by-line and avoid intermediate `Vec<&str>`
+//! allocations by using `rsplit_once` / `split_once` directly. They are
+//! called from the NM poll path that runs every `NM_POLL_INTERVAL_SECS`
+//! seconds, so the hot path stays alloc-free except for the owned
+//! `String`s in the returned data.
 
 use crate::state::{ActiveVpnInfo, NmVpnState};
 
+/// Classify a NM connection type string as VPN or not.
+#[inline]
+pub fn is_vpn_connection_type(conn_type: &str) -> bool {
+    conn_type == "vpn" || conn_type == "wireguard"
+}
+
+/// Map an nmcli VPN state string to [`NmVpnState`].
+///
+/// Returns `None` for unknown / unmapped states (e.g. NM's "deactivated"
+/// transient — we treat absence of an active VPN as the source of truth).
+#[inline]
+fn parse_vpn_state(state_str: &str) -> Option<NmVpnState> {
+    match state_str {
+        "activated" => Some(NmVpnState::Activated),
+        "activating" => Some(NmVpnState::Activating),
+        "deactivating" => Some(NmVpnState::Deactivating),
+        _ => None,
+    }
+}
+
 /// Parse VPN connections from nmcli `-t -f NAME,TYPE,STATE con show --active` output.
-#[allow(dead_code)]
+///
+/// Format per line: `NAME:TYPE:STATE`. NAME may contain colons, so we split
+/// from the right.
 pub fn parse_active_vpns(stdout: &str) -> Vec<ActiveVpnInfo> {
     let mut vpns = Vec::new();
 
     for line in stdout.lines() {
-        // Split on colon from the right to handle names with colons
-        let parts: Vec<&str> = line.rsplitn(3, ':').collect();
-        if parts.len() >= 3 {
-            let state_str = parts[0];
-            let conn_type = parts[1];
-            let name = parts[2];
-
-            if conn_type == "vpn" || conn_type == "wireguard" {
-                if let Some(state) = match state_str {
-                    "activated" => Some(NmVpnState::Activated),
-                    "activating" => Some(NmVpnState::Activating),
-                    "deactivating" => Some(NmVpnState::Deactivating),
-                    _ => None,
-                } {
-                    vpns.push(ActiveVpnInfo {
-                        name: name.to_string(),
-                        state,
-                    });
-                }
-            }
+        // Split from the right twice: peel off STATE, then TYPE; what remains is NAME.
+        let Some((rest, state_str)) = line.rsplit_once(':') else {
+            continue;
+        };
+        let Some((name, conn_type)) = rest.rsplit_once(':') else {
+            continue;
+        };
+        if !is_vpn_connection_type(conn_type) {
+            continue;
+        }
+        if let Some(state) = parse_vpn_state(state_str) {
+            vpns.push(ActiveVpnInfo {
+                name: name.to_string(),
+                state,
+            });
         }
     }
 
@@ -41,13 +66,15 @@ pub fn parse_active_vpns(stdout: &str) -> Vec<ActiveVpnInfo> {
 }
 
 /// Parse VPN connection names from nmcli `-t -f NAME,TYPE con show` output.
-#[allow(dead_code)]
+///
+/// Format per line: `NAME:TYPE`. NAME may contain colons, so we split from the right.
 pub fn parse_vpn_connections(stdout: &str) -> Vec<String> {
     let mut connections = Vec::new();
     for line in stdout.lines() {
-        let parts: Vec<&str> = line.rsplitn(2, ':').collect();
-        if parts.len() >= 2 && (parts[0] == "vpn" || parts[0] == "wireguard") {
-            connections.push(parts[1].to_string());
+        if let Some((name, conn_type)) = line.rsplit_once(':') {
+            if is_vpn_connection_type(conn_type) {
+                connections.push(name.to_string());
+            }
         }
     }
     connections
@@ -55,14 +82,14 @@ pub fn parse_vpn_connections(stdout: &str) -> Vec<String> {
 
 /// Parse VPN UUID from nmcli `-t -f UUID,NAME,TYPE con show` output.
 ///
-/// Handles VPN names containing colons by splitting UUID on the first `:`
-/// and type on the last `:` (UUIDs and types never contain colons).
-#[allow(dead_code)]
+/// Format per line: `UUID:NAME:TYPE`. UUIDs are fixed-format (no colons),
+/// so split first on `:` to isolate UUID, then split the rest from the right
+/// to peel off TYPE and leave NAME (which may contain colons).
 pub fn parse_vpn_uuid(stdout: &str, connection_name: &str) -> Option<String> {
     for line in stdout.lines() {
         if let Some((uuid, rest)) = line.split_once(':') {
             if let Some((name, conn_type)) = rest.rsplit_once(':') {
-                if (conn_type == "vpn" || conn_type == "wireguard") && name == connection_name {
+                if is_vpn_connection_type(conn_type) && name == connection_name {
                     return Some(uuid.to_string());
                 }
             }
@@ -72,18 +99,11 @@ pub fn parse_vpn_uuid(stdout: &str, connection_name: &str) -> Option<String> {
 }
 
 /// Select the best active VPN by priority: activated > activating > deactivating.
-#[allow(dead_code)]
 pub fn select_best_vpn(vpns: &[ActiveVpnInfo]) -> Option<&ActiveVpnInfo> {
     vpns.iter()
         .find(|v| v.state == NmVpnState::Activated)
         .or_else(|| vpns.iter().find(|v| v.state == NmVpnState::Activating))
         .or_else(|| vpns.iter().find(|v| v.state == NmVpnState::Deactivating))
-}
-
-/// Classify a NM connection type string as VPN or not.
-#[allow(dead_code)]
-pub fn is_vpn_connection_type(conn_type: &str) -> bool {
-    conn_type == "vpn" || conn_type == "wireguard"
 }
 
 // =========================================================================

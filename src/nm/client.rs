@@ -12,6 +12,7 @@ use tokio::process::Command;
 use tokio::time::{timeout, Duration};
 use tracing::{debug, error, info, warn};
 
+use super::parsing::{parse_active_vpns, parse_vpn_connections, parse_vpn_uuid, select_best_vpn};
 use crate::state::{ActiveVpnInfo, NmVpnState};
 
 /// Errors that can occur during NetworkManager operations.
@@ -67,70 +68,6 @@ async fn run_nmcli(args: &[&str]) -> Option<std::process::Output> {
     }
 }
 
-/// Parse VPN connections from nmcli output
-/// Returns all VPNs with their states
-fn parse_active_vpns(stdout: &str) -> Vec<ActiveVpnInfo> {
-    let mut vpns = Vec::new();
-
-    for line in stdout.lines() {
-        // Split on colon from the right to handle names with colons
-        let parts: Vec<&str> = line.rsplitn(3, ':').collect();
-        if parts.len() >= 3 {
-            let state_str = parts[0];
-            let conn_type = parts[1];
-            let name = parts[2];
-
-            if conn_type == "vpn" || conn_type == "wireguard" {
-                if let Some(state) = match state_str {
-                    "activated" => Some(NmVpnState::Activated),
-                    "activating" => Some(NmVpnState::Activating),
-                    "deactivating" => Some(NmVpnState::Deactivating),
-                    _ => None,
-                } {
-                    vpns.push(ActiveVpnInfo {
-                        name: name.to_string(),
-                        state,
-                    });
-                }
-            }
-        }
-    }
-
-    vpns
-}
-
-/// Parse VPN connection names from nmcli "NAME:TYPE" output
-fn parse_vpn_connections(stdout: &str) -> Vec<String> {
-    let mut connections = Vec::new();
-    for line in stdout.lines() {
-        let parts: Vec<&str> = line.rsplitn(2, ':').collect();
-        if parts.len() >= 2 && (parts[0] == "vpn" || parts[0] == "wireguard") {
-            connections.push(parts[1].to_string());
-        }
-    }
-    connections
-}
-
-/// Parse VPN UUID from nmcli "UUID:NAME:TYPE" output for a specific connection.
-///
-/// Handles VPN names containing colons by splitting UUID on the first `:` (UUIDs
-/// are fixed 36-char format with no colons in the value) and type on the last `:`.
-fn parse_vpn_uuid(stdout: &str, connection_name: &str) -> Option<String> {
-    for line in stdout.lines() {
-        // UUID is the first 36 chars (8-4-4-4-12 hex), followed by ':'
-        // Format: UUID:NAME:TYPE
-        // Split on first ':' to isolate UUID, then rsplitn(2) on rest for type + name
-        if let Some((uuid, rest)) = line.split_once(':') {
-            if let Some((name, conn_type)) = rest.rsplit_once(':') {
-                if (conn_type == "vpn" || conn_type == "wireguard") && name == connection_name {
-                    return Some(uuid.to_string());
-                }
-            }
-        }
-    }
-    None
-}
-
 /// Get the active VPN connection name from NetworkManager (legacy compatibility wrapper)
 #[inline]
 pub async fn get_active_vpn() -> Option<String> {
@@ -153,11 +90,7 @@ pub async fn get_active_vpn_with_state() -> Option<ActiveVpnInfo> {
     let vpns = parse_active_vpns(&stdout);
 
     // Priority: activated > activating > deactivating
-    vpns.iter()
-        .find(|v| v.state == NmVpnState::Activated)
-        .or_else(|| vpns.iter().find(|v| v.state == NmVpnState::Activating))
-        .or_else(|| vpns.iter().find(|v| v.state == NmVpnState::Deactivating))
-        .cloned()
+    select_best_vpn(&vpns).cloned()
 }
 
 /// Get ALL active VPN connections from NetworkManager (to detect multiple simultaneous VPNs)

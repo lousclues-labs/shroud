@@ -77,12 +77,38 @@ rand = "0.9"
 # Scope-based cleanup for reconnect guard
 scopeguard = "1"
 
+# ============================================================================
+# Build profiles
+# ============================================================================
+
+# Release profile tuned for daemon workload:
+#   - opt-level = 3 favors hot-path throughput over size. Shroud runs as a
+#     long-lived process; size-optimization ("s") was leaving cycles on the
+#     table in the supervisor event loop and the NM polling path.
+#   - lto = true (fat LTO) + codegen-units = 1 maximize cross-crate inlining.
+#   - strip = true (symbols) keeps the on-disk binary lean; full debug info
+#     lives in the `release-with-debug` profile below for profiling.
+#   - panic = "unwind" preserves Drop ordering for the killswitch firewall
+#     scopeguard. Switching to "abort" would break our cleanup contract.
 [profile.release]
 lto = true
 codegen-units = 1
 strip = true
-opt-level = "s"
+opt-level = 3
 panic = "unwind"
+
+# Optimize dependencies at the same level as the crate. Default is already 3,
+# but pin it so a future profile-wide bump doesn't silently regress deps.
+[profile.release.package."*"]
+opt-level = 3
+
+# Profile for capturing perf / flamegraph / valgrind data against a near-release
+# binary. Inherits everything from release except strip + debug, so symbols are
+# preserved. Build with: `cargo build --profile release-with-debug`
+[profile.release-with-debug]
+inherits = "release"
+strip = false
+debug = 2
 
 [dev-dependencies]
 tempfile = "3"
