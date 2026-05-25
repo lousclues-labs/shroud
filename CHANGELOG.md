@@ -14,21 +14,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### CI / Release
-
-- **Release workflow now ships `.deb` / `.rpm` for the 3-distro matrix.**
-  `.github/workflows/release.yml` now runs the vendored `pkg-framework`
-  build for `ubuntu:24.04`, `debian:12-slim`, and `fedora:40` on every
-  tag push (and on `workflow_dispatch`), collects the resulting `.deb`,
-  `.rpm`, and `*.manifest.json` artifacts, and attaches them to the
-  GitHub release alongside the existing `shroud-linux-x86_64` binary +
-  tarball + sha256. This closes the producer side of the
-  [`lousclues-labs/lousclues-pkg`](https://github.com/lousclues-labs/lousclues-pkg)
-  release contract: `pkg release shroud <ver>` can now download the
-  packages directly from the GitHub release instead of requiring a
-  separate local build. No change to the `pkg-build.yml` matrix (kept
-  for per-commit validation on `main`); the new jobs mirror it exactly.
-
 ## [2.4.1] - 2026-05-24
 
 ### Documentation
