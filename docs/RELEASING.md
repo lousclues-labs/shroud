@@ -186,8 +186,11 @@ When cutting a release:
 
 1. Bump `Cargo.toml` `version` as described above. The framework's
    phase 0 will refuse to build if `VERSION` drifts from `Cargo.toml`.
-2. Push the tag. `lousclues-pkg` is what produces the published
-   artifacts -- this repo does not upload `.deb` / `.rpm` itself.
+2. Push the tag. The `release` workflow builds the binary tarball
+   **and** the `.deb` / `.rpm` matrix (ubuntu:24.04, debian:12-slim,
+   fedora:40) and attaches all of them to the GitHub release; the
+   downstream `lousclues-pkg` pipeline then pulls those artifacts and
+   publishes them through the apt / dnf repos.
 3. If `pkg-build` is red on `main`, do not tag. The producer contract
    must be green for the consumer pipeline to succeed.
 
