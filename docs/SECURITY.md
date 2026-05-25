@@ -1,5 +1,12 @@
 # Security Policy
 
+> **Last reviewed:** 2026-05-24 (UTC) — quarterly review on the v2.4.1
+> release boundary. Reporting channel, response timeline, threat model,
+> dependency justifications, IPC trust boundary, and kill-switch
+> privilege model were re-read end to end and remain unchanged.
+> The Supported Versions section was restructured from prose to a
+> versioned table so the maintained series is unambiguous.
+
 You found a vulnerability. Thank you. Here's what to do.
 
 ---
@@ -47,9 +54,20 @@ Expect updates on progress.
 
 ## Supported Versions
 
-Security fixes are provided for the latest released version.
+| Version | Supported          | Notes                                                |
+|---------|--------------------|------------------------------------------------------|
+| 2.4.x   | :white_check_mark: | Current series (v2.4.1 latest). Receives security fixes. |
+| 2.3.x   | :x:                | Superseded — please upgrade to 2.4.x.               |
+| 2.2.x   | :x:                | Superseded — please upgrade to 2.4.x.               |
+| < 2.2   | :x:                | Unsupported — please upgrade to 2.4.x.              |
 
-Older versions don't receive updates. If you're on an old version and a security issue is found, update.
+Security fixes target the latest released minor series. If you are on an
+older series and find a security issue, please report it via the channels
+above; the fix will be issued in the current series, and you should
+upgrade.
+
+Older versions don't receive updates. If you're on an old version and a
+security issue is found, update.
 
 ---
 

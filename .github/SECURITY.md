@@ -1,5 +1,8 @@
 # Security Policy
 
+> **Last reviewed:** 2026-05-24 (UTC). See [docs/SECURITY.md](../docs/SECURITY.md)
+> for the full policy, threat model, and Supported Versions table.
+
 For Shroud's full security policy, threat model, and vulnerability reporting instructions, see [docs/SECURITY.md](../docs/SECURITY.md).
 
 ## Reporting a Vulnerability

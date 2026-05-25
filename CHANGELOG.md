@@ -16,6 +16,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.4.1] - 2026-05-24
 
+### Documentation
+
+- **Release-pipeline hygiene.** Added a DCO `Signed-off-by:` trailer to
+  the v2.4.1 tip commit and refreshed `docs/SECURITY.md` for its
+  quarterly review window. Both touches are required by the
+  `lousclues-pkg` pre-release lint gates (`signoff: ok`, `security: ok`)
+  before `pkg release shroud 2.4.1` will publish. The SECURITY.md
+  review added an explicit `Last reviewed: 2026-05-24 (UTC)` metadata
+  line near the top and restructured the Supported Versions section
+  from prose into a versioned table (`2.4.x` supported, `2.3.x` and
+  below superseded). The underlying policy — only the current minor
+  series receives security fixes — is unchanged. Vulnerability
+  reporting channel, response timeline, threat model, dependency
+  justifications, IPC trust boundary, and kill-switch privilege model
+  were re-read end to end and remain unchanged. `.github/SECURITY.md`
+  carries the same `Last reviewed` line above the pointer to the full
+  policy.
+
 ### Fixed
 
 - **Killswitch state-sync no longer floods sudo / blocks the event loop.**
