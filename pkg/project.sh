@@ -142,6 +142,23 @@ PKG_CARGO_OFFLINE=1
 # Hooks
 # =========================================================================
 
+# Pre-install hook for RPM build deps. Rocky Linux 9 (the el9 build
+# target in lousclues-pkg's release-build.yml matrix) ships with
+# `coreutils-single` instead of full `coreutils`. The framework's
+# canonical RPM dep list pins `coreutils`, which dnf refuses to
+# install while `coreutils-single` provides the same files
+# (Error: ... conflicts with coreutils-single ...). Swap them out
+# with --allowerasing before the framework's main install runs;
+# subsequent `dnf install coreutils ...` then short-circuits.
+#
+# Idempotent: if `coreutils` is already installed (Fedora, EL10+),
+# this is a no-op.
+project_pre_install_rpm_deps() {
+    if command -v dnf >/dev/null 2>&1; then
+        sudo dnf -y install --allowerasing coreutils || true
+    fi
+}
+
 # Stage shroud-specific assets: the systemd unit (with the dev-path
 # rewrite), the sudoers fragment, the polkit policy, the .desktop file,
 # and the docs/ tree.

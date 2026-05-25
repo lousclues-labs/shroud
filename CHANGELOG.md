@@ -31,6 +31,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   string unchanged so existing local invocations keep working. The
   vendored framework is unchanged (no pkg-framework drift).
 
+- **EL9 RPM build no longer conflicts with `coreutils-single`.**
+  Rocky Linux 9 (the el9 target in `release-build.yml`) ships
+  `coreutils-single` instead of full `coreutils`; the framework's
+  canonical RPM dep list pins `coreutils`, which `dnf` refuses to
+  install while the conflicting package is present
+  (`coreutils-8.32-39.el9.x86_64 ... conflicts with coreutils-single`).
+  Added a `project_pre_install_rpm_deps()` hook in `pkg/project.sh`
+  that runs `dnf install --allowerasing coreutils` first, so the
+  framework's subsequent install short-circuits. The hook is
+  idempotent on Fedora and EL10+, where `coreutils` is already the
+  installed flavour. No framework changes; the vendored
+  `pkg/lib/framework.sh` is unchanged.
+
 ## [2.4.1] - 2026-05-24
 
 ### Documentation
