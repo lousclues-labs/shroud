@@ -338,7 +338,10 @@ fn handle_doctor_command() -> i32 {
     if socket_path.exists() {
         println!("  ✓ Daemon:    running ({})", socket_path.display());
     } else {
-        println!("  ⚠ Daemon:    not running (no socket at {})", socket_path.display());
+        println!(
+            "  ⚠ Daemon:    not running (no socket at {})",
+            socket_path.display()
+        );
         println!("    Start with: {} &", local_bin);
     }
 

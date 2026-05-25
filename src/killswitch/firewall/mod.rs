@@ -288,10 +288,9 @@ impl KillSwitch {
     /// `sudo` invocation.
     pub async fn is_actually_enabled_async(&self) -> bool {
         let (program, args): (&str, [&str; 6]) = match self.backend {
-            FirewallBackend::Iptables => (
-                "sudo",
-                ["-n", iptables(), "-C", "OUTPUT", "-j", CHAIN_NAME],
-            ),
+            FirewallBackend::Iptables => {
+                ("sudo", ["-n", iptables(), "-C", "OUTPUT", "-j", CHAIN_NAME])
+            }
             FirewallBackend::Nftables => {
                 ("sudo", ["-n", nft(), "list", "table", "inet", NFT_TABLE])
             }
