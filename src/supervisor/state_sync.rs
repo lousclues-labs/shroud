@@ -171,9 +171,15 @@ impl super::VpnSupervisor {
         }
     }
 
-    /// Sync kill switch internal state with actual iptables state
-    pub(crate) fn sync_killswitch_state(&mut self) {
-        self.kill_switch.sync_state();
+    /// Sync kill switch internal state with actual firewall state.
+    ///
+    /// Uses the async, non-blocking firewall-query path so the tokio
+    /// runtime worker is not stalled for the duration of the `sudo`
+    /// subprocess. The previous synchronous implementation spawned a
+    /// `sudo nft list table` on every 2s NM-poll tick, generating tens
+    /// of thousands of sudo invocations per day (v2.4.1 fix).
+    pub(crate) async fn sync_killswitch_state(&mut self) {
+        self.kill_switch.sync_state_async().await;
         // Update shared state if needed
         if let Ok(mut state) = self.shared_state.try_write() {
             state.kill_switch = self.kill_switch.is_enabled();

@@ -280,6 +280,70 @@ fn handle_doctor_command() -> i32 {
 
     let mut issues = 0;
 
+    // === Installation health (v2.4.1) ===
+    //
+    // These checks were added after a recurring incident where the
+    // installed binary, menu entry, and autostart entry would silently
+    // disappear (binary stale, KDE menu cache prune, missing autostart),
+    // leaving the user with no tray icon and no obvious failure mode.
+    println!("=== Installation Health ===");
+
+    let home = std::env::var("HOME").unwrap_or_default();
+    let local_bin = format!("{}/.local/bin/shroud", home);
+    let menu_entry = format!("{}/.local/share/applications/shroud.desktop", home);
+    let autostart_entry = format!("{}/.config/autostart/shroud.desktop", home);
+
+    if std::path::Path::new(&local_bin).exists() {
+        let version = std::process::Command::new(&local_bin)
+            .arg("--version")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let pkg_version = env!("CARGO_PKG_VERSION");
+        if version.contains(pkg_version) {
+            println!("  ✓ Binary:    {} ({})", local_bin, version);
+        } else {
+            println!(
+                "  ⚠ Binary:    {} ({}; this build is {})",
+                local_bin, version, pkg_version
+            );
+            println!("    Run: ./setup.sh update    (to refresh to the current build)");
+            issues += 1;
+        }
+    } else {
+        println!("  ✗ Binary:    {} (NOT FOUND)", local_bin);
+        println!("    Run: ./setup.sh install");
+        issues += 1;
+    }
+
+    if std::path::Path::new(&menu_entry).exists() {
+        println!("  ✓ Menu:      {}", menu_entry);
+    } else {
+        println!("  ✗ Menu:      {} (NOT FOUND)", menu_entry);
+        println!("    Run: ./setup.sh repair    (to recreate the menu entry)");
+        issues += 1;
+    }
+
+    if std::path::Path::new(&autostart_entry).exists() {
+        println!("  ✓ Autostart: {}", autostart_entry);
+    } else {
+        println!("  ✗ Autostart: {} (NOT FOUND)", autostart_entry);
+        println!("    Run: shroud autostart on    (to start on login)");
+        issues += 1;
+    }
+
+    let socket_path = crate::ipc::protocol::socket_path();
+    if socket_path.exists() {
+        println!("  ✓ Daemon:    running ({})", socket_path.display());
+    } else {
+        println!("  ⚠ Daemon:    not running (no socket at {})", socket_path.display());
+        println!("    Start with: {} &", local_bin);
+    }
+
+    println!();
+
     println!("=== Firewall Binaries ===");
     let ipt = paths::iptables();
     let ip6 = paths::ip6tables();

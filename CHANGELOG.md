@@ -14,6 +14,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.1] - 2026-05-24
+
+### Fixed
+
+- **Killswitch state-sync no longer floods sudo / blocks the event loop.**
+  The supervisor's NM-poll path (every `NM_POLL_INTERVAL_SECS`, i.e.
+  every 2s) was calling `sync_killswitch_state()` which in turn ran a
+  synchronous `std::process::Command sudo -n nft list table inet
+  shroud_killswitch` (or `iptables -C`) inside the tokio runtime.
+  A 14h50m session was observed to produce **~26,700 sudo invocations,
+  16:55 of CPU time, 18.7 MB RAM peak**, and to drown the auth
+  journal under one log line every two seconds. Two changes:
+  1. The per-poll call in `src/supervisor/handlers/nm.rs` was removed.
+     The 30s call in `src/supervisor/handlers/health.rs` remains the
+     sole periodic firewall reality-check; the per-shutdown explicit
+     `sync_state()` in `src/supervisor/handlers/system.rs` and the
+     startup detection in `src/supervisor/mod.rs::new` are unchanged.
+  2. New `KillSwitch::is_actually_enabled_async()` and
+     `KillSwitch::sync_state_async()` use `tokio::process::Command`,
+     so the remaining 30s reality-check no longer stalls a runtime
+     worker thread for the duration of the `sudo` subprocess. The
+     blocking variants are retained for startup/shutdown one-shots.
+  Net effect: **15x reduction in sudo call frequency** (30/min → 2/min)
+  and zero blocking I/O on the hot event-loop path.
+
+- **`setup.sh update` now recreates desktop files.** Previously
+  `do_update` only ran `install_binary` + `install_completions`. If a
+  KDE/GNOME menu-cache prune or an accidental `rm` removed
+  `~/.local/share/applications/shroud.desktop` between installs, a
+  subsequent `setup.sh update` would silently leave the menu entry
+  gone — users would see the binary working from a terminal but no
+  tray icon and no entry in the application menu. `do_update` now
+  invokes `create_desktop_files` (idempotent) so a re-update always
+  restores both the menu and any companion `.desktop` artifacts.
+
+- **`shroud doctor` now reports installation health.** Added a new
+  *Installation Health* section that checks: presence of the
+  installed binary at `~/.local/bin/shroud` and whether its `--version`
+  matches `CARGO_PKG_VERSION`, presence of the menu entry at
+  `~/.local/share/applications/shroud.desktop`, presence of the XDG
+  autostart entry at `~/.config/autostart/shroud.desktop`, and
+  whether the IPC socket indicates the daemon is currently running.
+  Each failure prints a one-line remediation hint (`./setup.sh update`,
+  `./setup.sh repair`, `shroud autostart on`, etc.). The existing
+  firewall / sudo / sudoers / groups checks are unchanged.
+
+### Security
+
+- **`fuzz/Cargo.lock` patched for five GitHub Dependabot alerts** flagged
+  on the default branch immediately after the v2.4.0 push. None of the
+  vulnerable crates ship in the shroud binary or any release artifact;
+  every alert lived in the separate fuzz-target workspace lockfile and
+  affects only the `cargo fuzz` development tooling. Lock updates:
+  - `rustls-webpki` 0.103.9 -> 0.103.13. Clears GHSA-c4ch-q9vg-7c7g
+    (high, CRL panic denial-of-service via malformed BIT STRING),
+    GHSA-cqjr-pmrv-cf75 (moderate, CRLs not considered authoritative by
+    Distribution Point because of faulty matching logic),
+    GHSA-7q3m-3qm9-5wm9 (low, URI name-constraint bypass), and
+    GHSA-9447-4hjm-5286 (low, wildcard name-constraint acceptance).
+  - `rand` 0.9.2 -> 0.9.4. Clears GHSA-6g4g-crmp-7r5q (low, unsound
+    behavior when a custom logger calls `rand::rng()`).
+  Both updates are pure semver-compatible refreshes of the fuzz
+  lockfile. `cargo audit` against the production `Cargo.lock` reports
+  zero vulnerabilities; the fix is preventative for fuzz development
+  rather than a runtime security fix.
+
 ## [2.4.0] - 2026-05-24
 
 ### Changed

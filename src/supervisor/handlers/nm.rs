@@ -54,10 +54,15 @@ impl super::super::VpnSupervisor {
 
     /// Poll NetworkManager state and dispatch appropriate events
     pub(crate) async fn poll_nm_state(&mut self) {
-        // Sync kill switch state with iptables reality on every poll cycle.
-        // This catches desync even when VPN is disconnected (health checks
-        // only run when connected).
-        self.sync_killswitch_state();
+        // v2.4.1: The per-poll `sync_killswitch_state()` call was removed.
+        // Previously this issued a blocking `sudo nft list table inet
+        // shroud_killswitch` every NM_POLL_INTERVAL_SECS (2s), producing
+        // ~26,700 sudo invocations per 14h of uptime, ~2% sustained CPU,
+        // and a flooded auth journal — all to detect a desync that the
+        // 30s health-check path already catches with adequate latency.
+        // The shutdown handlers still call `sync_state()` explicitly,
+        // and the supervisor constructor still does a one-shot startup
+        // sync to detect rules left over from a previous session.
 
         // CRITICAL: Skip polling entirely while a VPN switch is in progress
         if self.switch_ctx.in_progress {

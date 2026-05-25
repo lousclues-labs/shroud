@@ -18,8 +18,12 @@ impl super::super::VpnSupervisor {
             return;
         }
 
-        // Also sync kill switch state periodically
-        self.sync_killswitch_state();
+        // Also sync kill switch state periodically.
+        // This is the sole periodic firewall reality-check; the per-poll
+        // call previously run from `poll_nm_state` was removed in v2.4.1
+        // because it generated tens of thousands of sudo invocations
+        // per day with no operational benefit at sub-30s granularity.
+        self.sync_killswitch_state().await;
 
         // Only run health checks when in Connected or Degraded state
         let server = match &self.machine.state {

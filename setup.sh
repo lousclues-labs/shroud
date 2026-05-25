@@ -1377,6 +1377,11 @@ do_update() {
     build_binary
     stop_existing
     install_binary
+    # v2.4.1: recreate desktop files on update too. Previously, if KDE/GNOME
+    # pruned ~/.local/share/applications/shroud.desktop or the autostart
+    # entry, running `setup.sh update` would silently leave them gone and
+    # the user would lose the menu entry. Recreating is idempotent.
+    create_desktop_files
     install_completions
     verify_installation
 
