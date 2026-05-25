@@ -17,6 +17,10 @@ env:
   RUST_BACKTRACE: 1
   BINARY_NAME: shroud
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build-release:
     name: Build Release
