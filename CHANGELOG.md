@@ -14,6 +14,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.2] - 2026-05-24
+
+### Fixed
+
+- **`pkg/build.sh` now accepts distro codenames.** The lousclues-pkg
+  release-build.yml workflow passes the per-target codename
+  (`noble`, `jammy`, `bookworm`, `el9`, `fedora`) as `$DISTRO`. The
+  vendored `pkg-framework` library only accepts `DISTRO=deb|rpm`, so
+  the workflow's matrix builds failed at the validation step before
+  any artifact was produced. The project-side `pkg/build.sh` wrapper
+  now translates the codename to the canonical package format
+  (`noble|jammy|bookworm` → `deb`, `el9|el10|fc40|fc41|fc42|fedora`
+  → `rpm`), exports the original codename as `$CODENAME` for any
+  hook that wants it, and passes through `deb`, `rpm`, or an empty
+  string unchanged so existing local invocations keep working. The
+  vendored framework is unchanged (no pkg-framework drift).
+
 ## [2.4.1] - 2026-05-24
 
 ### Documentation
