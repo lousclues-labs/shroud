@@ -14,6 +14,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.3] - 2026-05-25
+
+### Fixed
+
+- **`pkg/project.sh` now emits a per-codename Debian revision.**
+  lousclues-pkg's apt repo uses a single shared reprepro pool at
+  `pool/main/s/shroud/`. Before this fix, the noble, jammy, and
+  bookworm builds all produced internal Debian `Version: 2.4.2`,
+  which gave every codename the same pool filename
+  (`shroud_2.4.2_amd64.deb`). reprepro accepted the first codename's
+  bytes and rejected the rest with a sha256 mismatch (publish exit
+  254), so multi-distro apt publishing never completed cleanly.
+  `project_fpm_deb_extra_args` now sets `--iteration 1~noble1`,
+  `1~jammy1`, or `1~bookworm1` based on the `CODENAME` env exported
+  by `pkg/build.sh`. Internal versions become `2.4.3-1~noble1` etc.,
+  each codename gets a distinct pool filename, and reprepro accepts
+  all three. The `~<codename>1` suffix follows the canonical
+  Debian/Ubuntu convention: apt sorts `2.4.3-1~noble1` < `2.4.3-1`,
+  so any future generic build would still be treated as an upgrade.
+- The cosmetic `_amd64-<codename>` filename tag added downstream by
+  `pkg-signing prepare-artifacts` is unchanged; the fix only
+  affects the deb's internal control metadata. RPM packaging is
+  unaffected (the rpm repo already uses per-distro trees at
+  `www/rpm/el9/` and `www/rpm/fedora/`, so no pool collision was
+  possible there).
+
 ## [2.4.2] - 2026-05-24
 
 ### Fixed

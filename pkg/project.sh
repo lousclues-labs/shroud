@@ -253,8 +253,33 @@ EOF
 
 # Extra deb fpm flags. The pre-framework build shipped these soft
 # dependency hints; preserve them.
+#
+# Per-codename Debian revision (since v2.4.3). lousclues-pkg's
+# reprepro publishes noble, jammy, and bookworm into a single
+# shared pool (`pool/main/s/shroud/`). Without a per-codename
+# revision suffix, all three artifacts produce identical Debian
+# `Version: ${VERSION}` and collide at the pool filename
+# `shroud_${VERSION}_amd64.deb`. reprepro accepts the first .deb
+# bytes it sees and rejects the rest with a sha256 mismatch
+# (publish_bundle exit 254). Emitting `--iteration 1~<codename>1`
+# makes the internal Debian Version `${VERSION}-1~<codename>1`,
+# which gives each codename its own pool filename and lets the
+# three artifacts coexist. The `~<codename>1` suffix is the
+# canonical Debian/Ubuntu convention (apt sorts `2.4.3-1~noble1` <
+# `2.4.3-1`, so future generic builds upgrade cleanly).
+# CODENAME is set by pkg/build.sh's codename->{deb,rpm} translation
+# block before this manifest is sourced.
 project_fpm_deb_extra_args() {
-    cat <<'EOF'
+    local rev
+    case "${CODENAME:-}" in
+        noble)    rev="1~noble1" ;;
+        jammy)    rev="1~jammy1" ;;
+        bookworm) rev="1~bookworm1" ;;
+        *)        rev="1" ;;
+    esac
+    cat <<EOF
+--iteration
+${rev}
 --deb-recommends
 nftables
 --deb-recommends
