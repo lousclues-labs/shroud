@@ -76,6 +76,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exercised by a new `fuzz_vpn_endpoint` target. The OpenVPN `remote`
   parser now matches the `remote` key exactly, fixing a latent
   false-match on `remote-cert-tls`/`remote-random`.
+- **`pkg/project.sh` generic deb build no longer carries a Debian
+  revision.** The per-codename revision support added in v2.4.3 also
+  emitted `--iteration 1` for the generic (no-`CODENAME`) build that
+  `pkg-build.yml`'s install-test job produces, making the internal
+  Debian `Version` `${VERSION}-1`. The vendored layout-check compares
+  `dpkg ${Version}` against the bare upstream `${VERSION}`, so the
+  install-test failed (`installed 2.x.y-1 != expected 2.x.y`). Generic
+  builds now emit no `--iteration`, restoring the bare `${VERSION}`;
+  the noble/jammy/bookworm builds keep their `1~<codename>1` revisions
+  for the lousclues-pkg shared reprepro pool (which never publishes a
+  generic build).
 - **README version badge corrected** from `2.2.0` to the real crate
   version.
 

@@ -264,22 +264,26 @@ EOF
 # (publish_bundle exit 254). Emitting `--iteration 1~<codename>1`
 # makes the internal Debian Version `${VERSION}-1~<codename>1`,
 # which gives each codename its own pool filename and lets the
-# three artifacts coexist. The `~<codename>1` suffix is the
-# canonical Debian/Ubuntu convention (apt sorts `2.4.3-1~noble1` <
-# `2.4.3-1`, so future generic builds upgrade cleanly).
+# three artifacts coexist.
+#
+# Generic builds (no CODENAME — e.g. pkg-build.yml's install-test job,
+# which builds plain DISTRO=deb) emit NO `--iteration`, so the internal
+# Debian Version stays equal to the bare upstream `${VERSION}`. The
+# vendored install-test layout-check (Section D) compares dpkg
+# `${Version}` against the bare `${VERSION}` it expects, so a generic
+# deb must not carry a Debian revision (matching pre-v2.4.3 behavior).
+# reprepro only ever publishes the per-codename artifacts, so apt
+# ordering between a never-published generic build and the codename
+# revisions is moot.
 # CODENAME is set by pkg/build.sh's codename->{deb,rpm} translation
 # block before this manifest is sourced.
 project_fpm_deb_extra_args() {
-    local rev
     case "${CODENAME:-}" in
-        noble)    rev="1~noble1" ;;
-        jammy)    rev="1~jammy1" ;;
-        bookworm) rev="1~bookworm1" ;;
-        *)        rev="1" ;;
+        noble)    printf '%s\n' --iteration '1~noble1' ;;
+        jammy)    printf '%s\n' --iteration '1~jammy1' ;;
+        bookworm) printf '%s\n' --iteration '1~bookworm1' ;;
     esac
-    cat <<EOF
---iteration
-${rev}
+    cat <<'EOF'
 --deb-recommends
 nftables
 --deb-recommends
