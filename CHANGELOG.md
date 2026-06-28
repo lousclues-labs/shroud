@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.5] - 2026-06-28
+
+### Changed
+
+- **Linux packages renamed `shroud` → `vpn-shroud`** to match the crates.io
+  and AUR package names; the binary, service, and all paths remain `shroud`.
+  The deb/rpm carry `Provides: shroud` plus `Conflicts`/`Replaces` (deb) and
+  `Obsoletes` (rpm) so existing `shroud` installs upgrade in place. Version
+  bumped 2.4.4→2.4.5 to keep the rename unambiguous (no `shroud 2.4.4` vs
+  `vpn-shroud 2.4.4` collision). Documentation now installs under
+  `/usr/share/doc/vpn-shroud/`.
+
 ## [2.4.4] - 2026-06-28
 
 ### Security

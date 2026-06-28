@@ -20,7 +20,7 @@
 # Required scalars
 # =========================================================================
 
-PKG_NAME=shroud
+PKG_NAME=vpn-shroud
 PKG_PREFIX=SHROUD
 
 PKG_SUMMARY="Provider-agnostic VPN connection manager for Linux"
@@ -70,6 +70,14 @@ PKG_DEB_DEPENDS=(
     iptables
 )
 
+# Clean rename: the package was 'shroud' through 2.4.4; it is now
+# 'vpn-shroud' to match the crates.io and AUR names. Replaces+Conflicts
+# let the handful of existing 'shroud' installs upgrade in place; the
+# binary stays /usr/bin/shroud (PKG_BINARIES) so nothing user-facing
+# changes. provides=shroud keeps any pin referencing the old name happy.
+PKG_DEB_CONFLICTS=(shroud)
+PKG_DEB_REPLACES=(shroud)
+
 # =========================================================================
 # Optional arrays
 # =========================================================================
@@ -85,6 +93,10 @@ PKG_RPM_REQUIRES=(
     dbus-libs
     iptables
 )
+
+# Clean rename migration (see PKG_DEB_CONFLICTS above): retire the old
+# 'shroud' rpm in favor of 'vpn-shroud'.
+PKG_RPM_CONFLICTS=(shroud)
 
 # Build-time native deps. The libdbus-sys crate (transitive dep of
 # zbus) needs the libdbus development headers at compile time to
@@ -103,7 +115,7 @@ PKG_LAYOUT_CHECKS=(
     "etc/sudoers.d/shroud:440"
     "usr/share/polkit-1/actions/com.shroud.killswitch.policy:644"
     "usr/share/applications/shroud.desktop:644"
-    "usr/share/doc/shroud/shroud-headless.conf.example:644"
+    "usr/share/doc/vpn-shroud/shroud-headless.conf.example:644"
 )
 
 # The systemd unit lives at assets/shroud.service (not systemd/), and
@@ -113,7 +125,7 @@ PKG_LAYOUT_CHECKS=(
 # (the framework only appends it automatically when PKG_SYSTEMD_UNITS is
 # populated).
 
-# Extra files shipped under /usr/share/doc/shroud/. The framework copies
+# Extra files shipped under /usr/share/doc/vpn-shroud/. The framework copies
 # each to /usr/share/doc/<name>/<basename>; the docs/ tree is staged by
 # project_stage_extra below so the docs/ subdir is preserved.
 PKG_EXTRA_DOC_FILES=(
@@ -197,7 +209,7 @@ project_stage_extra() {
         for doc in "$REPO_ROOT"/docs/*.md; do
             [[ -e "$doc" ]] || continue
             install -D -m 0644 "$doc" \
-                "$root/usr/share/doc/shroud/docs/$(basename "$doc")"
+                "$root/usr/share/doc/vpn-shroud/docs/$(basename "$doc")"
         done
     fi
 }
@@ -284,12 +296,26 @@ project_fpm_deb_extra_args() {
         bookworm) printf '%s\n' --iteration '1~bookworm1' ;;
     esac
     cat <<'EOF'
+--provides
+shroud
 --deb-recommends
 nftables
 --deb-recommends
 polkit
 --deb-suggests
 network-manager-openvpn
+EOF
+}
+
+# Extra rpm fpm flags. Mirror of the deb rename migration: vpn-shroud
+# obsoletes/provides the old 'shroud' rpm so dnf upgrades existing
+# installs in place (PKG_RPM_CONFLICTS handles the conflict side).
+project_fpm_rpm_extra_args() {
+    cat <<'EOF'
+--provides
+shroud
+--rpm-tag
+Obsoletes: shroud
 EOF
 }
 
