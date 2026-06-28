@@ -324,6 +324,15 @@ table inet {table} {{
         for ip in vpn_server_ips {
             match ip {
                 IpAddr::V4(v4) => {
+                    // SECURITY: Validate before interpolation, consistent with
+                    // every other IP placed into the nft ruleset (SHROUD-VULN-022).
+                    if !crate::killswitch::rules::is_valid_ipv4(&v4.to_string()) {
+                        warn!(
+                            "Rejected invalid VPN server IP in nft (possible injection): {}",
+                            v4
+                        );
+                        continue;
+                    }
                     rules.push_str(&format!("        ip daddr {} accept\n", v4));
                 }
                 IpAddr::V6(v6) => {

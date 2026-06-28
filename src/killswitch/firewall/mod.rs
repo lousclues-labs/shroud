@@ -406,11 +406,25 @@ impl KillSwitch {
         self.robust_iptables_cleanup().await;
 
         // Detect VPN server IPs first
-        let vpn_server_ips = Self::detect_all_vpn_server_ips().await;
+        let scan = crate::nm::detect_vpn_endpoints().await;
+        let vpn_server_ips = scan.ips;
         if !vpn_server_ips.is_empty() {
             info!(
                 "Detected {} VPN server IPs to whitelist",
                 vpn_server_ips.len()
+            );
+        }
+
+        // SECURITY/UX: Surface hostname-only configs clearly (Principle XI).
+        // SHROUD-VULN-041 forbids resolving the hostname on the unprotected
+        // enable path, so such a VPN gets no server-IP allow rule and the kill
+        // switch may block the very handshake that establishes the tunnel.
+        for name in &scan.hostname_vpns {
+            warn!(
+                "VPN '{}' uses a hostname endpoint; kill switch cannot pre-whitelist it. \
+                 The handshake may be blocked — use an IP endpoint, or connect before \
+                 enabling the kill switch. (DNS is not resolved here by design.)",
+                name
             );
         }
 
@@ -587,175 +601,17 @@ impl KillSwitch {
         }
     }
 
-    /// Detect the VPN tunnel interface from the system
-    #[allow(dead_code)]
-    pub async fn detect_vpn_interface() -> Option<String> {
-        let output = Command::new("ip")
-            .args(["link", "show"])
-            .output()
-            .await
-            .ok()?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        for line in stdout.lines() {
-            // Look for tun/tap interfaces
-            if (line.contains("tun") || line.contains("tap") || line.contains("wg"))
-                && line.contains("state UP")
-            {
-                // Extract interface name (format: "X: tunN: <FLAGS>...")
-                if let Some(name) = line.split(':').nth(1) {
-                    return Some(name.trim().to_string());
-                }
-            }
-        }
-
-        None
-    }
-
-    /// Get the VPN server IP from the active OpenVPN connection
-    #[allow(dead_code)]
-    pub async fn detect_vpn_server_ip() -> Option<IpAddr> {
-        // Try to get the remote IP from the tun interface route
-        let output = Command::new("ip")
-            .args(["route", "show", "dev", "tun0"])
-            .output()
-            .await
-            .ok()?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        // Look for the VPN gateway in the route output
-        for line in stdout.lines() {
-            if line.contains("via") {
-                if let Some(ip_str) = line.split_whitespace().nth(2) {
-                    if let Ok(ip) = ip_str.parse() {
-                        return Some(ip);
-                    }
-                }
-            }
-        }
-
-        None
-    }
-
-    /// Detect all VPN server IPs from NetworkManager connection configs
-    pub async fn detect_all_vpn_server_ips() -> Vec<IpAddr> {
-        let mut ips = Vec::new();
-
-        // Get VPN connection details from nmcli
-        let output = Command::new("nmcli")
-            .args(["-t", "-f", "NAME,TYPE", "connection", "show"])
-            .output()
-            .await;
-
-        let connections = match output {
-            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
-            _ => return ips,
-        };
-
-        // Find VPN connections and get their remote IPs
-        for line in connections.lines() {
-            // SECURITY: Use rsplitn to handle connection names containing ':'
-            // (SHROUD-VULN-027). Type field is rightmost and never contains ':'.
-            let parts: Vec<&str> = line.rsplitn(2, ':').collect();
-            if parts.len() >= 2 && parts[0] == "vpn" {
-                // rsplitn reverses: [type, name]
-                let conn_name = parts[1];
-
-                // Get the remote IP for this VPN connection
-                if let Some(ip) = Self::get_vpn_remote_ip(conn_name).await {
-                    if !ips.contains(&ip) {
-                        info!("Found VPN server IP for '{}': {}", conn_name, ip);
-                        ips.push(ip);
-                    }
-                }
-            }
-        }
-
-        ips
-    }
-
-    /// Get the remote IP address for a specific VPN connection
-    async fn get_vpn_remote_ip(conn_name: &str) -> Option<IpAddr> {
-        // Get VPN connection details
-        let output = Command::new("nmcli")
-            .args(["-t", "-f", "vpn.data", "connection", "show", conn_name])
-            .output()
-            .await
-            .ok()?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        // Parse vpn.data
-        for line in stdout.lines() {
-            if line.starts_with("vpn.data:") {
-                let data = line.trim_start_matches("vpn.data:");
-                for item in data.split(',') {
-                    let item = item.trim();
-                    if item.starts_with("remote") {
-                        if let Some(value) = item.split('=').nth(1) {
-                            let remote = value.trim();
-                            let host = if let Some(colon_pos) = remote.rfind(':') {
-                                if remote[colon_pos + 1..].parse::<u16>().is_ok() {
-                                    &remote[..colon_pos]
-                                } else {
-                                    remote
-                                }
-                            } else {
-                                remote
-                            };
-
-                            if let Ok(ip) = host.parse::<IpAddr>() {
-                                return Some(ip);
-                            }
-                            // SECURITY: Do NOT resolve hostnames here (SHROUD-VULN-041).
-                            // DNS resolution during kill switch enablement happens on the
-                            // unprotected network, allowing DNS poisoning to inject
-                            // attacker-controlled IPs into the whitelist. Only use IPs
-                            // directly from the NM connection profile.
-                            warn!(
-                                "VPN '{}' uses hostname '{}' — cannot whitelist without DNS. \
-                                 Use IP address in VPN config for kill switch compatibility.",
-                                conn_name, host
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
-        None
-    }
-
-    /// Resolve a hostname to an IP address.
+    /// Detect all VPN server IPs to whitelist, across every configured
+    /// OpenVPN and WireGuard connection.
     ///
-    /// NOTE: Not used during kill switch enablement (SHROUD-VULN-041).
-    /// Kept for potential future use with trusted/cached DNS resolution.
-    #[allow(dead_code)]
-    async fn resolve_hostname(hostname: &str) -> Option<IpAddr> {
-        let output = Command::new("getent")
-            .args(["ahosts", hostname])
-            .output()
-            .await
-            .ok()?;
-
-        if !output.status.success() {
-            return None;
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        for line in stdout.lines() {
-            if let Some(ip_str) = line.split_whitespace().next() {
-                if let Ok(ip) = ip_str.parse::<IpAddr>() {
-                    if ip.is_ipv4() {
-                        return Some(ip);
-                    }
-                }
-            }
-        }
-
-        None
+    /// This is a thin wrapper over [`crate::nm::detect_vpn_endpoints`], which
+    /// owns the nmcli I/O (routed through the centralized, `SHROUD_NMCLI`-gated
+    /// command path — SHROUD-VULN-005) and the pure per-type endpoint parsing.
+    /// Hostname-only configurations are surfaced by the caller; see
+    /// [`crate::nm::connections::VpnEndpointScan`]. No DNS resolution occurs
+    /// (SHROUD-VULN-041).
+    pub async fn detect_all_vpn_server_ips() -> Vec<IpAddr> {
+        crate::nm::detect_vpn_endpoints().await.ips
     }
 }
 
@@ -892,6 +748,62 @@ mod tests {
 
         assert!(dns_accept_pos < dns_drop_pos);
         assert!(dns_drop_pos < general_tun_pos);
+    }
+
+    /// A WireGuard endpoint must produce a validated server-IP allow rule in
+    /// BOTH backends (SHROUD-VULN-055). Exercises the full path: nmcli
+    /// `wireguard.peers` output → pure parser → IpAddr → rule builders.
+    #[test]
+    fn test_wireguard_ipv4_endpoint_whitelisted_both_backends() {
+        use crate::nm::parsing::{parse_wireguard_endpoints, VpnEndpoint};
+
+        let nmcli_out = "wireguard.peers:K1= allowed-ips=0.0.0.0/0 endpoint=192.0.2.7:51820\n";
+        let ips: Vec<IpAddr> = parse_wireguard_endpoints(nmcli_out)
+            .into_iter()
+            .filter_map(|e| match e {
+                VpnEndpoint::Ip(ip) => Some(ip),
+                VpnEndpoint::Hostname(_) => None,
+            })
+            .collect();
+        assert_eq!(ips, vec!["192.0.2.7".parse::<IpAddr>().unwrap()]);
+
+        let ks = KillSwitch::new();
+
+        // iptables backend
+        let ipt = ks.build_complete_script(&ips);
+        assert!(ipt.contains("-A SHROUD_KILLSWITCH -d 192.0.2.7 -j ACCEPT"));
+
+        // nftables backend
+        let nft = ks.build_nft_ruleset(&ips);
+        assert!(nft.contains("ip daddr 192.0.2.7 accept"));
+    }
+
+    /// An IPv6 WireGuard endpoint is whitelisted by the atomic nftables backend
+    /// (preferred via select_backend). The iptables backend intentionally does
+    /// NOT emit a per-server IPv6 rule, because its IPv6 cleanup list is static
+    /// and a dynamic rule would orphan on teardown (Principle III).
+    #[test]
+    fn test_wireguard_ipv6_endpoint_nft_only() {
+        use crate::nm::parsing::{parse_wireguard_endpoints, VpnEndpoint};
+
+        let nmcli_out = "wireguard.peers:K1= allowed-ips=::/0 endpoint=[2001:db8::1]:51820\n";
+        let ips: Vec<IpAddr> = parse_wireguard_endpoints(nmcli_out)
+            .into_iter()
+            .filter_map(|e| match e {
+                VpnEndpoint::Ip(ip) => Some(ip),
+                VpnEndpoint::Hostname(_) => None,
+            })
+            .collect();
+        assert_eq!(ips, vec!["2001:db8::1".parse::<IpAddr>().unwrap()]);
+
+        // nftables whitelists the IPv6 server IP when IPv6 is not fully blocked.
+        let ks = KillSwitch::with_config(DnsMode::Tunnel, Ipv6Mode::Tunnel, true, Vec::new());
+        let nft = ks.build_nft_ruleset(&ips);
+        assert!(nft.contains("ip6 daddr 2001:db8::1 accept"));
+
+        // iptables backend does not emit a dynamic IPv6 server rule.
+        let ipt = ks.build_complete_script(&ips);
+        assert!(!ipt.contains("2001:db8::1"));
     }
 }
 

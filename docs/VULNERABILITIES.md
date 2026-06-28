@@ -7,10 +7,10 @@ Scope:
 - External dependency advisories tracked with RustSec IDs (RUSTSEC-*)
 
 Source of truth: CHANGELOG.md
-Last updated: 2026-05-10
+Last updated: 2026-06-28
 
 Current totals from the changelog:
-- Internal vulnerabilities: 41
+- Internal vulnerabilities: 43
 - External dependency advisories: 5
 
 ---
@@ -73,6 +73,8 @@ Current totals from the changelog:
 | SHROUD-VULN-052 | Medium | 1.16.1 | log file creation uses OpenOptionsExt::mode(0o600) directly instead of post-creation chmod. Eliminates TOCTOU window where log files were briefly world-readable during creation and rotation |
 | SHROUD-VULN-053 | Medium | 1.17.0 | - **cli: UTF-8 panic in VPN name validation** - validate_vpn_name() panicked on multi-byte UTF-8 strings exceeding MAX_VPN_NAME_LENGTH due to byte-index slicing (&value[..50]). Fixed to use .chars().take(50) for safe truncation at character boundaries. Discovered by fuzz testing in <1 second |
 | SHROUD-VULN-054 | High | 1.16.2 | DOH_PROVIDER_IPS in firewall.rs and DOH_PROVIDERS in rules.rs were two separate lists that had drifted - firewall.rs had 16 entries (AdGuard, CleanBrowsing, Comodo) while rules.rs had only 8. Deduplicated into single canonical list in rules::DOH_PROVIDERS (now 14 entries). firewall.rs uses a use ... as alias. A DNS leak from adding a provider to one list but not the other is no longer possible |
+| SHROUD-VULN-055 | High | 2.4.4 | WireGuard VPN server IPs are now whitelisted by the kill switch. detect_all_vpn_server_ips() matched only OpenVPN connections (parts[0] == "vpn") and parsed vpn.data remote=host:port, which does not exist for WireGuard, so enabling the kill switch for a WireGuard connection added no server-IP allow rule and could block the tunnel handshake. Detection now accepts wireguard connections and reads the wireguard.peers endpoint field (IPv6-bracket aware, port stripped); the validated IP flows into both the iptables and nftables allowlists. No DNS resolution is performed (SHROUD-VULN-041 preserved) - hostname endpoints are surfaced to the user instead |
+| SHROUD-VULN-056 | Medium | 2.4.4 | Kill switch server-IP detection no longer bypasses hardened nmcli resolution. The detection path used a bare Command::new("nmcli"), bypassing crate::nm::nmcli_command() and the SHROUD_NMCLI #[cfg(test)] gating (SHROUD-VULN-005) used everywhere else. Routed through the centralized helper; no bare Command::new("nmcli") remains in src/killswitch/ |
 
 ---
 
@@ -294,6 +296,16 @@ Current totals from the changelog:
 - Fixed in: 1.16.2
 - Severity: High
 - Changelog remediation: DOH_PROVIDER_IPS in firewall.rs and DOH_PROVIDERS in rules.rs were two separate lists that had drifted - firewall.rs had 16 entries (AdGuard, CleanBrowsing, Comodo) while rules.rs had only 8. Deduplicated into single canonical list in rules::DOH_PROVIDERS (now 14 entries). firewall.rs uses a use ... as alias. A DNS leak from adding a provider to one list but not the other is no longer possible
+
+### SHROUD-VULN-055
+- Fixed in: 2.4.4
+- Severity: High
+- Changelog remediation: WireGuard VPN server IPs are now whitelisted by the kill switch. Server-IP detection previously matched only OpenVPN connections and parsed the OpenVPN-shaped vpn.data remote=host:port, so WireGuard connections received no server-IP allow rule and the kill switch could block the handshake that establishes the tunnel. Detection now also accepts wireguard connections, reads the wireguard.peers endpoint host (IPv6-bracket aware, port stripped) via pure parsers in src/nm/parsing.rs, re-validates each IPv4 via killswitch::rules::is_valid_ipv4, and feeds the result into both the iptables and nftables allowlists. No DNS resolution occurs on the enable path (SHROUD-VULN-041 preserved); hostname-only configs are surfaced via a connect/enable warning and a `shroud verify` check.
+
+### SHROUD-VULN-056
+- Fixed in: 2.4.4
+- Severity: Medium
+- Changelog remediation: Kill switch server-IP detection routed through a bare Command::new("nmcli"), bypassing the centralized crate::nm::nmcli_command() helper and its SHROUD_NMCLI #[cfg(test)] gating (SHROUD-VULN-005). The detection logic was moved into the nm module and now uses nmcli_command() exclusively; no bare Command::new("nmcli") remains in src/killswitch/.
 
 ## Detailed Remediation Notes (External Advisories)
 

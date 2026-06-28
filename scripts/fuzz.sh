@@ -16,7 +16,7 @@
 set -euo pipefail
 
 DURATION="${1:-60}"
-TARGETS=(fuzz_ipc_command fuzz_config_parse fuzz_vpn_name)
+TARGETS=(fuzz_ipc_command fuzz_config_parse fuzz_vpn_name fuzz_vpn_endpoint)
 FAILED=0
 
 echo "═══════════════════════════════════════════════════════════════"

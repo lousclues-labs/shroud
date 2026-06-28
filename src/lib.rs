@@ -20,6 +20,13 @@ pub mod cli {
     pub mod validation;
 }
 
+// NM output parsing is a leaf module (only depends on `state` types). Exposed
+// so fuzz targets and integration tests can exercise the VPN endpoint parsers
+// (parse_wireguard_endpoints / parse_openvpn_endpoints / endpoint_host).
+pub mod nm {
+    pub mod parsing;
+}
+
 // IPC protocol is a near-leaf module (only depends on cli::validation)
 pub mod ipc {
     pub mod protocol;

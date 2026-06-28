@@ -167,6 +167,10 @@ pub async fn run_verification(verbose: bool) -> Result<VerificationReport, Strin
         }
     }
 
+    // Backend-independent: surface VPN configs the kill switch cannot
+    // pre-whitelist (hostname endpoints — SHROUD-VULN-041).
+    checks.push(check_hostname_endpoints().await);
+
     checks.push(check_state_agreement(actual_enabled).await);
 
     let overall = aggregate_verdict(&checks);
@@ -885,6 +889,41 @@ fn check_no_rogue_rules_nft(snap: &NftSnapshot, verbose: bool) -> CheckResult {
         "policy drop covers OUTPUT",
         Some(snap.table_output.clone()).filter(|_| verbose),
     )
+}
+
+/// Check for VPN configurations whose endpoint is a hostname.
+///
+/// Such a VPN gets no server-IP allow rule, because resolving the hostname on
+/// the unprotected enable path is forbidden (SHROUD-VULN-041). The kill switch
+/// can then block the handshake that establishes the tunnel. This is surfaced
+/// as a `Warn` (Principle XI — Security Through Clarity), never a `Fail`: the
+/// fail-closed default is intentional and must not be weakened. No DNS
+/// resolution is performed here.
+async fn check_hostname_endpoints() -> CheckResult {
+    let name = "hostname_endpoints";
+    let desc = "VPN endpoints can be pre-whitelisted";
+    let scan = crate::nm::detect_vpn_endpoints().await;
+    if scan.hostname_vpns.is_empty() {
+        CheckResult::pass(
+            name,
+            desc,
+            "All VPN endpoints are IP literals (or no VPNs configured)",
+            None,
+        )
+    } else {
+        let list = scan.hostname_vpns.join(", ");
+        CheckResult::warn(
+            name,
+            desc,
+            format!(
+                "VPN(s) [{}] use a hostname endpoint; kill switch cannot pre-whitelist them. \
+                 The handshake may be blocked — use an IP endpoint or connect before enabling. \
+                 (No DNS resolution is performed here by design — SHROUD-VULN-041.)",
+                list
+            ),
+            Some(list),
+        )
+    }
 }
 
 async fn check_state_agreement(actual_enabled: bool) -> CheckResult {

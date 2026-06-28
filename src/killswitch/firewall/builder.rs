@@ -69,12 +69,37 @@ impl KillSwitch {
         s.push_str(&self.build_doh_blocking_rules());
 
         for ip in vpn_ips {
-            if let IpAddr::V4(v4) = ip {
-                s.push_str(&format!(
-                    "{} -A SHROUD_KILLSWITCH -d {} -j ACCEPT\n",
-                    iptables(),
-                    v4
-                ));
+            match ip {
+                IpAddr::V4(v4) => {
+                    // SECURITY: Validate before interpolation, consistent with
+                    // every other IP placed into a rule (SHROUD-VULN-022 family).
+                    if !crate::killswitch::rules::is_valid_ipv4(&v4.to_string()) {
+                        warn!(
+                            "Rejected invalid VPN server IP (possible injection): {}",
+                            v4
+                        );
+                        continue;
+                    }
+                    s.push_str(&format!(
+                        "{} -A SHROUD_KILLSWITCH -d {} -j ACCEPT\n",
+                        iptables(),
+                        v4
+                    ));
+                }
+                IpAddr::V6(v6) => {
+                    // The iptables backend keeps IPv6 handling in a separate
+                    // ip6tables OUTPUT script with a *static* cleanup list
+                    // (ip6tables::IPV6_OUTPUT_RULES). A dynamic per-server IPv6
+                    // allow rule there would be orphaned on cleanup (Principle
+                    // III — Leave No Trace). The atomic nftables backend
+                    // whitelists IPv6 server IPs correctly and is preferred
+                    // (select_backend). Fail loud rather than drop silently.
+                    warn!(
+                        "VPN server IP {} is IPv6; the iptables backend cannot pre-whitelist \
+                         it. Use the nftables backend for IPv6 endpoint support.",
+                        v6
+                    );
+                }
             }
         }
 

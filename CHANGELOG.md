@@ -14,6 +14,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.4.4] - 2026-06-28
+
+### Security
+
+- **WireGuard VPN server IPs are now whitelisted by the kill switch**
+  (SHROUD-VULN-055, High). `detect_all_vpn_server_ips()` previously
+  filtered NetworkManager connections to `parts[0] == "vpn"` (OpenVPN
+  only) and parsed the OpenVPN-shaped `vpn.data remote=host:port`, which
+  does not exist for WireGuard. As a result, enabling (or re-enabling)
+  the kill switch for a WireGuard connection added **no** server-IP allow
+  rule, so the kill switch could block the very handshake that
+  establishes the tunnel. Detection now also accepts `wireguard`
+  connections and reads the correct nmcli field — `wireguard.peers` — to
+  extract each peer's `endpoint=` host (IPv6-bracket aware, port
+  stripped). The detected IP flows into the same allowlist consumed by
+  **both** the iptables and nftables builders. No DNS resolution is
+  performed (SHROUD-VULN-041 is preserved): a WireGuard peer whose
+  endpoint is a hostname is surfaced to the user rather than resolved on
+  the unprotected network.
+- **Kill switch server-IP detection no longer bypasses hardened nmcli
+  resolution** (SHROUD-VULN-056, Medium). The server-IP detection path
+  called a bare `Command::new("nmcli")`, bypassing the centralized
+  `crate::nm::nmcli_command()` helper and the `SHROUD_NMCLI`
+  `#[cfg(test)]` gating used everywhere else (SHROUD-VULN-005). The two
+  affected functions now route through the same helper as the rest of the
+  codebase, restoring test-mocking consistency and ensuring production
+  builds always resolve nmcli from `PATH`. No bare `Command::new("nmcli")`
+  remains in `src/killswitch/`.
+
+### Fixed
+
+- **Multi-tunnel server-IP detection.** Server-IP detection now enumerates
+  **all** configured OpenVPN and WireGuard connections instead of a single
+  one, so simultaneous tunnels are each whitelisted. Detected IPs are
+  deduplicated and re-validated through `killswitch::rules::is_valid_ipv4`
+  before interpolation into firewall rules, matching the validation
+  applied at every other rule-construction site.
+- **Hostname-only VPN configs are now surfaced clearly** instead of being
+  buried in a debug log (Principle XI — Security Through Clarity). When
+  the kill switch is enabled, each VPN whose only endpoint is a hostname
+  emits a one-line warning explaining that the kill switch cannot
+  pre-whitelist it (the handshake may be blocked) and that DNS is
+  intentionally not resolved on the unprotected path. The read-only
+  `shroud verify` output gained a matching check: *"VPN '<name>' uses a
+  hostname endpoint; kill switch cannot pre-whitelist it."* This is a
+  `Warn`, never a `Fail` — the fail-closed default is unchanged.
+- **Removed dead, `tun0`-hardcoded interface detection.** The unused
+  `detect_vpn_server_ip()` (only inspected `tun0`), `detect_vpn_interface()`
+  (matched interface names by unanchored `contains("tun")`, so it could
+  match `tun-bridge`/`tunfoo`), and `resolve_hostname()` (a DNS resolver
+  that must never run on the enable path) were deleted rather than fixed,
+  per Principle V (Complexity Is Debt). The kill switch already allows
+  tunnel egress via kernel `tun+`/`tap+`/`wg+` wildcards, so no interface
+  enumeration is needed.
+- **Pure, fuzzable endpoint parsers.** WireGuard/OpenVPN endpoint parsing
+  now lives in pure functions in `src/nm/parsing.rs`
+  (`parse_wireguard_endpoints`, `parse_openvpn_endpoints`, `endpoint_host`,
+  `classify_endpoint_host`), unit-tested for IPv4, IPv6-with-brackets,
+  `host:port`, hostname-rejected-as-non-IP, and multiple peers, and
+  exercised by a new `fuzz_vpn_endpoint` target. The OpenVPN `remote`
+  parser now matches the `remote` key exactly, fixing a latent
+  false-match on `remote-cert-tls`/`remote-random`.
+- **README version badge corrected** from `2.2.0` to the real crate
+  version.
+
 ## [2.4.3] - 2026-05-25
 
 ### Fixed

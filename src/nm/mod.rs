@@ -35,6 +35,9 @@ pub(crate) fn nmcli_command() -> String {
 pub use client::{connect, get_active_vpn};
 // Re-exports used by supervisor handlers
 pub use connections::{get_vpn_type, list_vpn_connections_with_types};
+// Re-export used by the kill switch and verifier for server-IP detection.
+// The returned `connections::VpnEndpointScan` is reachable via its module path.
+pub use connections::detect_vpn_endpoints;
 #[cfg(test)]
 pub use mock::{MockNmClient, NmCall};
 #[cfg(test)]

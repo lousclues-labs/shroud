@@ -36,6 +36,11 @@ path = "fuzz_targets/fuzz_vpn_name.rs"
 doc = false
 
 [[bin]]
+name = "fuzz_vpn_endpoint"
+path = "fuzz_targets/fuzz_vpn_endpoint.rs"
+doc = false
+
+[[bin]]
 name = "fuzz_state_machine"
 path = "fuzz_targets/fuzz_state_machine.rs"
 doc = false
