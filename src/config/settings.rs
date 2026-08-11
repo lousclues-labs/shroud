@@ -34,6 +34,18 @@
 //! # - tunnel: Allow IPv6 only via VPN tunnel interfaces
 //! # - off: No special IPv6 handling (legacy)
 //! ipv6_mode = "block"
+//!
+//! [killswitch]
+//! # Allow LAN traffic while the kill switch is active
+//! allow_lan = true
+//! # Restrict LAN to common local-service ports only
+//! lan_restrict_ports = false
+//! # Kill-switch ordering vs. connecting:
+//! # - true  (default): enable BEFORE connecting (fail-closed; needs a
+//! #          whitelistable server IP — blocks hostname-only endpoints)
+//! # - false (connect-first): suspend during the handshake so DNS can resolve
+//! #          a hostname endpoint, then re-enable after a successful connect
+//! pre_connect = true
 //! ```
 
 use crate::cli::validation::validate_vpn_name;
@@ -163,6 +175,19 @@ pub struct KillSwitchConfig {
     /// Blocks arbitrary TCP/UDP to LAN devices.
     #[serde(default)]
     pub lan_restrict_ports: bool,
+    /// Kill-switch ordering relative to connecting.
+    ///
+    /// `true` (default, fail-closed): enable the kill switch BEFORE connecting
+    /// so no traffic leaks during the handshake. Needs a whitelistable server
+    /// IP, which is unavailable for hostname-only endpoints (e.g. NordVPN
+    /// `*.nordvpn.com` remotes) — the handshake can then be blocked.
+    ///
+    /// `false` (connect-first, usability-first): suspend the kill switch during
+    /// the handshake so DNS can resolve a hostname endpoint, then re-enable it
+    /// after a successful connect. Trades a brief leak window (and fail-open if
+    /// a (re)connect fails) for reliable connects.
+    #[serde(default = "default_true")]
+    pub pre_connect: bool,
 }
 
 impl Default for KillSwitchConfig {
@@ -170,6 +195,7 @@ impl Default for KillSwitchConfig {
         Self {
             allow_lan: true,
             lan_restrict_ports: false,
+            pre_connect: true,
         }
     }
 }
@@ -232,6 +258,10 @@ pub struct Config {
 }
 
 fn default_block_doh() -> bool {
+    true
+}
+
+fn default_true() -> bool {
     true
 }
 

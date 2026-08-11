@@ -149,9 +149,24 @@ cp autostart/shroud.desktop ~/.config/autostart/
 
 ## Kill Switch Setup
 
-The kill switch needs root to modify iptables. We use a sudoers rule so you don't have to type your password every time.
+The kill switch needs root to modify iptables/nftables. We use a sudoers rule so you don't have to type your password every time.
 
-### Automatic
+### Recommended: scoped wrapper (required on sudo-rs)
+
+The wrapper grants passwordless access only to a validating shim that is
+restricted to Shroud's own firewall chains/table — it cannot modify the wider
+firewall. It is also the only method that works on **sudo-rs** (Ubuntu
+25.10+/26.04), which rejects the wildcard sudoers rules used below.
+
+```bash
+sudo ./assets/fw-wrapper/install.sh
+```
+
+This installs `/usr/local/lib/shroud/shroud-{iptables,ip6tables,nft}` plus a
+scoped `/etc/sudoers.d/shroud` (validated with `visudo -c` before it lands).
+Restart the daemon afterwards so it picks up the wrapper paths.
+
+### Automatic (legacy, classic sudo only)
 
 ```bash
 ./setup.sh --install-sudoers

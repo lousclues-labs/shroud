@@ -4,6 +4,15 @@
 //! Firewall binary path detection.
 //!
 //! Detects iptables/ip6tables/nft binaries across distros and caches results.
+//!
+//! When the scoped firewall wrapper is installed (assets/fw-wrapper, placed at
+//! `/usr/local/lib/shroud/shroud-{iptables,ip6tables,nft}`), it is preferred
+//! over the raw binary. Every privileged call then routes through a validator
+//! that restricts sudo access to Shroud's own chains/table, so the passwordless
+//! grant cannot rewrite the wider firewall. The wrapper names deliberately end
+//! in `iptables`/`ip6tables`/`nft` so the backend's legacy-detection heuristics
+//! keep working unchanged. If the wrapper is absent, detection falls back to the
+//! raw binaries exactly as before.
 
 use std::path::PathBuf;
 use std::sync::OnceLock;
@@ -14,6 +23,7 @@ static IP6TABLES_PATH: OnceLock<PathBuf> = OnceLock::new();
 static NFT_PATH: OnceLock<PathBuf> = OnceLock::new();
 
 const IPTABLES_CANDIDATES: &[&str] = &[
+    "/usr/local/lib/shroud/shroud-iptables",
     "/usr/bin/iptables",
     "/usr/sbin/iptables",
     "/bin/iptables",
@@ -21,13 +31,20 @@ const IPTABLES_CANDIDATES: &[&str] = &[
 ];
 
 const IP6TABLES_CANDIDATES: &[&str] = &[
+    "/usr/local/lib/shroud/shroud-ip6tables",
     "/usr/bin/ip6tables",
     "/usr/sbin/ip6tables",
     "/bin/ip6tables",
     "/sbin/ip6tables",
 ];
 
-const NFT_CANDIDATES: &[&str] = &["/usr/bin/nft", "/usr/sbin/nft", "/bin/nft", "/sbin/nft"];
+const NFT_CANDIDATES: &[&str] = &[
+    "/usr/local/lib/shroud/shroud-nft",
+    "/usr/bin/nft",
+    "/usr/sbin/nft",
+    "/bin/nft",
+    "/sbin/nft",
+];
 
 fn find_binary(candidates: &[&str], name: &str) -> PathBuf {
     for candidate in candidates {

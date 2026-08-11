@@ -1,0 +1,13 @@
+# VPN Shroud kill switch — passwordless access to the validating firewall
+# wrapper only. sudo-rs compatible: no wildcards or argument globbing.
+#
+# The three commands below are the scoped entry points in
+# /usr/local/lib/shroud/. Each self-restricts (via shroud-fw-lib.sh) to
+# Shroud's own chains (SHROUD_KILLSWITCH, SHROUD_BOOT_KS) and nftables table
+# (shroud_killswitch), so this grant cannot rewrite the wider firewall.
+#
+# Installed by assets/fw-wrapper/install.sh as /etc/sudoers.d/shroud (0440).
+# Remove to revoke: sudo rm /etc/sudoers.d/shroud
+@USER@ ALL=(root) NOPASSWD: /usr/local/lib/shroud/shroud-iptables
+@USER@ ALL=(root) NOPASSWD: /usr/local/lib/shroud/shroud-ip6tables
+@USER@ ALL=(root) NOPASSWD: /usr/local/lib/shroud/shroud-nft

@@ -46,13 +46,31 @@ impl super::super::VpnSupervisor {
         // registered the profile, the server IP may not be detected — the connection
         // would be blocked by the kill switch. This is an unlikely edge case
         // (import + connect in rapid succession).
-        if self.config_store.config.kill_switch_enabled && !self.kill_switch.is_enabled() {
-            info!("Pre-enabling kill switch before connection");
-            if let Err(e) = self.kill_switch.enable().await {
-                warn!("Failed to pre-enable kill switch: {}", e);
-            } else {
-                let mut state = self.shared_state.write().await;
-                state.kill_switch = true;
+        // Kill-switch ordering (see KillSwitchConfig::pre_connect):
+        // - pre_connect (default): fail-closed — enable BEFORE connecting so no
+        //   traffic leaks during the handshake.
+        // - connect-first: usability-first — suspend the kill switch during the
+        //   handshake so DNS can resolve a hostname endpoint; it is re-enabled
+        //   after a successful connect by the post-connect block below.
+        if self.config_store.config.kill_switch_enabled {
+            if self.config_store.config.killswitch.pre_connect {
+                if !self.kill_switch.is_enabled() {
+                    info!("Pre-enabling kill switch before connection");
+                    if let Err(e) = self.kill_switch.enable().await {
+                        warn!("Failed to pre-enable kill switch: {}", e);
+                    } else {
+                        let mut state = self.shared_state.write().await;
+                        state.kill_switch = true;
+                    }
+                }
+            } else if self.kill_switch.is_enabled() {
+                info!("connect-first: suspending kill switch during connect");
+                if let Err(e) = self.kill_switch.disable().await {
+                    warn!("Failed to suspend kill switch for connect-first: {}", e);
+                } else {
+                    let mut state = self.shared_state.write().await;
+                    state.kill_switch = false;
+                }
             }
         }
 
@@ -195,8 +213,29 @@ impl super::super::VpnSupervisor {
             }
         }
 
-        // NOTE: Kill switch stays enabled throughout - no need to re-enable
-        // VPN server IPs are already whitelisted in the rules
+        // With pre_connect ordering the kill switch stays enabled throughout.
+        // With connect-first ordering we (re-)enable it now that the tunnel is
+        // up and the live server IP is whitelistable.
+        if connection_succeeded
+            && self.config_store.config.kill_switch_enabled
+            && !self.kill_switch.is_enabled()
+        {
+            info!("connect-first: enabling kill switch after successful connect");
+            if let Err(e) = self.kill_switch.enable().await {
+                warn!("Failed to enable kill switch after connect: {}", e);
+            } else {
+                let mut state = self.shared_state.write().await;
+                state.kill_switch = true;
+            }
+        } else if !connection_succeeded
+            && self.config_store.config.kill_switch_enabled
+            && !self.config_store.config.killswitch.pre_connect
+        {
+            warn!(
+                "connect-first: connection failed; kill switch remains suspended \
+                 (usability-first fail-open). Traffic is UNPROTECTED until reconnect."
+            );
+        }
 
         // CRITICAL: Clear switching flags - we're done with the switch
         // BUT keep switching_from and set switch_completed_time to ignore late D-Bus events

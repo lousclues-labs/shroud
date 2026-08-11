@@ -14,6 +14,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.0] - 2026-08-10
+
+### Added
+
+- **Connect-first kill switch ordering** — new `[killswitch] pre_connect`
+  config option. Default `true` preserves the fail-closed behavior (enable the
+  kill switch *before* connecting). Set `false` for usability-first ordering:
+  the kill switch is suspended during the connection handshake so DNS can
+  resolve hostname endpoints (e.g. NordVPN `*.nordvpn.com`), then re-enabled
+  after a successful connect. On a failed (re)connect the kill switch remains
+  suspended (fail-open) and a warning is logged. This resolves the reconnect
+  deadlock where a closed kill switch blocks the DNS needed to re-establish a
+  hostname-based tunnel, without pinning server IPs.
+
+- **Scoped firewall wrapper** (`assets/fw-wrapper/`) — an optional, root-owned
+  validating wrapper (`shroud-{iptables,ip6tables,nft}` + `shroud-fw-lib.sh`)
+  installed to `/usr/local/lib/shroud/`. When present, `killswitch::paths`
+  routes every privileged firewall call through it. Install with
+  `sudo assets/fw-wrapper/install.sh`.
+
+### Security
+
+- **Kill switch privileged access is now confinable to Shroud's own firewall
+  objects.** The wrapper validates every `sudo` firewall invocation and permits
+  only operations on the `SHROUD_KILLSWITCH` / `SHROUD_BOOT_KS` chains and the
+  `shroud_killswitch` nftables table. It parses `nft -f -` stdin and rejects any
+  foreign table reference or `flush ruleset`. The passwordless sudo grant is
+  reduced to three fixed wrapper paths (no wildcards), so it can no longer be
+  repurposed to rewrite the wider firewall.
+
+- **sudo-rs compatibility.** On distributions shipping sudo-rs (e.g. Ubuntu
+  25.10+/26.04), the legacy `setup.sh --install-sudoers` rules were rejected
+  because sudo-rs forbids wildcards in command arguments, leaving the kill
+  switch unable to run. The wrapper's sudoers rule uses only fixed command
+  paths and validates cleanly under `visudo`/`visudo-rs`.
+
+### Changed
+
+- `killswitch::paths` prefers `/usr/local/lib/shroud/shroud-{iptables,ip6tables,
+  nft}` when installed, falling back to the raw binaries otherwise. Backend
+  logic is unchanged; the wrapper names preserve the existing legacy-detection
+  heuristics.
+
+### Fixed
+
+- Kill switch could not be enabled on sudo-rs systems (`sudo: interactive
+  authentication is required`) because the wildcard sudoers rules never
+  installed. Addressed by the scoped wrapper above.
+
 ## [2.4.5] - 2026-06-28
 
 ### Changed

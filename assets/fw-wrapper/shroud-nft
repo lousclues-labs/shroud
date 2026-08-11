@@ -1,0 +1,12 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+# Copyright (C) 2026 Louis Nelson Jr. <https://lousclues.com>
+#
+# Scoped sudo entry point for nft. Granted passwordless via
+# /etc/sudoers.d/shroud; delegates argument validation to shroud-fw-lib.sh.
+SHROUD_FW_TOOL=nft
+for c in /usr/sbin/nft /usr/bin/nft /sbin/nft /bin/nft; do
+    [ -x "$c" ] && { SHROUD_FW_REAL="$c"; break; }
+done
+export SHROUD_FW_TOOL SHROUD_FW_REAL
+. /usr/local/lib/shroud/shroud-fw-lib.sh

@@ -145,6 +145,45 @@ Remove anytime:
 sudo rm /etc/sudoers.d/shroud
 ```
 
+### Scoped wrapper (recommended; required on sudo-rs)
+
+For tighter privilege separation — and for **sudo-rs** systems (Ubuntu
+25.10+/26.04) where wildcard sudoers rules are rejected — install the validating
+wrapper instead:
+
+```bash
+sudo ./assets/fw-wrapper/install.sh
+```
+
+The passwordless grant then points only at
+`/usr/local/lib/shroud/shroud-{iptables,ip6tables,nft}`, each of which validates
+its arguments and permits only operations on the `SHROUD_KILLSWITCH` /
+`SHROUD_BOOT_KS` chains and the `shroud_killswitch` nftables table. Even
+`nft -f -` payloads are parsed to reject any foreign table or `flush ruleset`,
+so the grant cannot be repurposed to rewrite the wider firewall.
+
+## Connect-first ordering (`pre_connect`)
+
+By default the kill switch is enabled **before** connecting (fail-closed), which
+requires a whitelistable server IP. Hostname-only endpoints (e.g. NordVPN
+`*.nordvpn.com`) can't be pre-whitelisted, so a closed kill switch may block the
+DNS needed to (re)connect. Set `pre_connect = false` under `[killswitch]` for
+usability-first ordering: the kill switch is suspended during the handshake and
+re-enabled after a successful connect.
+
+```toml
+[killswitch]
+pre_connect = false
+```
+
+Trade-off: a brief unprotected window during (re)connect, and fail-open (kill
+switch stays suspended, with a logged warning) if a connect attempt fails.
+
+Remove anytime:
+```bash
+sudo rm /etc/sudoers.d/shroud
+```
+
 ---
 
 ## Recovery
