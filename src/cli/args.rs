@@ -138,6 +138,25 @@ pub enum ToggleAction {
     Status,
 }
 
+impl ParsedCommand {
+    /// Default daemon-communication timeout for this command.
+    ///
+    /// Commands that drive a VPN state change legitimately run for far longer
+    /// than the interactive default, so they get the slow-command budget unless
+    /// the user passes an explicit `--timeout`.
+    pub fn default_timeout_secs(&self) -> u64 {
+        match self {
+            ParsedCommand::Connect { .. }
+            | ParsedCommand::Switch { .. }
+            | ParsedCommand::Reconnect
+            | ParsedCommand::Disconnect
+            | ParsedCommand::KillSwitch { .. }
+            | ParsedCommand::Import { .. } => validation::SLOW_COMMAND_TIMEOUT_SECS,
+            _ => validation::DEFAULT_TIMEOUT_SECS,
+        }
+    }
+}
+
 /// Action for debug commands
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DebugAction {
@@ -156,6 +175,7 @@ pub fn parse_args() -> Result<Args, String> {
 /// Parse arguments from a string slice (for testing)
 pub fn parse_args_from(argv: &[String]) -> Result<Args, String> {
     let mut args = Args::default();
+    let mut timeout_explicit = false;
     let mut i = 0;
 
     // Parse global options first
@@ -188,6 +208,7 @@ pub fn parse_args_from(argv: &[String]) -> Result<Args, String> {
                 i += 1;
                 let value = argv.get(i).ok_or("--timeout requires a value")?;
                 args.timeout = validate_timeout(value).map_err(|e| e.to_string())?;
+                timeout_explicit = true;
             }
             "-h" | "--help" => {
                 // --help with no command shows main help
@@ -230,6 +251,12 @@ pub fn parse_args_from(argv: &[String]) -> Result<Args, String> {
     // Parse command
     if i < argv.len() {
         args.command = Some(parse_command(&argv[i..])?);
+    }
+
+    if !timeout_explicit {
+        if let Some(command) = &args.command {
+            args.timeout = command.default_timeout_secs();
+        }
     }
 
     Ok(args)
@@ -542,6 +569,38 @@ mod tests {
     fn test_verbose_flags() {
         let result = parse_args_from(&args("-v -v status")).unwrap();
         assert_eq!(result.verbose, 2);
+    }
+
+    #[test]
+    fn test_slow_commands_get_extended_default_timeout() {
+        for cmd in ["connect vpn1", "switch vpn1", "reconnect", "disconnect"] {
+            let result = parse_args_from(&args(cmd)).unwrap();
+            assert_eq!(
+                result.timeout,
+                validation::SLOW_COMMAND_TIMEOUT_SECS,
+                "`{}` should use the slow-command timeout",
+                cmd
+            );
+        }
+    }
+
+    #[test]
+    fn test_fast_commands_keep_short_default_timeout() {
+        for cmd in ["status", "list", "ping"] {
+            let result = parse_args_from(&args(cmd)).unwrap();
+            assert_eq!(
+                result.timeout,
+                validation::DEFAULT_TIMEOUT_SECS,
+                "`{}` should use the interactive timeout",
+                cmd
+            );
+        }
+    }
+
+    #[test]
+    fn test_explicit_timeout_overrides_command_default() {
+        let result = parse_args_from(&args("--timeout 7 connect vpn1")).unwrap();
+        assert_eq!(result.timeout, 7);
     }
 
     #[test]

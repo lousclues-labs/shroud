@@ -13,8 +13,9 @@ use crate::logging;
 use crate::state::{Event, NmVpnState};
 
 use super::super::{
-    CONNECTION_MONITOR_INTERVAL_MS, CONNECTION_MONITOR_MAX_ATTEMPTS, DISCONNECT_VERIFY_INTERVAL_MS,
-    DISCONNECT_VERIFY_MAX_ATTEMPTS, MAX_CONNECT_ATTEMPTS, POST_DISCONNECT_SETTLE_SECS,
+    CONNECTION_MONITOR_INTERVAL_MS, CONNECTION_MONITOR_MAX_ATTEMPTS, CONNECT_RETRY_DELAY_SECS,
+    DISCONNECT_VERIFY_INTERVAL_MS, DISCONNECT_VERIFY_MAX_ATTEMPTS, MAX_CONNECT_ATTEMPTS,
+    POST_DISCONNECT_SETTLE_SECS,
 };
 use super::system::resolve_restart_path;
 
@@ -209,7 +210,7 @@ impl super::super::VpnSupervisor {
             }
 
             if attempt < MAX_CONNECT_ATTEMPTS {
-                sleep(Duration::from_secs(2)).await;
+                sleep(Duration::from_secs(CONNECT_RETRY_DELAY_SECS)).await;
             }
         }
 

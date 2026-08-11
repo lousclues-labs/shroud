@@ -20,7 +20,8 @@ OPTIONS:
     --log-file <PATH>        Log to file instead of stderr
     --json                   Output in JSON format
     -q, --quiet              Suppress output (exit code only)
-    --timeout <SECS>         Timeout for daemon communication (default: 5)
+    --timeout <SECS>         Timeout for daemon communication
+                             (default: 5; longer for connect/switch/killswitch)
     -H, --headless           Run in headless server mode (no tray)
     --desktop                Force desktop mode with tray icon
 

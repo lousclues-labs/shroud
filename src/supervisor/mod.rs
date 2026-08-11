@@ -59,6 +59,13 @@ pub(crate) const RECONNECT_MAX_DELAY_SECS: u64 = 30;
 /// Grace period after intentional disconnect to prevent false drop detection
 pub(crate) const POST_DISCONNECT_GRACE_SECS: u64 = 5;
 
+/// Window after a wake resync during which replayed D-Bus events are ignored.
+///
+/// NetworkManager delivers the transitions buffered during a suspend over the
+/// following tens of milliseconds; they predate the resync and would otherwise
+/// flap the state machine against a tunnel NM has already confirmed healthy.
+pub(crate) const WAKE_RESYNC_GRACE_SECS: u64 = 2;
+
 /// Maximum attempts to verify disconnect completion
 pub(crate) const DISCONNECT_VERIFY_MAX_ATTEMPTS: u32 = 30;
 
@@ -76,6 +83,31 @@ pub(crate) const POST_DISCONNECT_SETTLE_SECS: u64 = 3;
 
 /// Maximum number of connection attempts during handle_connect
 pub(crate) const MAX_CONNECT_ATTEMPTS: u32 = 3;
+
+/// Delay between failed connection attempts in `handle_connect`
+pub(crate) const CONNECT_RETRY_DELAY_SECS: u64 = 2;
+
+/// Worst-case wall-clock duration of a full VPN switch: disconnect verification,
+/// post-disconnect settle, then every connect attempt with its monitoring window.
+///
+/// Callers that wait on the supervisor (notably the IPC layer) must allow at
+/// least this long, otherwise a legitimately slow switch is misreported as an
+/// unresponsive supervisor.
+pub(crate) const WORST_CASE_SWITCH_SECS: u64 =
+    (DISCONNECT_VERIFY_MAX_ATTEMPTS as u64 * DISCONNECT_VERIFY_INTERVAL_MS / 1000)
+        + POST_DISCONNECT_SETTLE_SECS
+        + (MAX_CONNECT_ATTEMPTS as u64
+            * CONNECTION_MONITOR_MAX_ATTEMPTS as u64
+            * CONNECTION_MONITOR_INTERVAL_MS
+            / 1000)
+        + ((MAX_CONNECT_ATTEMPTS as u64 - 1) * CONNECT_RETRY_DELAY_SECS);
+
+// The CLI's slow-command default must outlast the supervisor, or a healthy
+// switch is reported as a client-side timeout.
+const _: () = assert!(
+    crate::cli::validation::SLOW_COMMAND_TIMEOUT_SECS >= WORST_CASE_SWITCH_SECS,
+    "SLOW_COMMAND_TIMEOUT_SECS must cover WORST_CASE_SWITCH_SECS"
+);
 
 /// Wait after nmcli con up before verifying connection
 pub(crate) const CONNECTION_VERIFY_DELAY_SECS: u64 = 5;
@@ -109,6 +141,8 @@ pub(crate) struct TimingState {
     pub(crate) last_disconnect_time: Option<Instant>,
     pub(crate) last_poll_time: Instant,
     pub(crate) last_wake_event: Option<Instant>,
+    /// When the last wake resync established ground truth from NetworkManager.
+    pub(crate) last_wake_resync: Option<Instant>,
     pub(crate) last_reconnect_time: Option<Instant>,
     pub(crate) reconnect_cancelled: bool,
     /// Guard flag: true while a reconnect loop is running. Struct-owned, not
@@ -129,6 +163,7 @@ impl Default for TimingState {
             last_disconnect_time: None,
             last_poll_time: Instant::now(),
             last_wake_event: None,
+            last_wake_resync: None,
             last_reconnect_time: None,
             reconnect_cancelled: false,
             reconnect_in_progress: false,

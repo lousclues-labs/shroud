@@ -231,103 +231,80 @@ impl KillSwitch {
         self.vpn_interface = iface;
     }
 
-    /// Check actual state of rules, not just our flag (blocking variant).
+    /// Probe both backends and report which one currently owns live kill switch
+    /// rules.
     ///
-    /// Note: This requires sudo access for iptables. If we can't check
-    /// (permission denied), we return false to avoid reporting enabled
-    /// when rules may be gone (SHROUD-VULN-032). The `-n` flag on sudo
-    /// ensures non-interactive (no hang on password prompt).
-    ///
-    /// This variant uses `std::process::Command` and is intended only for
-    /// one-shot use at startup and shutdown, where a brief synchronous
-    /// sudo call is acceptable. Inside the tokio event loop, prefer
-    /// [`is_actually_enabled_async`] to avoid blocking the runtime worker.
-    pub fn is_actually_enabled(&self) -> bool {
+    /// A fresh instance defaults to [`FirewallBackend::Iptables`] because the
+    /// backend is only chosen when the kill switch is enabled. Probing just
+    /// `self.backend` therefore misses rules a previous instance installed via
+    /// nftables: the daemon reports "disabled" while traffic is still being
+    /// filtered, and then persists that incorrect state to the config.
+    fn detect_active_backend(&self) -> Option<FirewallBackend> {
         use std::process::{Command, Stdio};
 
-        match self.backend {
-            FirewallBackend::Iptables => {
-                let result = Command::new("sudo")
-                    .args(["-n", iptables(), "-C", "OUTPUT", "-j", CHAIN_NAME])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-
-                match result {
-                    Ok(status) => status.success(),
-                    Err(_) => {
-                        warn!("Cannot verify iptables state (sudo failed), assuming disabled");
-                        false
-                    }
-                }
-            }
-            FirewallBackend::Nftables => {
-                let result = Command::new("sudo")
-                    .args(["-n", nft(), "list", "table", "inet", NFT_TABLE])
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-
-                match result {
-                    Ok(status) => status.success(),
-                    Err(_) => {
-                        warn!("Cannot verify nftables state (sudo failed), assuming disabled");
-                        false
-                    }
-                }
-            }
-        }
-    }
-
-    /// Async variant of [`is_actually_enabled`] using tokio's non-blocking
-    /// subprocess API.
-    ///
-    /// Use this from any code path that runs inside the tokio runtime
-    /// (event loop, health check, IPC handlers). The blocking variant
-    /// would otherwise stall a runtime worker for the duration of the
-    /// `sudo` invocation.
-    pub async fn is_actually_enabled_async(&self) -> bool {
-        let (program, args): (&str, [&str; 6]) = match self.backend {
-            FirewallBackend::Iptables => {
-                ("sudo", ["-n", iptables(), "-C", "OUTPUT", "-j", CHAIN_NAME])
-            }
-            FirewallBackend::Nftables => {
-                ("sudo", ["-n", nft(), "list", "table", "inet", NFT_TABLE])
-            }
+        let probe = |args: [&str; 6]| -> bool {
+            Command::new("sudo")
+                .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .map(|status| status.success())
+                .unwrap_or(false)
         };
 
-        let result = Command::new(program)
-            .args(args)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await;
-
-        match result {
-            Ok(status) => status.success(),
-            Err(_) => {
-                warn!(
-                    "Cannot verify {} state (sudo failed), assuming disabled",
-                    match self.backend {
-                        FirewallBackend::Iptables => "iptables",
-                        FirewallBackend::Nftables => "nftables",
-                    }
-                );
-                false
-            }
+        if probe(["-n", iptables(), "-C", "OUTPUT", "-j", CHAIN_NAME]) {
+            return Some(FirewallBackend::Iptables);
         }
+        if probe(["-n", nft(), "list", "table", "inet", NFT_TABLE]) {
+            return Some(FirewallBackend::Nftables);
+        }
+        None
+    }
+
+    /// Async variant of [`detect_active_backend`].
+    async fn detect_active_backend_async(&self) -> Option<FirewallBackend> {
+        async fn probe(args: [&str; 6]) -> bool {
+            Command::new("sudo")
+                .args(args)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status()
+                .await
+                .map(|status| status.success())
+                .unwrap_or(false)
+        }
+
+        if probe(["-n", iptables(), "-C", "OUTPUT", "-j", CHAIN_NAME]).await {
+            return Some(FirewallBackend::Iptables);
+        }
+        if probe(["-n", nft(), "list", "table", "inet", NFT_TABLE]).await {
+            return Some(FirewallBackend::Nftables);
+        }
+        None
     }
 
     /// Sync our internal state with actual firewall state (blocking).
     ///
-    /// See [`is_actually_enabled`] for when to prefer the async variant.
+    /// See [`sync_state_async`] for the non-blocking variant.
     pub fn sync_state(&mut self) {
-        self.enabled = self.is_actually_enabled();
+        match self.detect_active_backend() {
+            Some(backend) => {
+                self.backend = backend;
+                self.enabled = true;
+            }
+            None => self.enabled = false,
+        }
     }
 
     /// Async variant of [`sync_state`] — does not block the tokio runtime.
     pub async fn sync_state_async(&mut self) {
-        self.enabled = self.is_actually_enabled_async().await;
+        match self.detect_active_backend_async().await {
+            Some(backend) => {
+                self.backend = backend;
+                self.enabled = true;
+            }
+            None => self.enabled = false,
+        }
     }
 
     /// Check and enforce toggle cooldown

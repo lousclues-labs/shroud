@@ -429,3 +429,59 @@ async fn disconnect_disables_kill_switch_config() {
     supervisor.handle_disconnect().await;
     assert!(mock.was_called(&NmCall::Disconnect("vpn-a".to_string())));
 }
+
+#[tokio::test]
+async fn wake_resync_grace_ignores_replayed_failure() {
+    let mock = MockNmClient::new();
+    mock.add_vpn("vpn-a");
+    mock.set_active("vpn-a");
+
+    let (mut supervisor, _tx) = make_supervisor(mock.clone()).await;
+    supervisor.dispatch(Event::NmVpnUp {
+        server: "vpn-a".to_string(),
+    });
+
+    // NM replays a failure it buffered while the machine was suspended.
+    supervisor.timing.last_wake_resync = Some(std::time::Instant::now());
+    supervisor
+        .handle_dbus_event(crate::dbus::NmEvent::VpnFailed {
+            name: "vpn-a".to_string(),
+            reason: "Service start timeout".to_string(),
+        })
+        .await;
+
+    assert!(
+        matches!(supervisor.machine.state, VpnState::Connected { ref server } if server == "vpn-a"),
+        "replayed failure must not flap a tunnel the resync just confirmed healthy, got {:?}",
+        supervisor.machine.state
+    );
+}
+
+#[tokio::test]
+async fn dbus_failure_handled_once_wake_grace_expires() {
+    let mock = MockNmClient::new();
+    mock.add_vpn("vpn-a");
+    mock.set_active("vpn-a");
+
+    let (mut supervisor, _tx) = make_supervisor(mock.clone()).await;
+    supervisor.dispatch(Event::NmVpnUp {
+        server: "vpn-a".to_string(),
+    });
+    supervisor.shared_state.write().await.auto_reconnect = false;
+
+    supervisor.timing.last_wake_resync = std::time::Instant::now().checked_sub(
+        std::time::Duration::from_secs(crate::supervisor::WAKE_RESYNC_GRACE_SECS + 1),
+    );
+    supervisor
+        .handle_dbus_event(crate::dbus::NmEvent::VpnFailed {
+            name: "vpn-a".to_string(),
+            reason: "Service start timeout".to_string(),
+        })
+        .await;
+
+    assert!(
+        matches!(supervisor.machine.state, VpnState::Failed { .. }),
+        "a genuine failure after the grace window must still be handled, got {:?}",
+        supervisor.machine.state
+    );
+}

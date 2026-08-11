@@ -11,7 +11,7 @@ use tracing::{error, info};
 use super::args::{Args, DebugAction, ParsedCommand, ToggleAction};
 use super::help;
 use super::import as import_command;
-use crate::ipc::client::{send_command, ClientError};
+use crate::ipc::client::{send_command, send_command_with_timeout, ClientError};
 use crate::ipc::protocol::{IpcCommand, IpcResponse};
 use crate::killswitch::verify;
 use crate::logging;
@@ -158,49 +158,51 @@ pub async fn run_client_mode(args: &Args) -> i32 {
     }
 
     match command {
-        ParsedCommand::Restart => match send_command(ipc_command).await {
-            Ok(IpcResponse::OkMessage { message }) => {
-                if !args.quiet {
-                    println!("{}", message);
-                }
-                std::thread::sleep(std::time::Duration::from_secs(2));
-                if !args.quiet {
-                    println!("Daemon restarted successfully");
-                }
-                0
-            }
-            Ok(IpcResponse::Ok) => {
-                if !args.quiet {
-                    println!("Daemon restarting...");
-                }
-                std::thread::sleep(std::time::Duration::from_secs(2));
-                if !args.quiet {
-                    println!("Daemon restarted successfully");
-                }
-                0
-            }
-            Ok(IpcResponse::Error { message }) => {
-                eprintln!("Error: {}", message);
-                1
-            }
-            Ok(other) => {
-                eprintln!("Unexpected response: {:?}", other);
-                1
-            }
-            Err(e) => {
-                match e {
-                    ClientError::DaemonNotRunning => {
-                        eprintln!("Error: VPN Shroud daemon is not running.");
-                        eprintln!("Start it with: shroud");
+        ParsedCommand::Restart => {
+            match send_command_with_timeout(ipc_command, args.timeout).await {
+                Ok(IpcResponse::OkMessage { message }) => {
+                    if !args.quiet {
+                        println!("{}", message);
                     }
-                    _ => {
-                        eprintln!("Error: {}", e);
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    if !args.quiet {
+                        println!("Daemon restarted successfully");
                     }
+                    0
                 }
-                1
+                Ok(IpcResponse::Ok) => {
+                    if !args.quiet {
+                        println!("Daemon restarting...");
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(2));
+                    if !args.quiet {
+                        println!("Daemon restarted successfully");
+                    }
+                    0
+                }
+                Ok(IpcResponse::Error { message }) => {
+                    eprintln!("Error: {}", message);
+                    1
+                }
+                Ok(other) => {
+                    eprintln!("Unexpected response: {:?}", other);
+                    1
+                }
+                Err(e) => {
+                    match e {
+                        ClientError::DaemonNotRunning => {
+                            eprintln!("Error: VPN Shroud daemon is not running.");
+                            eprintln!("Start it with: shroud");
+                        }
+                        _ => {
+                            eprintln!("Error: {}", e);
+                        }
+                    }
+                    1
+                }
             }
-        },
-        _ => match send_command(ipc_command).await {
+        }
+        _ => match send_command_with_timeout(ipc_command, args.timeout).await {
             Ok(response) => handle_response(response, &args_override),
             Err(e) => {
                 match e {

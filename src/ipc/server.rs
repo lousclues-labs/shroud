@@ -19,6 +19,12 @@ use tracing::{debug, error, info, warn};
 use super::protocol::{socket_path, IpcCommand, IpcResponse, PROTOCOL_VERSION};
 use thiserror::Error;
 
+/// How long to wait for the supervisor to answer a forwarded command.
+///
+/// Derived from the supervisor's worst-case switch duration so that a slow but
+/// healthy connect is never reported as "Timeout waiting for supervisor response".
+const SUPERVISOR_RESPONSE_TIMEOUT_SECS: u64 = crate::supervisor::WORST_CASE_SWITCH_SECS + 30;
+
 /// Get the PID of the peer process connected to a Unix socket.
 #[cfg(target_os = "linux")]
 fn get_peer_pid(stream: &UnixStream) -> Option<u32> {
@@ -308,8 +314,11 @@ impl IpcServer {
                         message: "Supervisor channel closed".to_string(),
                     }
                 } else {
-                    match tokio::time::timeout(std::time::Duration::from_secs(60), resp_rx.recv())
-                        .await
+                    match tokio::time::timeout(
+                        std::time::Duration::from_secs(SUPERVISOR_RESPONSE_TIMEOUT_SECS),
+                        resp_rx.recv(),
+                    )
+                    .await
                     {
                         Ok(Some(resp)) => resp,
                         Ok(None) => IpcResponse::Error {

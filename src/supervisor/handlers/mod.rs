@@ -22,7 +22,7 @@ use crate::nm::{
 };
 use crate::state::{Event, TransitionReason, VpnState};
 
-use super::POST_DISCONNECT_GRACE_SECS;
+use super::{POST_DISCONNECT_GRACE_SECS, WAKE_RESYNC_GRACE_SECS};
 use system::resolve_restart_path;
 
 mod health;
@@ -41,6 +41,17 @@ impl super::VpnSupervisor {
         if self.switch_ctx.in_progress {
             debug!("Ignoring D-Bus event during VPN switch: {:?}", event);
             return;
+        }
+
+        // Ignore the burst NetworkManager replays right after a wake resync.
+        // Those events predate the state the resync just read from NM, so acting
+        // on them flaps Connected -> Failed -> Connecting against a healthy tunnel.
+        if let Some(resynced) = self.timing.last_wake_resync {
+            if resynced.elapsed().as_secs() < WAKE_RESYNC_GRACE_SECS {
+                debug!("Ignoring stale D-Bus event after wake resync: {:?}", event);
+                return;
+            }
+            self.timing.last_wake_resync = None;
         }
 
         // CRITICAL: Ignore late deactivation events from VPN we recently switched FROM

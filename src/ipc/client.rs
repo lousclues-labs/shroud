@@ -49,6 +49,9 @@ pub enum ClientError {
     /// Daemon is not running
     #[error("Daemon is not running. Start it with: shroud")]
     DaemonNotRunning,
+    /// Daemon did not respond within the allotted time
+    #[error("Daemon did not respond within {0}s. Retry with a longer --timeout.")]
+    Timeout(u64),
 }
 
 /// Connect to the Shroud daemon.
@@ -101,6 +104,23 @@ pub async fn connect_to_daemon() -> Result<UnixStream, ClientError> {
 pub async fn send_command(command: IpcCommand) -> Result<IpcResponse, ClientError> {
     let stream = connect_to_daemon().await?;
     send_command_on_stream(stream, command).await
+}
+
+/// Send a command, giving up after `timeout_secs`.
+///
+/// # Errors
+///
+/// Returns [`ClientError::Timeout`] if the daemon does not respond in time, plus
+/// any error returned by [`send_command`].
+pub async fn send_command_with_timeout(
+    command: IpcCommand,
+    timeout_secs: u64,
+) -> Result<IpcResponse, ClientError> {
+    let duration = std::time::Duration::from_secs(timeout_secs);
+    match tokio::time::timeout(duration, send_command(command)).await {
+        Ok(result) => result,
+        Err(_) => Err(ClientError::Timeout(timeout_secs)),
+    }
 }
 
 /// Send a command on an existing stream.

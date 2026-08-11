@@ -3,6 +3,7 @@
 
 //! NetworkManager event handlers
 
+use std::time::Instant;
 use tokio::time::{sleep, Duration};
 use tracing::{debug, info, instrument, warn};
 
@@ -253,6 +254,30 @@ impl super::super::VpnSupervisor {
 
         self.sync_shared_state().await;
         self.tray.update(&self.shared_state);
+
+        // NM replays the transitions it buffered during the time jump. They
+        // describe a world older than the state just read above, so drop the
+        // backlog and ignore the tail of the burst (see handle_dbus_event).
+        self.timing.last_wake_resync = Some(Instant::now());
+        self.drain_pending_dbus_events();
+    }
+
+    /// Discard D-Bus events queued while the system was suspended.
+    fn drain_pending_dbus_events(&mut self) {
+        let mut discarded = 0usize;
+        while let Ok(event) = self.dbus_rx.try_recv() {
+            debug!(
+                "Discarding stale D-Bus event after wake resync: {:?}",
+                event
+            );
+            discarded += 1;
+        }
+        if discarded > 0 {
+            info!(
+                "Discarded {} stale D-Bus event(s) after wake resync",
+                discarded
+            );
+        }
     }
 
     /// Refresh the list of available VPN connections

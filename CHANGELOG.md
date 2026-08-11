@@ -14,6 +14,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-08-11
+
+### Fixed
+
+- **Kill switch state was lost across daemon restarts on nftables systems.**
+  `KillSwitch` starts with the iptables backend selected (the real backend is
+  only chosen when the kill switch is enabled), and state sync probed just that
+  backend. A daemon restart therefore could not see an active `shroud_killswitch`
+  nftables table: `shroud status` reported `Kill switch: disabled` while traffic
+  was still being filtered, and the daemon persisted that incorrect state back to
+  `config.toml`, silently clearing `kill_switch_enabled`. Sync now probes both
+  backends and adopts whichever one owns the live rules.
+
+- **State-machine flapping after resume from suspend.** On waking, the
+  supervisor correctly resynced from NetworkManager (e.g. "VPN ie150 is fully
+  active"), but NM then replayed the activation/failure transitions it had
+  buffered during the time jump. Those stale events were applied on top of the
+  fresh state, flapping `Connected → Failed → Connecting → Failed` within
+  milliseconds against a perfectly healthy tunnel — spurious "VPN Failed"
+  notifications, and a reconnect storm when auto-reconnect was on. A wake resync
+  now drains the queued D-Bus backlog and ignores the replay burst for
+  `WAKE_RESYNC_GRACE_SECS`, after which events are processed normally.
+
+- **`connect`/`switch` reported "Timeout waiting for supervisor response" on a
+  healthy connection.** The IPC layer gave the supervisor 60s to answer, but a
+  full switch (disconnect verification + settle + up to three monitored connect
+  attempts) can legitimately take ~112s. The wait is now derived from the
+  supervisor's own timing constants (`WORST_CASE_SWITCH_SECS`) plus margin, so a
+  slow-but-successful switch is no longer misreported as a failure. This was
+  especially damaging with a fail-closed kill switch: the CLI declared failure
+  while the kill switch was already blocking, leaving the machine with no
+  connectivity mid-switch.
+
+- **`--timeout` was a dead flag.** The parsed value was never used, so passing
+  `--timeout` had no effect. It now bounds the client's wait for a daemon reply.
+
+### Changed
+
+- **Per-command default timeouts.** `connect`, `switch`, `reconnect`,
+  `disconnect`, `killswitch`, and `import` now default to
+  `SLOW_COMMAND_TIMEOUT_SECS` (150s) instead of the 5s interactive default,
+  which is retained for fast commands such as `status`, `list`, and `ping`. An
+  explicit `--timeout` always wins. A compile-time assertion keeps the client
+  budget above the supervisor's worst case so the two cannot drift apart.
+
+- The connect retry delay is now the named constant `CONNECT_RETRY_DELAY_SECS`
+  rather than a literal, so it participates in the worst-case calculation.
+
 ## [2.5.0] - 2026-08-10
 
 ### Added

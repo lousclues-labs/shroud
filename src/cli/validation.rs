@@ -21,6 +21,15 @@ pub const MIN_TIMEOUT_SECS: u64 = 1;
 /// Default timeout value in seconds
 pub const DEFAULT_TIMEOUT_SECS: u64 = 5;
 
+/// Default timeout for commands that drive a VPN state change.
+///
+/// A connect or switch runs disconnect verification, a settle period, and up to
+/// three monitored connect attempts, so the 5s default would abandon a perfectly
+/// healthy operation while it is still in progress. This module is dependency-free
+/// by design, so the value is a literal; `supervisor` statically asserts that it
+/// still covers the supervisor's worst-case switch duration.
+pub const SLOW_COMMAND_TIMEOUT_SECS: u64 = 150;
+
 /// Maximum VPN name length
 pub const MAX_VPN_NAME_LENGTH: usize = 256;
 
