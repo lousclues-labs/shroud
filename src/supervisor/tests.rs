@@ -282,6 +282,13 @@ async fn make_supervisor(mock: MockNmClient) -> (VpnSupervisor, mpsc::Sender<Vpn
         Box::new(mock.clone()),
     );
 
+    // with_nm() loads the real config and adopts any live firewall rules, so
+    // without these the handlers below would rewrite the developer's config and
+    // tear down a running kill switch.
+    let mut supervisor = supervisor;
+    supervisor.config_store = crate::supervisor::config_store::ConfigStore::for_tests();
+    supervisor.kill_switch = crate::killswitch::KillSwitch::new();
+
     (supervisor, tray_tx)
 }
 

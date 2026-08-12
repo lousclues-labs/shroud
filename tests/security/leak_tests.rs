@@ -453,6 +453,7 @@ fn test_leak_no_dns_leak() {
 }
 
 #[test]
+#[ignore = "enables the kill switch on the running daemon - run with: cargo test -- --ignored"]
 fn test_leak_ipv6_blocked() {
     println!("\n=== LEAK TEST: IPv6 blocked ===\n");
 
@@ -587,6 +588,7 @@ fn test_leak_rapid_reconnect() {
 // ============================================================================
 
 #[test]
+#[ignore = "enables the kill switch on the running daemon and shells out to sudo iptables - run with: cargo test -- --ignored"]
 fn test_killswitch_rules_complete() {
     println!("\n=== Verifying kill switch rules completeness ===\n");
 

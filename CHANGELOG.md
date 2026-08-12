@@ -14,6 +14,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.5] - 2026-08-11
+
+### Fixed
+
+- **`cargo test` reconfigured the machine it ran on.** The default suite drove
+  real system state instead of fixtures:
+
+  - The supervisor's behavioural tests built a live `ConfigStore` and
+    `KillSwitch`, so `handle_connect`/`handle_disconnect` rewrote
+    `~/.config/shroud/config.toml` and enabled or tore down the running kill
+    switch. The harness now uses a throwaway config file and an unsynced kill
+    switch, so the same 27 tests run without touching the system.
+  - `test_malformed_config_handled` and `test_config_values_bounds_checked`
+    wrote malformed TOML into the real config file, restoring it afterwards
+    only if they completed.
+  - `test_leak_ipv6_blocked` and `test_killswitch_rules_complete` enabled the
+    kill switch on the running daemon, and the latter also shelled out to
+    `sudo iptables`, so a plain `cargo test` could block on a password prompt.
+    All four are now `#[ignore]`, matching the rest of the privileged suite.
+
+  Verified by snapshotting the config file, kill switch state, autostart entry
+  and IPC socket around a full run: all four are now unchanged, and the run no
+  longer prompts for sudo.
+
 ## [2.5.4] - 2026-08-11
 
 ### Fixed

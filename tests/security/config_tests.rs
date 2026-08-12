@@ -115,6 +115,7 @@ fn test_log_directory_permissions() {
 // ============================================================================
 
 #[test]
+#[ignore = "rewrites the real ~/.config/shroud/config.toml - run with: cargo test -- --ignored"]
 fn test_malformed_config_handled() {
     // Create backup of existing config
     let config = config_file();
@@ -184,6 +185,7 @@ fn test_malformed_config_handled() {
 }
 
 #[test]
+#[ignore = "rewrites the real ~/.config/shroud/config.toml - run with: cargo test -- --ignored"]
 fn test_config_values_bounds_checked() {
     let config = config_file();
     let backup = config.with_extension("toml.bak");

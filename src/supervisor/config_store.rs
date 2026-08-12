@@ -42,6 +42,28 @@ impl ConfigStore {
         }
     }
 
+    /// Config store backed by a throwaway file, for tests.
+    ///
+    /// Supervisor tests drive the real handlers, which persist config; without
+    /// this they rewrite the config of whoever runs the suite.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Self {
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let unique = format!(
+            "shroud-test-{}-{}.toml",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        );
+
+        Self {
+            manager: ConfigManager::with_path(std::env::temp_dir().join(unique)),
+            config: Config::default(),
+            is_first_run: true,
+        }
+    }
+
     /// Reload config from disk (e.g., after SIGHUP or IPC reload command).
     pub(crate) fn reload(&mut self) -> Config {
         self.config = self.manager.load_validated();
