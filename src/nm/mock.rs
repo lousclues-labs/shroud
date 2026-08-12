@@ -162,7 +162,7 @@ impl NmClient for MockNmClient {
         }
         // Deactivate all, activate target
         let mut conns = self.connections.lock().unwrap();
-        for (_, entry) in conns.iter_mut() {
+        for entry in conns.values_mut() {
             entry.1 = false;
             entry.2 = NmVpnState::Inactive;
         }

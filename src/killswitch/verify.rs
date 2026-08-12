@@ -353,14 +353,14 @@ async fn check_chain_exists_iptables(snap: &IptablesSnapshot, verbose: bool) -> 
             "chain_exists",
             "SHROUD_KILLSWITCH chain exists",
             "Chain missing",
-            Some(snap.ks_chain.clone()).filter(|_| verbose),
+            verbose.then_some(snap.ks_chain.clone()),
         );
     }
     CheckResult::pass(
         "chain_exists",
         "SHROUD_KILLSWITCH chain exists",
         format!("Chain found with {} rules", snap.ks_chain.lines().count()),
-        Some(snap.ks_chain.clone()).filter(|_| verbose),
+        verbose.then_some(snap.ks_chain.clone()),
     )
 }
 
@@ -406,14 +406,14 @@ fn check_default_drop_iptables(snap: &IptablesSnapshot, verbose: bool) -> CheckR
             "default_drop",
             "Default policy is DROP",
             "Final rule is DROP",
-            Some(snap.ks_chain.clone()).filter(|_| verbose),
+            verbose.then_some(snap.ks_chain.clone()),
         )
     } else {
         CheckResult::fail(
             "default_drop",
             "Default policy is DROP",
             "No DROP rule found",
-            Some(snap.ks_chain.clone()).filter(|_| verbose),
+            verbose.then_some(snap.ks_chain.clone()),
         )
     }
 }
@@ -428,14 +428,14 @@ fn check_loopback_allowed_iptables(snap: &IptablesSnapshot, verbose: bool) -> Ch
             "loopback_allowed",
             "Loopback traffic allowed",
             "lo interface ACCEPT rule present",
-            Some(snap.ks_chain.clone()).filter(|_| verbose),
+            verbose.then_some(snap.ks_chain.clone()),
         )
     } else {
         CheckResult::fail(
             "loopback_allowed",
             "Loopback traffic allowed",
             "lo interface ACCEPT rule missing",
-            Some(snap.ks_chain.clone()).filter(|_| verbose),
+            verbose.then_some(snap.ks_chain.clone()),
         )
     }
 }
@@ -453,21 +453,21 @@ fn check_vpn_interfaces_allowed_iptables(snap: &IptablesSnapshot, verbose: bool)
             "vpn_interfaces_allowed",
             "VPN tunnel interfaces allowed",
             "tun+, wg+, tap+ all allowed",
-            Some(snap.ks_chain.clone()).filter(|_| verbose),
+            verbose.then_some(snap.ks_chain.clone()),
         )
     } else if missing.len() < 3 {
         CheckResult::warn(
             "vpn_interfaces_allowed",
             "VPN tunnel interfaces allowed",
             format!("Missing allow rules for: {}", missing.join(", ")),
-            Some(snap.ks_chain.clone()).filter(|_| verbose),
+            verbose.then_some(snap.ks_chain.clone()),
         )
     } else {
         CheckResult::fail(
             "vpn_interfaces_allowed",
             "VPN tunnel interfaces allowed",
             "No VPN interface allow rules present",
-            Some(snap.ks_chain.clone()).filter(|_| verbose),
+            verbose.then_some(snap.ks_chain.clone()),
         )
     }
 }
@@ -486,14 +486,14 @@ fn check_dhcp_allowed_iptables(snap: &IptablesSnapshot, verbose: bool) -> CheckR
             "dhcp_allowed",
             "DHCP traffic allowed",
             "UDP 67/68 rules present",
-            Some(snap.ks_chain.clone()).filter(|_| verbose),
+            verbose.then_some(snap.ks_chain.clone()),
         )
     } else {
         CheckResult::warn(
             "dhcp_allowed",
             "DHCP traffic allowed",
             "Missing UDP 67/68 rules",
-            Some(snap.ks_chain.clone()).filter(|_| verbose),
+            verbose.then_some(snap.ks_chain.clone()),
         )
     }
 }
@@ -514,14 +514,14 @@ fn check_ipv6_protection_iptables(
                     "ipv6_protection",
                     "IPv6 leak protection",
                     "IPv6 DROP rule present",
-                    Some(snap.ip6_output.clone()).filter(|_| verbose),
+                    verbose.then_some(snap.ip6_output.clone()),
                 )
             } else {
                 CheckResult::fail(
                     "ipv6_protection",
                     "IPv6 leak protection",
                     "IPv6 DROP rule missing",
-                    Some(snap.ip6_output.clone()).filter(|_| verbose),
+                    verbose.then_some(snap.ip6_output.clone()),
                 )
             }
         }
@@ -539,14 +539,14 @@ fn check_ipv6_protection_iptables(
                     "ipv6_protection",
                     "IPv6 leak protection",
                     "IPv6 tunnel-only rules present",
-                    Some(snap.ip6_output.clone()).filter(|_| verbose),
+                    verbose.then_some(snap.ip6_output.clone()),
                 )
             } else {
                 CheckResult::warn(
                     "ipv6_protection",
                     "IPv6 leak protection",
                     "IPv6 tunnel rules incomplete",
-                    Some(snap.ip6_output.clone()).filter(|_| verbose),
+                    verbose.then_some(snap.ip6_output.clone()),
                 )
             }
         }
@@ -554,7 +554,7 @@ fn check_ipv6_protection_iptables(
             "ipv6_protection",
             "IPv6 leak protection",
             "IPv6 protection disabled (off)",
-            Some(snap.ip6_output.clone()).filter(|_| verbose),
+            verbose.then_some(snap.ip6_output.clone()),
         ),
     }
 }
@@ -588,14 +588,14 @@ fn check_dns_mode_match_iptables(
                     "dns_mode_match",
                     "DNS leak protection matches configured mode",
                     detail,
-                    Some(rules.clone()).filter(|_| verbose),
+                    verbose.then_some(rules.clone()),
                 )
             } else {
                 CheckResult::warn(
                     "dns_mode_match",
                     "DNS leak protection matches configured mode",
                     "DNS tunnel/strict rules incomplete",
-                    Some(rules.clone()).filter(|_| verbose),
+                    verbose.then_some(rules.clone()),
                 )
             }
         }
@@ -606,14 +606,14 @@ fn check_dns_mode_match_iptables(
                     "dns_mode_match",
                     "DNS leak protection matches configured mode",
                     "localhost DNS rules present",
-                    Some(rules.clone()).filter(|_| verbose),
+                    verbose.then_some(rules.clone()),
                 )
             } else {
                 CheckResult::warn(
                     "dns_mode_match",
                     "DNS leak protection matches configured mode",
                     "localhost DNS rules missing",
-                    Some(rules.clone()).filter(|_| verbose),
+                    verbose.then_some(rules.clone()),
                 )
             }
         }
@@ -621,7 +621,7 @@ fn check_dns_mode_match_iptables(
             "dns_mode_match",
             "DNS leak protection matches configured mode",
             "dns_mode=any (least secure)",
-            Some(rules.clone()).filter(|_| verbose),
+            verbose.then_some(rules.clone()),
         ),
     }
 }
@@ -641,14 +641,14 @@ fn check_no_rogue_rules_iptables(snap: &IptablesSnapshot, verbose: bool) -> Chec
                 "no_rogue_rules",
                 "No conflicting rules in OUTPUT",
                 "OUTPUT chain clean",
-                Some(snap.output_chain.clone()).filter(|_| verbose),
+                verbose.then_some(snap.output_chain.clone()),
             )
         } else {
             CheckResult::warn(
                 "no_rogue_rules",
                 "No conflicting rules in OUTPUT",
                 format!("First OUTPUT rule is not jump to {}: {}", CHAIN_NAME, rule),
-                Some(snap.output_chain.clone()).filter(|_| verbose),
+                verbose.then_some(snap.output_chain.clone()),
             )
         }
     } else {
@@ -656,7 +656,7 @@ fn check_no_rogue_rules_iptables(snap: &IptablesSnapshot, verbose: bool) -> Chec
             "no_rogue_rules",
             "No conflicting rules in OUTPUT",
             "No OUTPUT rules found",
-            Some(snap.output_chain.clone()).filter(|_| verbose),
+            verbose.then_some(snap.output_chain.clone()),
         )
     }
 }
@@ -667,14 +667,14 @@ async fn check_chain_exists_nft(snap: &NftSnapshot, verbose: bool) -> CheckResul
             "chain_exists",
             "shroud_killswitch table exists",
             "Table missing",
-            Some(snap.table_output.clone()).filter(|_| verbose),
+            verbose.then_some(snap.table_output.clone()),
         )
     } else {
         CheckResult::pass(
             "chain_exists",
             "shroud_killswitch table exists",
             "Table found",
-            Some(snap.table_output.clone()).filter(|_| verbose),
+            verbose.then_some(snap.table_output.clone()),
         )
     }
 }
@@ -686,14 +686,14 @@ async fn check_jump_rule_nft(snap: &NftSnapshot, verbose: bool) -> CheckResult {
             "jump_rule_exists",
             "OUTPUT chain is hooked (nft)",
             "nft output chain with hook present",
-            Some(snap.table_output.clone()).filter(|_| verbose),
+            verbose.then_some(snap.table_output.clone()),
         )
     } else {
         CheckResult::fail(
             "jump_rule_exists",
             "OUTPUT chain is hooked (nft)",
             "nft output chain missing hook",
-            Some(snap.table_output.clone()).filter(|_| verbose),
+            verbose.then_some(snap.table_output.clone()),
         )
     }
 }
@@ -704,14 +704,14 @@ fn check_default_drop_nft(snap: &NftSnapshot, verbose: bool) -> CheckResult {
             "default_drop",
             "Default policy is DROP",
             "policy drop present",
-            Some(snap.table_output.clone()).filter(|_| verbose),
+            verbose.then_some(snap.table_output.clone()),
         )
     } else {
         CheckResult::fail(
             "default_drop",
             "Default policy is DROP",
             "policy drop missing",
-            Some(snap.table_output.clone()).filter(|_| verbose),
+            verbose.then_some(snap.table_output.clone()),
         )
     }
 }
@@ -722,14 +722,14 @@ fn check_loopback_allowed_nft(snap: &NftSnapshot, verbose: bool) -> CheckResult 
             "loopback_allowed",
             "Loopback traffic allowed",
             "lo interface accept present",
-            Some(snap.table_output.clone()).filter(|_| verbose),
+            verbose.then_some(snap.table_output.clone()),
         )
     } else {
         CheckResult::fail(
             "loopback_allowed",
             "Loopback traffic allowed",
             "lo interface accept missing",
-            Some(snap.table_output.clone()).filter(|_| verbose),
+            verbose.then_some(snap.table_output.clone()),
         )
     }
 }
@@ -747,21 +747,21 @@ fn check_vpn_interfaces_allowed_nft(snap: &NftSnapshot, verbose: bool) -> CheckR
             "vpn_interfaces_allowed",
             "VPN tunnel interfaces allowed",
             "tun*, wg*, tap* all allowed",
-            Some(snap.table_output.clone()).filter(|_| verbose),
+            verbose.then_some(snap.table_output.clone()),
         )
     } else if missing.len() < 3 {
         CheckResult::warn(
             "vpn_interfaces_allowed",
             "VPN tunnel interfaces allowed",
             format!("Missing allow rules for: {}", missing.join(", ")),
-            Some(snap.table_output.clone()).filter(|_| verbose),
+            verbose.then_some(snap.table_output.clone()),
         )
     } else {
         CheckResult::fail(
             "vpn_interfaces_allowed",
             "VPN tunnel interfaces allowed",
             "No VPN interface allow rules present",
-            Some(snap.table_output.clone()).filter(|_| verbose),
+            verbose.then_some(snap.table_output.clone()),
         )
     }
 }
@@ -774,14 +774,14 @@ fn check_dhcp_allowed_nft(snap: &NftSnapshot, verbose: bool) -> CheckResult {
             "dhcp_allowed",
             "DHCP traffic allowed",
             "UDP 67/68 rules present",
-            Some(snap.table_output.clone()).filter(|_| verbose),
+            verbose.then_some(snap.table_output.clone()),
         )
     } else {
         CheckResult::warn(
             "dhcp_allowed",
             "DHCP traffic allowed",
             "Missing UDP 67/68 rules",
-            Some(snap.table_output.clone()).filter(|_| verbose),
+            verbose.then_some(snap.table_output.clone()),
         )
     }
 }
@@ -794,14 +794,14 @@ fn check_ipv6_protection_nft(snap: &NftSnapshot, mode: &Ipv6Mode, verbose: bool)
                     "ipv6_protection",
                     "IPv6 leak protection",
                     "meta nfproto ipv6 drop present",
-                    Some(snap.table_output.clone()).filter(|_| verbose),
+                    verbose.then_some(snap.table_output.clone()),
                 )
             } else {
                 CheckResult::fail(
                     "ipv6_protection",
                     "IPv6 leak protection",
                     "meta nfproto ipv6 drop missing",
-                    Some(snap.table_output.clone()).filter(|_| verbose),
+                    verbose.then_some(snap.table_output.clone()),
                 )
             }
         }
@@ -811,14 +811,14 @@ fn check_ipv6_protection_nft(snap: &NftSnapshot, mode: &Ipv6Mode, verbose: bool)
                     "ipv6_protection",
                     "IPv6 leak protection",
                     "IPv6 tunnel-only rules present",
-                    Some(snap.table_output.clone()).filter(|_| verbose),
+                    verbose.then_some(snap.table_output.clone()),
                 )
             } else {
                 CheckResult::warn(
                     "ipv6_protection",
                     "IPv6 leak protection",
                     "IPv6 tunnel rules incomplete",
-                    Some(snap.table_output.clone()).filter(|_| verbose),
+                    verbose.then_some(snap.table_output.clone()),
                 )
             }
         }
@@ -826,7 +826,7 @@ fn check_ipv6_protection_nft(snap: &NftSnapshot, mode: &Ipv6Mode, verbose: bool)
             "ipv6_protection",
             "IPv6 leak protection",
             "IPv6 protection disabled (off)",
-            Some(snap.table_output.clone()).filter(|_| verbose),
+            verbose.then_some(snap.table_output.clone()),
         ),
     }
 }
@@ -841,14 +841,14 @@ fn check_dns_mode_match_nft(snap: &NftSnapshot, mode: DnsMode, verbose: bool) ->
                     "dns_mode_match",
                     "DNS leak protection matches configured mode",
                     "tunnel/strict rules present",
-                    Some(snap.table_output.clone()).filter(|_| verbose),
+                    verbose.then_some(snap.table_output.clone()),
                 )
             } else {
                 CheckResult::warn(
                     "dns_mode_match",
                     "DNS leak protection matches configured mode",
                     "DNS tunnel/strict rules incomplete",
-                    Some(snap.table_output.clone()).filter(|_| verbose),
+                    verbose.then_some(snap.table_output.clone()),
                 )
             }
         }
@@ -861,14 +861,14 @@ fn check_dns_mode_match_nft(snap: &NftSnapshot, mode: DnsMode, verbose: bool) ->
                     "dns_mode_match",
                     "DNS leak protection matches configured mode",
                     "localhost DNS rules present",
-                    Some(snap.table_output.clone()).filter(|_| verbose),
+                    verbose.then_some(snap.table_output.clone()),
                 )
             } else {
                 CheckResult::warn(
                     "dns_mode_match",
                     "DNS leak protection matches configured mode",
                     "localhost DNS rules missing",
-                    Some(snap.table_output.clone()).filter(|_| verbose),
+                    verbose.then_some(snap.table_output.clone()),
                 )
             }
         }
@@ -876,7 +876,7 @@ fn check_dns_mode_match_nft(snap: &NftSnapshot, mode: DnsMode, verbose: bool) ->
             "dns_mode_match",
             "DNS leak protection matches configured mode",
             "dns_mode=any (least secure)",
-            Some(snap.table_output.clone()).filter(|_| verbose),
+            verbose.then_some(snap.table_output.clone()),
         ),
     }
 }
@@ -887,7 +887,7 @@ fn check_no_rogue_rules_nft(snap: &NftSnapshot, verbose: bool) -> CheckResult {
         "no_rogue_rules",
         "No conflicting rules in OUTPUT",
         "policy drop covers OUTPUT",
-        Some(snap.table_output.clone()).filter(|_| verbose),
+        verbose.then_some(snap.table_output.clone()),
     )
 }
 
