@@ -14,6 +14,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.6] - 2026-08-11
+
+### Fixed
+
+- **Kill switch locked up all traffic at autostart with a hostname VPN
+  endpoint.** With `kill_switch_enabled = true` and the default fail-closed
+  ordering (`[killswitch] pre_connect = true`), `handle_connect` enabled the
+  kill switch *before* connecting regardless of the target endpoint. For a
+  hostname-only endpoint (e.g. NordVPN `*.nordvpn.com`) the server IP cannot be
+  pre-whitelisted, so the kill switch blocked the very DNS needed to resolve the
+  endpoint — every route was blackholed until the handshake eventually crawled
+  through `allow_lan` DNS or the user manually ran
+  `sudo nft delete table inet shroud_killswitch`. On login this surfaced as
+  auto-connect taking the whole machine offline.
+
+  `handle_connect` now checks whether the target VPN is hostname-only (via the
+  existing `detect_vpn_endpoints` scan) and, when it is, transparently falls
+  back to connect-first ordering for that connection: the kill switch is
+  suspended during the handshake and re-enabled immediately after a successful
+  connect (the live tunnel is kept up by the conntrack ESTABLISHED rule).
+  Fail-closed ordering is unchanged for IP endpoints, so there is still no leak
+  window whenever the server IP *can* be whitelisted. This covers every connect
+  path (login auto-connect, `reconnect`, `switch`, and manual `connect`), which
+  all funnel through `handle_connect`. Covered by unit tests for the new
+  `resolve_pre_connect` decision. Users who previously set `pre_connect = false`
+  purely to avoid the hostname lockup no longer need that workaround.
+
 ## [2.5.5] - 2026-08-11
 
 ### Fixed

@@ -166,18 +166,28 @@ so the grant cannot be repurposed to rewrite the wider firewall.
 
 By default the kill switch is enabled **before** connecting (fail-closed), which
 requires a whitelistable server IP. Hostname-only endpoints (e.g. NordVPN
-`*.nordvpn.com`) can't be pre-whitelisted, so a closed kill switch may block the
-DNS needed to (re)connect. Set `pre_connect = false` under `[killswitch]` for
-usability-first ordering: the kill switch is suspended during the handshake and
-re-enabled after a successful connect.
+`*.nordvpn.com`) can't be pre-whitelisted, so pre-enabling a closed kill switch
+would block the DNS needed to (re)connect.
+
+Shroud handles this automatically: when the VPN you are connecting to has a
+hostname-only endpoint, it falls back to **connect-first** ordering for that
+connection even while `pre_connect = true` — the kill switch is suspended during
+the handshake and re-enabled immediately after a successful connect (the live
+tunnel is kept up by the connection-tracking `ESTABLISHED` rule). IP endpoints
+keep strict fail-closed ordering, so there is no leak window when the server IP
+*can* be whitelisted.
+
+Set `pre_connect = false` under `[killswitch]` to force connect-first ordering
+for **every** connection, regardless of endpoint type:
 
 ```toml
 [killswitch]
 pre_connect = false
 ```
 
-Trade-off: a brief unprotected window during (re)connect, and fail-open (kill
-switch stays suspended, with a logged warning) if a connect attempt fails.
+Trade-off: connect-first has a brief unprotected window during (re)connect, and
+is fail-open (the kill switch stays suspended, with a logged warning) if a
+connect attempt fails.
 
 Remove anytime:
 ```bash

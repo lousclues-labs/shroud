@@ -20,6 +20,18 @@ use super::super::{
 use super::system::resolve_restart_path;
 
 impl super::super::VpnSupervisor {
+    /// Decide the effective kill-switch ordering for a single connect.
+    ///
+    /// `pre_connect` (fail-closed) requires a whitelistable server IP. When the
+    /// target VPN is hostname-only (listed in `hostname_vpns`), pre-enabling the
+    /// kill switch would block the DNS needed to resolve the endpoint — a
+    /// guaranteed traffic lockup at connect/autostart — so fall back to
+    /// connect-first ordering. Returns `true` to pre-enable, `false` for
+    /// connect-first.
+    fn resolve_pre_connect(pre_connect: bool, target: &str, hostname_vpns: &[String]) -> bool {
+        pre_connect && !hostname_vpns.iter().any(|n| n == target)
+    }
+
     /// Handle user request to connect to a server
     #[instrument(skip(self), fields(connection = %connection_name))]
     pub(crate) async fn handle_connect(&mut self, connection_name: &str) {
@@ -53,8 +65,33 @@ impl super::super::VpnSupervisor {
         // - connect-first: usability-first — suspend the kill switch during the
         //   handshake so DNS can resolve a hostname endpoint; it is re-enabled
         //   after a successful connect by the post-connect block below.
+        //
+        // pre_connect can only work when the target endpoint has a whitelistable
+        // server IP. For a hostname-only endpoint (e.g. NordVPN *.nordvpn.com)
+        // the kill switch cannot pre-whitelist the server, so pre-enabling would
+        // block the very DNS needed to resolve it — locking up ALL traffic at
+        // connect/autostart. Detect that and transparently fall back to
+        // connect-first ordering for this connection.
+        let effective_pre_connect = if self.config_store.config.kill_switch_enabled
+            && self.config_store.config.killswitch.pre_connect
+        {
+            let scan = crate::nm::detect_vpn_endpoints().await;
+            let eff = Self::resolve_pre_connect(true, connection_name, &scan.hostname_vpns);
+            if !eff {
+                warn!(
+                    "'{}' uses a hostname endpoint; the kill switch cannot pre-whitelist it. \
+                     Falling back to connect-first ordering (suspend during the handshake, \
+                     re-enable after) to avoid blocking the connection.",
+                    connection_name
+                );
+            }
+            eff
+        } else {
+            self.config_store.config.killswitch.pre_connect
+        };
+
         if self.config_store.config.kill_switch_enabled {
-            if self.config_store.config.killswitch.pre_connect {
+            if effective_pre_connect {
                 if !self.kill_switch.is_enabled() {
                     info!("Pre-enabling kill switch before connection");
                     if let Err(e) = self.kill_switch.enable().await {
@@ -230,7 +267,7 @@ impl super::super::VpnSupervisor {
             }
         } else if !connection_succeeded
             && self.config_store.config.kill_switch_enabled
-            && !self.config_store.config.killswitch.pre_connect
+            && !effective_pre_connect
         {
             warn!(
                 "connect-first: connection failed; kill switch remains suspended \
@@ -691,5 +728,51 @@ impl super::super::VpnSupervisor {
 
         info!("Configuration reloaded successfully");
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::supervisor::VpnSupervisor;
+
+    #[test]
+    fn pre_connect_preserved_for_ip_endpoint() {
+        // No hostname-only VPNs → fail-closed pre_connect is honored.
+        assert!(VpnSupervisor::resolve_pre_connect(
+            true,
+            "us-ip-server",
+            &[]
+        ));
+    }
+
+    #[test]
+    fn pre_connect_falls_back_for_hostname_target() {
+        // Target is hostname-only → must fall back to connect-first (the
+        // autostart lockup fix).
+        let hostnames = vec!["us13526".to_string(), "ie150".to_string()];
+        assert!(!VpnSupervisor::resolve_pre_connect(
+            true, "us13526", &hostnames
+        ));
+    }
+
+    #[test]
+    fn pre_connect_unaffected_by_other_hostname_vpn() {
+        // A different VPN being hostname-only must not change this target's
+        // ordering.
+        let hostnames = vec!["ie150".to_string()];
+        assert!(VpnSupervisor::resolve_pre_connect(
+            true, "us13526", &hostnames
+        ));
+    }
+
+    #[test]
+    fn connect_first_stays_connect_first() {
+        // pre_connect=false (connect-first) is unaffected by endpoint type.
+        assert!(!VpnSupervisor::resolve_pre_connect(false, "any", &[]));
+        assert!(!VpnSupervisor::resolve_pre_connect(
+            false,
+            "us13526",
+            &["us13526".to_string()]
+        ));
     }
 }

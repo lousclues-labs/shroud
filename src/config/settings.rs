@@ -41,10 +41,11 @@
 //! # Restrict LAN to common local-service ports only
 //! lan_restrict_ports = false
 //! # Kill-switch ordering vs. connecting:
-//! # - true  (default): enable BEFORE connecting (fail-closed; needs a
-//! #          whitelistable server IP — blocks hostname-only endpoints)
-//! # - false (connect-first): suspend during the handshake so DNS can resolve
-//! #          a hostname endpoint, then re-enable after a successful connect
+//! # - true  (default): enable BEFORE connecting (fail-closed). Needs a
+//! #          whitelistable server IP; a hostname-only target auto-falls-back
+//! #          to connect-first for that connect so it doesn't lock up.
+//! # - false (connect-first): always suspend during the handshake so DNS can
+//! #          resolve a hostname endpoint, then re-enable after connecting
 //! pre_connect = true
 //! ```
 
@@ -178,14 +179,16 @@ pub struct KillSwitchConfig {
     /// Kill-switch ordering relative to connecting.
     ///
     /// `true` (default, fail-closed): enable the kill switch BEFORE connecting
-    /// so no traffic leaks during the handshake. Needs a whitelistable server
-    /// IP, which is unavailable for hostname-only endpoints (e.g. NordVPN
-    /// `*.nordvpn.com` remotes) — the handshake can then be blocked.
+    /// so no traffic leaks during the handshake. This needs a whitelistable
+    /// server IP. When the target VPN is hostname-only (e.g. NordVPN
+    /// `*.nordvpn.com` remotes), pre-enabling would block the DNS needed to
+    /// resolve it, so Shroud automatically falls back to connect-first ordering
+    /// for that connection instead of locking up.
     ///
-    /// `false` (connect-first, usability-first): suspend the kill switch during
-    /// the handshake so DNS can resolve a hostname endpoint, then re-enable it
-    /// after a successful connect. Trades a brief leak window (and fail-open if
-    /// a (re)connect fails) for reliable connects.
+    /// `false` (connect-first, usability-first): always suspend the kill switch
+    /// during the handshake so DNS can resolve a hostname endpoint, then
+    /// re-enable it after a successful connect. Trades a brief leak window (and
+    /// fail-open if a (re)connect fails) for reliable connects.
     #[serde(default = "default_true")]
     pub pre_connect: bool,
 }
