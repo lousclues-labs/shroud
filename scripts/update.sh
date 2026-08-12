@@ -18,6 +18,26 @@ echo "Building shroud..."
 # PATH and would then shadow every subsequent build.
 cargo build --release "${@}"
 
+# Stop the daemon before swapping the binary so the client speaking to it is the
+# same build it is running; a newer client talking to an older daemon is exactly
+# the mismatch this script used to create.
+echo "Stopping daemon..."
+if [ -x "$BINARY" ]; then
+    "$BINARY" quit 2>/dev/null || true
+fi
+
+# `quit` is best-effort: a stale socket can leave the old daemon running, and it
+# would then race the new instance for shroud.sock. Confirm it is gone first.
+for _ in $(seq 1 10); do
+    pgrep -x shroud > /dev/null || break
+    sleep 0.5
+done
+if pgrep -x shroud > /dev/null; then
+    echo "Old daemon did not exit on quit; stopping it"
+    pkill -x shroud || true
+    sleep 1
+fi
+
 echo "Installing to $INSTALL_DIR..."
 mkdir -p "$INSTALL_DIR"
 # Atomic binary replacement: write beside the target then rename.
@@ -34,21 +54,7 @@ if [ -e "$HOME/.cargo/bin/shroud" ]; then
     mv "$HOME/.cargo/bin/shroud" "$stale"
 fi
 
-echo "Restarting daemon..."
-"$BINARY" quit 2>/dev/null || true
-
-# `quit` is best-effort: a stale socket can leave the old daemon running, and it
-# would then race the new instance for shroud.sock. Confirm it is gone first.
-for _ in $(seq 1 10); do
-    pgrep -x shroud > /dev/null || break
-    sleep 0.5
-done
-if pgrep -x shroud > /dev/null; then
-    echo "Old daemon did not exit on quit; stopping it"
-    pkill -x shroud || true
-    sleep 1
-fi
-
+echo "Starting daemon..."
 # Prefer the user service: it keeps exactly one instance owning the IPC socket
 # and starts the daemon as a session child so the tray can register. Launching
 # with nohup alongside an enabled autostart unit produces two daemons racing

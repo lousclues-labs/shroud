@@ -10,7 +10,7 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Get the path to the lock file
 pub fn get_lock_file_path() -> PathBuf {
@@ -132,16 +132,15 @@ fn acquire_instance_lock_inner(retries_left: u32) -> Result<File, String> {
     Ok(file)
 }
 
-/// Release the instance lock by removing the lock file
+/// Release the instance lock.
+///
+/// The `flock` belongs to the open file descriptor and is dropped when this
+/// process exits, so there is nothing to unlock here. The lock file is
+/// deliberately left in place: removing it while we are still shutting down lets
+/// the next daemon create a fresh inode and take a lock that does not conflict
+/// with the one we still hold, which allows two daemons to run at once.
 pub fn release_instance_lock() {
-    let lock_path = get_lock_file_path();
-    if let Err(e) = fs::remove_file(&lock_path) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            warn!("Failed to remove lock file: {}", e);
-        }
-    } else {
-        info!("Released instance lock");
-    }
+    debug!("Instance lock is released when the process exits");
 }
 
 #[cfg(test)]
@@ -197,16 +196,18 @@ mod tests {
     }
 
     #[test]
-    fn test_release_lock_removes_file() {
+    fn test_release_lock_keeps_file_for_flock_owner() {
         with_temp_runtime_dir(|_| {
             if let Ok(file) = acquire_instance_lock() {
                 let path = get_lock_file_path();
                 assert!(path.exists());
 
-                drop(file);
+                // Unlinking here would let the next daemon lock a fresh inode
+                // while this one is still alive.
                 release_instance_lock();
+                assert!(path.exists());
 
-                assert!(!path.exists());
+                drop(file);
             }
         });
     }

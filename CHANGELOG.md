@@ -14,6 +14,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.3] - 2026-08-11
+
+### Fixed
+
+- **Two daemons could run at once, defeating the instance lock.**
+  `release_instance_lock()` deleted the lock file, and it is called from
+  `handle_quit` and the restart path *while the process is still alive*. Once the
+  file was unlinked, the next daemon created a fresh inode and took an `flock`
+  on it that did not conflict with the one the outgoing daemon still held, so it
+  started happily alongside it. The two then raced for `shroud.sock`, which is
+  what produced "Timeout waiting for supervisor response" and left commands
+  talking to whichever daemon won.
+
+  The `flock` is owned by the open file descriptor and is released by the kernel
+  when the process exits, so releasing never required unlinking. The lock file is
+  now left in place; a leftover file from a previous run is harmless because
+  `acquire_instance_lock` locks it, checks the recorded PID, and reclaims it when
+  that process is gone.
+
+  Verified on a live daemon: starting a second instance is refused
+  ("Another instance is already running (PID ...)"), the lock file survives a
+  `quit`, and a subsequent start reclaims it normally.
+
+- **`scripts/update.sh` stopped the daemon with a newer client than the daemon
+  it was talking to.** It installed the freshly built binary first and only then
+  ran `quit`, so the client and the running daemon were different builds and the
+  shutdown could be reported as failed, falling through to `pkill`. The script
+  now stops the daemon before swapping the binary, then installs and starts.
+
 ## [2.5.2] - 2026-08-11
 
 ### Fixed
