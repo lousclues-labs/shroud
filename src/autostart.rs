@@ -123,6 +123,16 @@ X-KDE-autostart-after=panel
     /// Enable autostart
     pub fn enable() -> Result<(), String> {
         let path = Self::desktop_file_path()?;
+        let _ = Self::cleanup_old_systemd();
+        Self::enable_at(&path)
+    }
+
+    /// Write the autostart entry to `path`.
+    ///
+    /// Split out so tests can drive it with a temporary path: they would
+    /// otherwise create and delete the real `~/.config/autostart` entry of
+    /// whoever runs the suite, silently disabling autostart on that machine.
+    fn enable_at(path: &std::path::Path) -> Result<(), String> {
         let content = Self::generate_desktop_entry()?;
 
         if let Some(parent) = path.parent() {
@@ -130,15 +140,13 @@ X-KDE-autostart-after=panel
                 .map_err(|e| format!("Failed to create autostart directory: {}", e))?;
         }
 
-        let _ = Self::cleanup_old_systemd();
-
-        fs::write(&path, &content).map_err(|e| format!("Failed to write desktop file: {}", e))?;
+        fs::write(path, &content).map_err(|e| format!("Failed to write desktop file: {}", e))?;
 
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let perms = fs::Permissions::from_mode(0o755);
-            let _ = fs::set_permissions(&path, perms);
+            let _ = fs::set_permissions(path, perms);
         }
 
         Ok(())
@@ -147,9 +155,13 @@ X-KDE-autostart-after=panel
     /// Disable autostart
     pub fn disable() -> Result<(), String> {
         let path = Self::desktop_file_path()?;
+        Self::disable_at(&path)
+    }
 
+    /// Remove the autostart entry at `path`, succeeding if it is already gone.
+    fn disable_at(path: &std::path::Path) -> Result<(), String> {
         if path.exists() {
-            fs::remove_file(&path).map_err(|e| format!("Failed to remove desktop file: {}", e))?;
+            fs::remove_file(path).map_err(|e| format!("Failed to remove desktop file: {}", e))?;
         }
 
         Ok(())
@@ -298,9 +310,12 @@ mod tests {
 
     #[test]
     fn test_disable_succeeds_when_not_enabled() {
-        let _ = Autostart::disable();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shroud.desktop");
 
-        let result = Autostart::disable();
+        assert!(Autostart::disable_at(&path).is_ok());
+
+        let result = Autostart::disable_at(&path);
         assert!(result.is_ok());
     }
 
@@ -353,13 +368,16 @@ mod tests {
 
     #[test]
     fn test_enable_creates_parent_directory() {
-        let path = Autostart::desktop_file_path().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("autostart").join("shroud.desktop");
         let parent = path.parent().unwrap();
 
-        let result = Autostart::enable();
+        let result = Autostart::enable_at(&path);
         assert!(result.is_ok());
         assert!(parent.exists());
+        assert!(path.exists());
 
-        let _ = Autostart::disable();
+        assert!(Autostart::disable_at(&path).is_ok());
+        assert!(!path.exists());
     }
 }

@@ -8,33 +8,64 @@ set -e
 
 cd "$(dirname "$0")/.."
 
-echo "Building and installing shroud..."
-cargo install --path . --force "${@}"
+INSTALL_DIR="$HOME/.local/bin"
+BINARY="$INSTALL_DIR/shroud"
+SERVICE="app-shroud@autostart.service"
 
-echo "Copying to ~/.local/bin..."
-# Atomic binary replacement: copy to temp file then rename.
+echo "Building shroud..."
+# Build and install exactly like setup.sh. Using `cargo install` here would
+# place a second copy in ~/.cargo/bin, which precedes ~/.local/bin on a default
+# PATH and would then shadow every subsequent build.
+cargo build --release "${@}"
+
+echo "Installing to $INSTALL_DIR..."
+mkdir -p "$INSTALL_DIR"
+# Atomic binary replacement: write beside the target then rename.
 # This avoids the rm+cp pattern that triggers /proc/self/exe "(deleted)"
 # and breaks the restart path. mv on the same filesystem is atomic.
-cp ~/.cargo/bin/shroud ~/.local/bin/.shroud.new
-chmod 755 ~/.local/bin/.shroud.new
-mv ~/.local/bin/.shroud.new ~/.local/bin/shroud
+install -m 755 target/release/shroud "$INSTALL_DIR/.shroud.new"
+mv "$INSTALL_DIR/.shroud.new" "$BINARY"
+
+# Clear out a copy left by older versions of this script, which otherwise keeps
+# winning on PATH and makes this update look like it had no effect.
+if [ -e "$HOME/.cargo/bin/shroud" ]; then
+    stale="$HOME/.cargo/bin/shroud.stale.$(date +%Y%m%d%H%M%S)"
+    echo "Moving stale $HOME/.cargo/bin/shroud aside (it shadows $BINARY on PATH)"
+    mv "$HOME/.cargo/bin/shroud" "$stale"
+fi
 
 echo "Restarting daemon..."
-# Stop the old daemon gracefully, then start the new binary directly.
-# We can't rely on IPC 'restart' because the old daemon may have a different
-# version of resolve_restart_path() that can't find the new binary.
-shroud quit 2>/dev/null || true
-sleep 1
-# Start the new daemon (the binary at ~/.local/bin/shroud is now the new version)
-nohup ~/.local/bin/shroud > /dev/null 2>&1 &
-sleep 1
-# Verify it's running
-if shroud ping > /dev/null 2>&1; then
+"$BINARY" quit 2>/dev/null || true
+
+# `quit` is best-effort: a stale socket can leave the old daemon running, and it
+# would then race the new instance for shroud.sock. Confirm it is gone first.
+for _ in $(seq 1 10); do
+    pgrep -x shroud > /dev/null || break
+    sleep 0.5
+done
+if pgrep -x shroud > /dev/null; then
+    echo "Old daemon did not exit on quit; stopping it"
+    pkill -x shroud || true
+    sleep 1
+fi
+
+# Prefer the user service: it keeps exactly one instance owning the IPC socket
+# and starts the daemon as a session child so the tray can register. Launching
+# with nohup alongside an enabled autostart unit produces two daemons racing
+# the same socket.
+if systemctl --user cat "$SERVICE" > /dev/null 2>&1; then
+    systemctl --user restart "$SERVICE"
+else
+    nohup "$BINARY" > /dev/null 2>&1 &
+fi
+
+sleep 2
+if "$BINARY" ping > /dev/null 2>&1; then
     echo "Daemon restarted successfully"
 else
     echo "Warning: Daemon may not have started. Run 'shroud' manually."
 fi
 
 echo ""
-shroud --version
+"$BINARY" --version
 echo "✓ Update complete"

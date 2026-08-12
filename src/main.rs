@@ -167,7 +167,7 @@ async fn run_daemon_mode(args: cli::Args) {
     let tray_handle = Arc::new(std::sync::Mutex::new(None));
 
     // Start IPC Server
-    let ipc_server = ipc::IpcServer::new(ipc_tx);
+    let ipc_server = ipc::IpcServer::new(ipc_tx, shared_state.clone());
     tokio::spawn(async move {
         if let Err(e) = ipc_server.run().await {
             error!("IPC server failed: {}", e);

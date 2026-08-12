@@ -14,6 +14,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.2] - 2026-08-11
+
+### Fixed
+
+- **Running the test suite disabled autostart on the developer's machine.**
+  `Autostart::{enable,disable}` resolve `~/.config/autostart/shroud.desktop`,
+  and two tests that were not marked `#[ignore]` called them directly, so every
+  `cargo test` run created and then deleted the real entry. The generated
+  `app-shroud@autostart.service` unit then vanished, which in turn made
+  `scripts/update.sh` take its non-systemd path and start a second daemon
+  competing for the IPC socket. `enable_at`/`disable_at` now take the target
+  path and the tests drive them with a temp directory.
+
+- **`status`, `ping`, and the toggle-status queries hung while a connect was in
+  flight.** The supervisor handles IPC commands one at a time, so a connect or
+  switch (which can legitimately run for over a minute) queued every other
+  command behind it until the client gave up — a busy daemon looked like a dead
+  one. `Ping`, `Status`, `KillSwitchStatus`, and `AutoReconnectStatus` are now
+  answered directly by the IPC server from the shared state snapshot the
+  supervisor already maintains. Commands that change state are still forwarded
+  to the supervisor and remain serialized.
+
+  Note: `ping` now reports that the daemon's socket is serving, rather than that
+  the supervisor is idle.
+
+- **`scripts/update.sh` installed a second binary that shadowed the first.** It
+  ran `cargo install --path .`, which writes `~/.cargo/bin/shroud`, then copied
+  the result to `~/.local/bin/shroud` and left both in place. Because
+  `~/.cargo/bin` precedes `~/.local/bin` on a default PATH, the shell, the
+  autostart entry, and the running daemon could all keep using the stale copy,
+  making an update appear to have no effect. The script now builds with
+  `cargo build --release` and installs only to `~/.local/bin` (matching
+  `setup.sh`), moving any pre-existing `~/.cargo/bin/shroud` aside. The same
+  pattern in the CLI's inline fallback was fixed identically.
+
+- **`scripts/update.sh` could leave two daemons racing the IPC socket.** It
+  restarted the daemon with `nohup` even when the systemd autostart unit was
+  active, producing a second instance that competed for `shroud.sock` and
+  produced "Timeout waiting for supervisor response". It now restarts through
+  `app-shroud@autostart.service` when that unit exists, falling back to `nohup`
+  only when it does not.
+
 ## [2.5.1] - 2026-08-11
 
 ### Fixed

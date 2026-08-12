@@ -67,7 +67,7 @@ pub async fn run_headless(config: Config) -> Result<(), Box<dyn std::error::Erro
     let tray_handle = Arc::new(std::sync::Mutex::new(None));
 
     // Step 3: Start IPC server
-    let ipc_server = IpcServer::new(ipc_tx);
+    let ipc_server = IpcServer::new(ipc_tx, shared_state.clone());
     let ipc_handle = tokio::spawn(async move {
         if let Err(e) = ipc_server.run().await {
             error!("IPC server failed: {}", e);

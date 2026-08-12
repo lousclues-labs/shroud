@@ -13,8 +13,10 @@
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::{mpsc, RwLock, Semaphore};
 use tracing::{debug, error, info, warn};
+
+use crate::tray::SharedState;
 
 use super::protocol::{socket_path, IpcCommand, IpcResponse, PROTOCOL_VERSION};
 use thiserror::Error;
@@ -24,6 +26,53 @@ use thiserror::Error;
 /// Derived from the supervisor's worst-case switch duration so that a slow but
 /// healthy connect is never reported as "Timeout waiting for supervisor response".
 const SUPERVISOR_RESPONSE_TIMEOUT_SECS: u64 = crate::supervisor::WORST_CASE_SWITCH_SECS + 30;
+
+/// Answer read-only commands from the shared state snapshot.
+///
+/// The supervisor handles commands one at a time, so a connect or switch can
+/// occupy it for over a minute. Forwarding status queries would queue them
+/// behind that work and trip the client's timeout, making a busy daemon look
+/// dead. These answers need no supervisor state, so serve them directly.
+async fn serve_read_only(
+    command: &IpcCommand,
+    shared_state: &Arc<RwLock<SharedState>>,
+) -> Option<IpcResponse> {
+    match command {
+        IpcCommand::Ping => Some(IpcResponse::Pong),
+        IpcCommand::KillSwitchStatus => Some(IpcResponse::KillSwitchStatus {
+            enabled: shared_state.read().await.kill_switch,
+        }),
+        IpcCommand::AutoReconnectStatus => Some(IpcResponse::AutoReconnectStatus {
+            enabled: shared_state.read().await.auto_reconnect,
+        }),
+        IpcCommand::Status => {
+            // Copy out before the await below so the supervisor is never blocked
+            // on this read lock while we shell out to NetworkManager.
+            let (vpn_name, state_name, kill_switch) = {
+                let state = shared_state.read().await;
+                (
+                    state.state.server_name().map(|s| s.to_string()),
+                    state.state.name().to_string(),
+                    state.kill_switch,
+                )
+            };
+
+            let vpn_type = match &vpn_name {
+                Some(name) => Some(crate::nm::get_vpn_type(name).await.to_string()),
+                None => None,
+            };
+
+            Some(IpcResponse::Status {
+                connected: vpn_name.is_some(),
+                vpn_name,
+                vpn_type,
+                state: state_name,
+                kill_switch_enabled: kill_switch,
+            })
+        }
+        _ => None,
+    }
+}
 
 /// Get the PID of the peer process connected to a Unix socket.
 #[cfg(target_os = "linux")]
@@ -77,6 +126,8 @@ const MAX_COMMANDS_PER_CONNECTION: usize = 100;
 pub struct IpcServer {
     /// Channel to send received commands to the supervisor
     command_tx: mpsc::Sender<(IpcCommand, mpsc::Sender<IpcResponse>)>,
+    /// Snapshot of supervisor state, used to answer read-only commands directly
+    shared_state: Arc<RwLock<SharedState>>,
 }
 
 impl IpcServer {
@@ -85,8 +136,15 @@ impl IpcServer {
     /// # Arguments
     ///
     /// * `command_tx` - Channel sender for forwarding commands to supervisor
-    pub fn new(command_tx: mpsc::Sender<(IpcCommand, mpsc::Sender<IpcResponse>)>) -> Self {
-        Self { command_tx }
+    /// * `shared_state` - State snapshot the supervisor keeps up to date
+    pub fn new(
+        command_tx: mpsc::Sender<(IpcCommand, mpsc::Sender<IpcResponse>)>,
+        shared_state: Arc<RwLock<SharedState>>,
+    ) -> Self {
+        Self {
+            command_tx,
+            shared_state,
+        }
     }
 
     /// Run the IPC server.
@@ -150,6 +208,7 @@ impl IpcServer {
             match listener.accept().await {
                 Ok((stream, _addr)) => {
                     let tx = self.command_tx.clone();
+                    let state = self.shared_state.clone();
                     let sem = semaphore.clone();
                     let permit = match sem.try_acquire_owned() {
                         Ok(p) => p,
@@ -159,7 +218,7 @@ impl IpcServer {
                         }
                     };
                     tokio::spawn(async move {
-                        if let Err(e) = Self::handle_connection(stream, tx).await {
+                        if let Err(e) = Self::handle_connection(stream, tx, state).await {
                             warn!("Client connection error: {}", e);
                         }
                         drop(permit);
@@ -176,6 +235,7 @@ impl IpcServer {
     async fn handle_connection(
         stream: UnixStream,
         command_tx: mpsc::Sender<(IpcCommand, mpsc::Sender<IpcResponse>)>,
+        shared_state: Arc<RwLock<SharedState>>,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         let peer_pid = get_peer_pid(&stream);
         let self_pid = std::process::id();
@@ -309,7 +369,9 @@ impl IpcServer {
 
                 let (resp_tx, mut resp_rx) = mpsc::channel(1);
 
-                if command_tx.send((command, resp_tx)).await.is_err() {
+                if let Some(resp) = serve_read_only(&command, &shared_state).await {
+                    resp
+                } else if command_tx.send((command, resp_tx)).await.is_err() {
                     IpcResponse::Error {
                         message: "Supervisor channel closed".to_string(),
                     }
@@ -383,7 +445,7 @@ mod tests {
     #[tokio::test]
     async fn test_server_creation() {
         let (tx, _rx) = mpsc::channel(1);
-        let _server = IpcServer::new(tx);
+        let _server = IpcServer::new(tx, Arc::new(RwLock::new(SharedState::default())));
     }
 
     #[tokio::test]
@@ -391,8 +453,14 @@ mod tests {
         let (tx, _rx) = mpsc::channel(16);
         let (client, server_stream) = tokio::net::UnixStream::pair().unwrap();
 
-        let handle =
-            tokio::spawn(async move { IpcServer::handle_connection(server_stream, tx).await });
+        let handle = tokio::spawn(async move {
+            IpcServer::handle_connection(
+                server_stream,
+                tx,
+                Arc::new(RwLock::new(SharedState::default())),
+            )
+            .await
+        });
 
         let mut client = client;
         client.write_all(b"not valid json\n").await.unwrap();
@@ -414,8 +482,14 @@ mod tests {
             }
         });
 
-        let handle =
-            tokio::spawn(async move { IpcServer::handle_connection(server_stream, tx).await });
+        let handle = tokio::spawn(async move {
+            IpcServer::handle_connection(
+                server_stream,
+                tx,
+                Arc::new(RwLock::new(SharedState::default())),
+            )
+            .await
+        });
 
         let (client_reader, mut client_writer) = client.into_split();
         let ping_json = serde_json::to_string(&IpcCommand::Ping).unwrap();
@@ -451,8 +525,14 @@ mod tests {
             }
         });
 
-        let handle =
-            tokio::spawn(async move { IpcServer::handle_connection(server_stream, tx).await });
+        let handle = tokio::spawn(async move {
+            IpcServer::handle_connection(
+                server_stream,
+                tx,
+                Arc::new(RwLock::new(SharedState::default())),
+            )
+            .await
+        });
 
         let (client_reader, mut client_writer) = client.into_split();
         let hello_json = serde_json::to_string(&IpcCommand::Hello {
@@ -492,8 +572,14 @@ mod tests {
         let (tx, _rx) = mpsc::channel::<(IpcCommand, mpsc::Sender<IpcResponse>)>(16);
         let (client, server_stream) = tokio::net::UnixStream::pair().unwrap();
 
-        let handle =
-            tokio::spawn(async move { IpcServer::handle_connection(server_stream, tx).await });
+        let handle = tokio::spawn(async move {
+            IpcServer::handle_connection(
+                server_stream,
+                tx,
+                Arc::new(RwLock::new(SharedState::default())),
+            )
+            .await
+        });
 
         let (client_reader, mut client_writer) = client.into_split();
         let hello_json = serde_json::to_string(&IpcCommand::Hello {
@@ -524,8 +610,14 @@ mod tests {
         let (tx, _rx) = mpsc::channel(16);
         let (client, server_stream) = tokio::net::UnixStream::pair().unwrap();
 
-        let handle =
-            tokio::spawn(async move { IpcServer::handle_connection(server_stream, tx).await });
+        let handle = tokio::spawn(async move {
+            IpcServer::handle_connection(
+                server_stream,
+                tx,
+                Arc::new(RwLock::new(SharedState::default())),
+            )
+            .await
+        });
 
         let mut client = client;
         // Send an empty line followed by EOF
@@ -542,8 +634,14 @@ mod tests {
         let (client, server_stream) = tokio::net::UnixStream::pair().unwrap();
 
         // No handler needed — validation should reject before reaching supervisor
-        let handle =
-            tokio::spawn(async move { IpcServer::handle_connection(server_stream, tx).await });
+        let handle = tokio::spawn(async move {
+            IpcServer::handle_connection(
+                server_stream,
+                tx,
+                Arc::new(RwLock::new(SharedState::default())),
+            )
+            .await
+        });
 
         let (client_reader, mut client_writer) = client.into_split();
         // Send a Connect with empty name (fails validation)
@@ -593,8 +691,14 @@ mod tests {
             }
         });
 
-        let handle =
-            tokio::spawn(async move { IpcServer::handle_connection(server_stream, tx).await });
+        let handle = tokio::spawn(async move {
+            IpcServer::handle_connection(
+                server_stream,
+                tx,
+                Arc::new(RwLock::new(SharedState::default())),
+            )
+            .await
+        });
 
         let (client_reader, mut client_writer) = client.into_split();
         let json = serde_json::to_string(&IpcCommand::Status).unwrap();
@@ -637,8 +741,14 @@ mod tests {
             }
         });
 
-        let handle =
-            tokio::spawn(async move { IpcServer::handle_connection(server_stream, tx).await });
+        let handle = tokio::spawn(async move {
+            IpcServer::handle_connection(
+                server_stream,
+                tx,
+                Arc::new(RwLock::new(SharedState::default())),
+            )
+            .await
+        });
 
         let (client_reader, mut client_writer) = client.into_split();
         let ping_json = serde_json::to_string(&IpcCommand::Ping).unwrap();
@@ -684,5 +794,46 @@ mod tests {
         // Verify symlink_metadata detects it
         let meta = std::fs::symlink_metadata(&link).unwrap();
         assert!(meta.file_type().is_symlink());
+    }
+
+    #[tokio::test]
+    async fn read_only_commands_answered_without_supervisor() {
+        let state = Arc::new(RwLock::new(SharedState {
+            kill_switch: true,
+            auto_reconnect: false,
+            ..SharedState::default()
+        }));
+
+        assert!(matches!(
+            serve_read_only(&IpcCommand::Ping, &state).await,
+            Some(IpcResponse::Pong)
+        ));
+        assert!(matches!(
+            serve_read_only(&IpcCommand::KillSwitchStatus, &state).await,
+            Some(IpcResponse::KillSwitchStatus { enabled: true })
+        ));
+        assert!(matches!(
+            serve_read_only(&IpcCommand::AutoReconnectStatus, &state).await,
+            Some(IpcResponse::AutoReconnectStatus { enabled: false })
+        ));
+    }
+
+    #[tokio::test]
+    async fn state_changing_commands_still_go_to_supervisor() {
+        let state = Arc::new(RwLock::new(SharedState::default()));
+
+        for command in [
+            IpcCommand::Connect {
+                name: "vpn-a".to_string(),
+            },
+            IpcCommand::Disconnect,
+            IpcCommand::KillSwitch { enable: true },
+        ] {
+            assert!(
+                serve_read_only(&command, &state).await.is_none(),
+                "{:?} must be forwarded to the supervisor",
+                command
+            );
+        }
     }
 }

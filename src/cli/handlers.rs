@@ -924,12 +924,18 @@ fn handle_update_command() -> i32 {
         .arg(concat!(
             "set -e && ",
             "echo 'Building and installing...' && ",
-            "cargo install --path . --force && ",
-            "rm -f ~/.local/bin/shroud 2>/dev/null || true && ",
-            "cp ~/.cargo/bin/shroud ~/.local/bin/shroud && ",
+            // `cargo install` would leave a second binary in ~/.cargo/bin, which
+            // precedes ~/.local/bin on a default PATH and shadows this build.
+            "cargo build --release && ",
+            "mkdir -p ~/.local/bin && ",
+            "install -m 755 target/release/shroud ~/.local/bin/.shroud.new && ",
+            "mv ~/.local/bin/.shroud.new ~/.local/bin/shroud && ",
+            "if [ -e ~/.cargo/bin/shroud ]; then ",
+            "mv ~/.cargo/bin/shroud ~/.cargo/bin/shroud.stale.$(date +%Y%m%d%H%M%S); ",
+            "fi && ",
             "echo 'Restarting daemon...' && ",
-            "shroud restart 2>/dev/null || echo 'Daemon not running' && ",
-            "echo '' && shroud --version && echo '✓ Update complete'"
+            "~/.local/bin/shroud restart 2>/dev/null || echo 'Daemon not running' && ",
+            "echo '' && ~/.local/bin/shroud --version && echo '✓ Update complete'"
         ))
         .status();
 
