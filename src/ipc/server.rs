@@ -128,6 +128,8 @@ pub struct IpcServer {
     command_tx: mpsc::Sender<(IpcCommand, mpsc::Sender<IpcResponse>)>,
     /// Snapshot of supervisor state, used to answer read-only commands directly
     shared_state: Arc<RwLock<SharedState>>,
+    /// Whether this instance bound the socket, and may therefore remove it
+    bound: bool,
 }
 
 impl IpcServer {
@@ -144,6 +146,7 @@ impl IpcServer {
         Self {
             command_tx,
             shared_state,
+            bound: false,
         }
     }
 
@@ -157,7 +160,7 @@ impl IpcServer {
     /// Returns [`ServerError::Cleanup`] if a stale socket file cannot be removed.
     ///
     /// Returns [`ServerError::Bind`] if binding the Unix socket fails (permissions, path in use).
-    pub async fn run(self) -> Result<(), ServerError> {
+    pub async fn run(mut self) -> Result<(), ServerError> {
         let path = socket_path();
 
         // SECURITY: Best-effort symlink check before stale socket removal.
@@ -199,6 +202,8 @@ impl IpcServer {
         unsafe {
             libc::umask(old_umask);
         }
+
+        self.bound = true;
 
         info!("IPC server listening on {:?}", path);
 
@@ -407,7 +412,13 @@ impl IpcServer {
 
 impl Drop for IpcServer {
     fn drop(&mut self) {
-        // Clean up socket file
+        // Only the instance that bound the socket may unlink it. A server that
+        // never ran would otherwise delete the socket belonging to the daemon
+        // that is actually serving, leaving that daemon alive but unreachable.
+        if !self.bound {
+            return;
+        }
+
         let path = socket_path();
         if path.exists() {
             let _ = std::fs::remove_file(&path);
@@ -794,6 +805,23 @@ mod tests {
         // Verify symlink_metadata detects it
         let meta = std::fs::symlink_metadata(&link).unwrap();
         assert!(meta.file_type().is_symlink());
+    }
+
+    #[tokio::test]
+    async fn dropping_unbound_server_leaves_socket_alone() {
+        let path = socket_path();
+        let existed = path.exists();
+
+        {
+            let (tx, _rx) = mpsc::channel(1);
+            let _server = IpcServer::new(tx, Arc::new(RwLock::new(SharedState::default())));
+        }
+
+        assert_eq!(
+            path.exists(),
+            existed,
+            "dropping a server that never bound must not disturb a running daemon's socket"
+        );
     }
 
     #[tokio::test]

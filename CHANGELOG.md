@@ -14,6 +14,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.4] - 2026-08-11
+
+### Fixed
+
+- **Constructing an `IpcServer` deleted the running daemon's socket.**
+  `Drop for IpcServer` unlinked `shroud.sock` unconditionally, so any instance
+  that never bound it — most visibly the one built in `test_server_creation` —
+  removed the socket belonging to the daemon that was actually serving. The
+  daemon kept running and kept its VPN and kill switch state, but every client
+  reported "VPN Shroud daemon is not running", which also made `shroud status`
+  and `shroud killswitch` unusable until it was restarted. Running `cargo test`
+  against a live daemon was enough to trigger it.
+
+  `Drop` now only unlinks the socket when this instance bound it. This is the
+  same class of defect as the instance lock fixed in 2.5.3: a shared path must
+  only be removed by the process that owns it.
+
 ## [2.5.3] - 2026-08-11
 
 ### Fixed
