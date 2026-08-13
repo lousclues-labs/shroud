@@ -1,0 +1,7 @@
+# Make dependency resolution honor `package.rust-version` (the project MSRV).
+# `fallback` prefers versions compatible with the MSRV and only selects a
+# newer-MSRV version when no compatible one satisfies the requirement, so
+# `cargo update` no longer silently pulls dependencies that break the MSRV CI
+# job. Only affects resolution; it does not rewrite an existing Cargo.lock.
+[resolver]
+incompatible-rust-versions = "fallback"
