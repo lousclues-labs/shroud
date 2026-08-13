@@ -11,7 +11,7 @@ Last updated: 2026-08-12
 
 Current totals from the changelog:
 - Internal vulnerabilities: 43
-- External dependency advisories: 5
+- External dependency advisories: 6
 
 ---
 
@@ -87,18 +87,7 @@ Current totals from the changelog:
 | RUSTSEC-2026-0098 | Advisory | 2.0.6 | - **deps: fix RUSTSEC-2026-0098 (rustls-webpki URI name constraint bypass)** - same update resolves an issue where name constraints for URI names were incorrectly accepted during certificate validation. A certificate with a URI SAN that should have been rejected by name constraints could be accepted as valid, potentially allowing an attacker with a misissued certificate to impersonate a constrained domain over TLS. Advisory date: 2026-04-14. See: https://rustsec.org/advisories/RUSTSEC-2026-0098 |
 | RUSTSEC-2026-0099 | Advisory | 2.0.6 | - **deps: fix RUSTSEC-2026-0099 (rustls-webpki wildcard name constraint bypass)** - same update resolves an issue where name constraints were accepted for certificates asserting a wildcard name. A certificate containing a wildcard SAN (e.g., *.example.com) could bypass name constraint validation, allowing a CA-constrained certificate to be treated as valid for names outside its intended scope. Advisory date: 2026-04-14. See: https://rustsec.org/advisories/RUSTSEC-2026-0099 |
 | RUSTSEC-2026-0104 | Advisory | 2.0.6 | - **deps: fix RUSTSEC-2026-0104 (rustls-webpki reachable panic in CRL parsing)** - updated rustls-webpki from 0.103.11 to 0.103.13 via cargo update rustls-webpki. The vulnerable version contained a reachable panic when parsing certain certificate revocation lists (CRLs). A malicious or malformed CRL served by a TLS peer could trigger panic!() in the CRL parsing path, causing an unrecoverable process abort. Dependency chain: ureq -> rustls -> rustls-webpki. Affects health check HTTPS requests to VPN exit IP validation endpoints. Advisory date: 2026-04-22. See: https://rustsec.org/advisories/RUSTSEC-2026-0104 |
-
----
-
-## Accepted / Not-Applicable Advisories
-
-Advisories that are **not remediated** because the vulnerable code does not ship
-in VPN Shroud. These are ignored in `cargo audit` (`--ignore`) and in `deny.toml`
-with the justification recorded here.
-
-| ID | Severity | Status | Justification |
-|----|----------|--------|---------------|
-| RUSTSEC-2026-0009 | Medium (6.8) | Not applicable (does not ship) | `time` <0.3.47 stack-exhaustion DoS. `time` reaches the lockfile only as a **macOS/Windows-only** transitive dependency of `notify-rust`'s native notification backends (`mac-notification-sys` / `tauri-winrt-notification`), which are `cfg(target_os = "macos")` / `cfg(windows)`-gated. VPN Shroud is **Linux-only**, so the vulnerable code never compiles into or ships in the binary and the DoS is unreachable. The fix (`time` >=0.3.47) requires rustc 1.88, above the project MSRV of 1.87; bumping the MSRV to satisfy a dependency shroud does not use on its target platform would be disproportionate. Re-evaluate if macOS/Windows support is added or the MSRV moves to >=1.88. See https://rustsec.org/advisories/RUSTSEC-2026-0009 |
+| RUSTSEC-2026-0009 | Advisory | 2.5.7 | - **deps: fix RUSTSEC-2026-0009 (time stack-exhaustion DoS, medium 6.8)** - upgraded `time` 0.3.45 -> 0.3.55, which required bumping the project MSRV from 1.87 to 1.88 (every `time` >=0.3.46 requires rustc 1.88). `time` reaches the lockfile only as a macOS/Windows-only transitive dep of notify-rust's notification backends and is cfg-gated out of shroud's Linux-only builds, so the DoS was never reachable in shipped code; upgraded anyway to keep the dependency tree clean and cargo audit green. Advisory date: 2026-02-05. See: https://rustsec.org/advisories/RUSTSEC-2026-0009 |
 
 ---
 
@@ -345,6 +334,11 @@ with the justification recorded here.
 - Fixed in: 2.0.6
 - Severity category in this document: Advisory
 - Changelog remediation: - **deps: fix RUSTSEC-2026-0104 (rustls-webpki reachable panic in CRL parsing)** - updated rustls-webpki from 0.103.11 to 0.103.13 via cargo update rustls-webpki. The vulnerable version contained a reachable panic when parsing certain certificate revocation lists (CRLs). A malicious or malformed CRL served by a TLS peer could trigger panic!() in the CRL parsing path, causing an unrecoverable process abort. Dependency chain: ureq -> rustls -> rustls-webpki. Affects health check HTTPS requests to VPN exit IP validation endpoints. Advisory date: 2026-04-22. See: https://rustsec.org/advisories/RUSTSEC-2026-0104
+
+### RUSTSEC-2026-0009
+- Fixed in: 2.5.7
+- Severity category in this document: Advisory
+- Changelog remediation: - **deps: fix RUSTSEC-2026-0009 (time stack-exhaustion DoS)** - upgraded `time` 0.3.45 -> 0.3.55 to clear the medium (6.8) parsing DoS advisory. `time` reaches the lockfile only as a macOS/Windows-only transitive dep of notify-rust's notification backends and is cfg-gated out of shroud's Linux-only builds, so the DoS was never reachable in shipped code; upgraded rather than suppressed to keep the dependency tree clean. Required bumping the project MSRV from 1.87 to 1.88 (every time >=0.3.46 requires rustc 1.88). Advisory date: 2026-02-05. See: https://rustsec.org/advisories/RUSTSEC-2026-0009
 
 ## Notes
 

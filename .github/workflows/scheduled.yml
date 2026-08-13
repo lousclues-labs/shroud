@@ -24,14 +24,8 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       
-      # RUSTSEC-2026-0009 is ignored, not remediated: the affected `time` crate
-      # reaches the lockfile only as a macOS/Windows-only transitive dep of
-      # notify-rust's native notification backends, which are cfg-gated out of
-      # shroud's Linux-only builds — the vulnerable code never compiles or ships.
-      # The fix (time >=0.3.47) requires rustc 1.88, above the project MSRV 1.87.
-      # See docs/VULNERABILITIES.md.
       - name: Run audit
-        run: cargo audit --ignore RUSTSEC-2026-0009
+        run: cargo audit
       
       - name: Create issue on failure
         if: failure()

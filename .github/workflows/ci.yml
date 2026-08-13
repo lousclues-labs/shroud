@@ -126,7 +126,7 @@ jobs:
           sudo apt-get install -y libdbus-1-dev pkg-config
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.87"
+          toolchain: "1.88"
       - uses: Swatinem/rust-cache@v2
       
       - name: Check MSRV

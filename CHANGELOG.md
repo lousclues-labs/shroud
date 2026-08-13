@@ -14,6 +14,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.5.7] - 2026-08-12
+
+### Security
+
+- **deps: fix RUSTSEC-2026-0009 (time stack-exhaustion DoS)** — upgraded `time`
+  0.3.45 → 0.3.55 to clear the medium-severity (6.8) parsing DoS advisory.
+  `time` reaches the lockfile only as a macOS/Windows-only transitive dependency
+  of `notify-rust`'s native notification backends (`mac-notification-sys` /
+  `tauri-winrt-notification`), which are `cfg`-gated out of shroud's Linux-only
+  builds, so the vulnerable code never compiled into or shipped in the binary
+  and the DoS was never reachable. Upgraded rather than suppressing the advisory
+  to keep the dependency tree clean and `cargo audit` green.
+
+### Changed
+
+- **deps: bump MSRV from 1.87 to 1.88** — every `time` ≥0.3.46 (the versions
+  carrying the RUSTSEC-2026-0009 fix) requires rustc 1.88, so remediating the
+  advisory raised the minimum supported Rust version. `notify-rust` stays pinned
+  at 4.17.0 (4.18.0 requires rustc 1.89). Updated `Cargo.toml` `rust-version`,
+  the README badge, and the CI MSRV job.
+
 ## [2.5.6] - 2026-08-11
 
 ### Fixed
