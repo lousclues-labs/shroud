@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install system dependencies
         run: |
@@ -46,7 +46,7 @@ jobs:
           done
 
       - name: Upload fuzz binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fuzz-binaries
           path: |
@@ -73,7 +73,7 @@ jobs:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install system dependencies
         run: |
@@ -155,7 +155,7 @@ jobs:
 
       - name: Upload corpus
         if: always() && steps.check.outputs.run == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: corpus-${{ matrix.target }}-shard-${{ matrix.shard }}
           path: fuzz/corpus/${{ matrix.target }}/
@@ -163,7 +163,7 @@ jobs:
 
       - name: Upload crashes
         if: failure() && steps.check.outputs.run == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: crashes-${{ matrix.target }}-shard-${{ matrix.shard }}
           path: fuzz/artifacts/${{ matrix.target }}/
