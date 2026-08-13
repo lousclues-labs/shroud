@@ -31,8 +31,12 @@ fi
 echo "Checking dependencies against RustSec Advisory Database..."
 echo ""
 
-# Run audit with all features
-if cargo audit; then
+# Run audit with all features.
+# RUSTSEC-2026-0009 is ignored (not remediated): the affected `time` crate is a
+# macOS/Windows-only transitive dep of notify-rust's notification backends,
+# cfg-gated out of shroud's Linux-only builds, so it never ships. The fix
+# requires rustc 1.88 > MSRV 1.87. See docs/VULNERABILITIES.md.
+if cargo audit --ignore RUSTSEC-2026-0009; then
     echo ""
     echo "✓ No known vulnerabilities found"
     exit 0
