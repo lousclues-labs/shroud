@@ -58,6 +58,20 @@ POLKIT_ACTIONS_DIR="/usr/share/polkit-1/actions"
 POLKIT_POLICY_SRC="assets/com.shroud.killswitch.policy"
 POLKIT_POLICY_DEST="$POLKIT_ACTIONS_DIR/com.shroud.killswitch.policy"
 
+# ============================================================================
+# PDD install-time canary: pinned release-signing fingerprint
+# ============================================================================
+#
+# Promise Driven Development, promise PR6 / canary C-INSTALL-FINGERPRINT.
+# Trust is pinned, not implied, but the fingerprint is NOT hardcoded here. It is
+# read at runtime from the canonical published file below (the maintainer's
+# GitHub-verified release-signing key, loujr@github.com, the key GitHub marks
+# Verified on the project's signed commits and tags; no separate release key is
+# provisioned). That file is the single source of truth; README.md and
+# SECURITY.md publish the same value, and the publication canary keeps all three
+# in agreement (PR7 / C-PUBLICATION-AGREEMENT).
+SHROUD_SIGNING_FINGERPRINT_SOURCE=".well-known/security.txt"
+
 # Script state
 FORCE=false
 DRY_RUN=false
@@ -922,6 +936,97 @@ check_sudoers_installed() {
     [[ -f "$SUDOERS_DEST" ]]
 }
 
+# ---------------------------------------------------------------------------
+# PDD install-time canary (C-INSTALL-FINGERPRINT): pinned signing fingerprint
+# ---------------------------------------------------------------------------
+
+# Normalize a fingerprint: uppercase, strip spaces and colons.
+normalize_fingerprint() {
+    printf '%s' "$1" | tr -d ' :' | tr '[:lower:]' '[:upper:]'
+}
+
+# Best-effort resolution of this script's own directory, so the canonical
+# fingerprint file is found regardless of the caller's working directory.
+script_dir() {
+    local src
+    src="${BASH_SOURCE[0]:-$0}"
+    ( cd -- "$(dirname -- "$src")" >/dev/null 2>&1 && pwd ) 2>/dev/null || true
+}
+
+# The pinned fingerprint is NOT hardcoded in this script. It is read from the
+# canonical published file ($SHROUD_SIGNING_FINGERPRINT_SOURCE), the single
+# source of truth the publication canary keeps in agreement with README.md and
+# SECURITY.md. Prints the 40-hex fingerprint, or nothing if unavailable.
+pinned_fingerprint() {
+    local dir file out
+    for dir in "$(script_dir)" "$PWD"; do
+        file="$dir/$SHROUD_SIGNING_FINGERPRINT_SOURCE"
+        if [ -r "$file" ]; then
+            out=$(grep -iE 'fingerprint' "$file" \
+                | grep -oE '[0-9A-Fa-f]{40}' \
+                | head -n1 \
+                | tr '[:lower:]' '[:upper:]') || true
+            printf '%s' "$out"
+            return 0
+        fi
+    done
+    return 0
+}
+
+# Pure comparator. Returns 0 only when the candidate equals the pinned
+# fingerprint read from the canonical source. Any other value (an empty
+# candidate, or an unavailable pin) returns non-zero.
+fingerprint_matches_pin() {
+    local candidate pin
+    candidate=$(normalize_fingerprint "$1")
+    pin=$(normalize_fingerprint "$(pinned_fingerprint)")
+    [ -n "$candidate" ] && [ -n "$pin" ] && [ "$candidate" = "$pin" ]
+}
+
+# Derive the fingerprint of a presented signing key, if any is available.
+# Sources, in order:
+#   SHROUD_RELEASE_FINGERPRINT - a fingerprint string (used by tests / CI)
+#   SHROUD_RELEASE_KEY         - path to an armored public key, reduced via gpg
+# Prints the derived fingerprint, or nothing when no key was presented.
+presented_signing_fingerprint() {
+    if [ -n "${SHROUD_RELEASE_FINGERPRINT:-}" ]; then
+        printf '%s' "$SHROUD_RELEASE_FINGERPRINT"
+        return 0
+    fi
+    if [ -n "${SHROUD_RELEASE_KEY:-}" ] && [ -r "${SHROUD_RELEASE_KEY}" ] \
+        && command -v gpg >/dev/null 2>&1; then
+        gpg --with-colons --import-options show-only --import "${SHROUD_RELEASE_KEY}" 2>/dev/null \
+            | awk -F: '$1 == "fpr" { print $10; exit }'
+        return 0
+    fi
+    printf ''
+}
+
+# Trust gate for privileged (/etc) writes. Fail-closed on a fingerprint
+# mismatch: the unsafe branch exists only to refuse. When no key is presented
+# (a local source build), there is nothing to contradict the pin, so the
+# privileged action is allowed. The pin itself is read from the canonical
+# published file, never hardcoded here.
+require_pinned_signing_key() {
+    local presented pin
+    presented=$(presented_signing_fingerprint)
+    pin=$(pinned_fingerprint)
+    if [ -z "$presented" ]; then
+        info "No release signing key presented; installing from local source."
+        [ -n "$pin" ] && info "Pinned release fingerprint: $pin"
+        return 0
+    fi
+    if fingerprint_matches_pin "$presented"; then
+        success "Release signing key verified against pinned fingerprint."
+        return 0
+    fi
+    error "Refusing privileged write: signing key fingerprint mismatch."
+    error "  expected (pinned): $(normalize_fingerprint "$pin")"
+    error "  presented:         $(normalize_fingerprint "$presented")"
+    error "This is the fail-closed branch of canary C-INSTALL-FINGERPRINT."
+    return 1
+}
+
 install_sudoers() {
     echo ""
     echo "┌─────────────────────────────────────────────────────────────────┐"
@@ -953,6 +1058,13 @@ do_install_sudoers() {
     if [ "$DRY_RUN" = "true" ]; then
         echo -e "${DIM}[DRY-RUN] Would install: $SUDOERS_DEST${NC}"
         return 0
+    fi
+
+    # PDD canary C-INSTALL-FINGERPRINT (PR6): pin the signing fingerprint and
+    # refuse to write to /etc on a mismatch.
+    if ! require_pinned_signing_key; then
+        error "Skipping sudoers installation (fingerprint gate refused)."
+        return 1
     fi
 
     local sudo_group="wheel"

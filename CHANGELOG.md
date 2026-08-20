@@ -14,6 +14,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.6.0] - 2026-08-18
+
+This release lands the Promise Driven Development (PDD) retrofit: a four-layer
+spine (Principles, Promises, Canaries, Ledger) that makes every self-claim shroud
+makes about itself falsifiable, guarded by a merge-blocking canary suite that
+fails loudly when a claim stops being true. No change to the VPN manager's
+user-facing behavior.
+
+### Added
+
+- **PDD spine.** New [PRINCIPLES.md](PRINCIPLES.md) (values), [PROMISES.md](PROMISES.md)
+  (narrow, falsifiable commitments, each named to the principle it descends from
+  and the canary that guards it), and [AUDIT_FINDINGS.md](AUDIT_FINDINGS.md) (the
+  ledger tracking drift from open to closed).
+- **Canary test suite** ([tests/pdd_canaries.rs](tests/pdd_canaries.rs)): nine
+  `cargo test` canaries written as assertions about the promises, not features.
+  They guard: no analytics/telemetry SDK or first-party endpoint in the source or
+  the built binary; the default health-check endpoints stay third-party leak-check
+  services over HTTPS; the detected exit IP is never persisted; a leak signal
+  forces the state machine out of `Connected`; a failing kill-switch verdict never
+  affirms protection; the installer derives its signing pin from the canonical
+  file with no hardcoded literal, reads only a local file (never a network fetch),
+  and the fingerprint agrees across the publication surfaces; and the core
+  connection manager carries no VPN provider brand name.
+- **Merge-blocking CI gate** ([.github/workflows/pdd-canaries.yml](.github/workflows/pdd-canaries.yml)):
+  a required `pdd-canary-gate` job runs the whole canary surface (source and
+  built-artifact greps for telemetry and provider hardcoding, cross-surface
+  fingerprint agreement, the installer fail-closed check, and the canary tests)
+  and blocks merge on any breach.
+- **Install-time signing-fingerprint pin** in [setup.sh](setup.sh): before any
+  privileged `/etc` write (the sudoers rule), a presented signing key is reduced
+  to a fingerprint and compared to the pin; on mismatch the installer refuses
+  (fail-closed). The pin is derived at runtime from the canonical
+  [.well-known/security.txt](.well-known/security.txt), never hardcoded in the
+  script. Local source installs with no key presented are unaffected.
+- **Published signing-key fingerprint.** The GitHub-verified release-signing key
+  fingerprint (loujr@github.com) is published as a public pin in
+  [.well-known/security.txt](.well-known/security.txt) (RFC 9116),
+  [README.md](README.md), and [SECURITY.md](SECURITY.md), kept in agreement by a
+  canary.
+- **Contributor guidance** ([CONTRIBUTING.md](CONTRIBUTING.md)): new self-claims
+  must carry a promise, a canary, and, when they correct drift, a ledger entry.
+
+### Changed
+
+- **Release provenance is guarded by GitHub-verified, GPG-signed tags** (verify
+  with `git verify-tag`), not by a bespoke signed release receipt. The
+  receipt-generation and detached-signature steps were removed from
+  [.github/workflows/release.yml](.github/workflows/release.yml); no new key,
+  secret, keyserver, or DNS record is introduced (AF-006).
+- **The signing fingerprint is derived, not hardcoded.** `setup.sh` reads the pin
+  from the canonical `.well-known/security.txt` (single source of truth) instead
+  of embedding a 40-hex literal, so it cannot drift from the published value
+  (AF-007).
+
+### Security
+
+- **Every security-relevant self-claim now has a proof that fails loudly.** Zero
+  telemetry, kill-switch integrity (never report "protected" while traffic can
+  leak), install trust (pinned, not implied), and provider-agnosticism are each
+  guarded by a canary in the merge-blocking suite. See
+  [AUDIT_FINDINGS.md](AUDIT_FINDINGS.md) for the findings resolved this cycle
+  (AF-001 through AF-008), including the AF-006 provenance trim, the AF-007
+  derive-not-hardcode change, and the AF-008 analysis confirming the pin
+  derivation reads a local in-tree file only and has no piped-install gap.
+- **Signing pin repointed.** The published install-time pin was moved from the
+  lousclues master key to the GitHub-verified release-signing key
+  (`loujr@github.com`, `4EEFBCAFDB57ECFD00A0CA8A4A2D22286FC38416`) so the pin
+  equals the key that actually signs releases (AF-006).
+
 ## [2.5.7] - 2026-08-12
 
 ### Security

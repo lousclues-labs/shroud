@@ -43,6 +43,31 @@ These aren't just nice words. They're the filter for every decision.
 
 ---
 
+## New Claims Need a Promise and a Canary
+
+VPN Shroud follows Promise Driven Development (PDD). A claim the tool makes about
+itself must be provable, and the proof must fail loudly when the claim stops
+being true. If your change makes or touches a self-claim (about privacy, the
+kill switch, install trust, or provider-agnosticism), it must carry its proof:
+
+1. **Promise.** Add or update a narrow, falsifiable entry in
+   [PROMISES.md](PROMISES.md), named to the principle in
+   [PRINCIPLES.md](PRINCIPLES.md) it descends from. If a claim cannot be
+   guarded, state it as an aspiration, not a promise.
+2. **Canary.** Add the proof where the promise lives: a `cargo test` canary in
+   [tests/pdd_canaries.rs](tests/pdd_canaries.rs), a job in
+   [.github/workflows/pdd-canaries.yml](.github/workflows/pdd-canaries.yml), an
+   install-time check in [setup.sh](setup.sh), or a release-time check. No
+   promise without a canary.
+3. **Ledger.** If your change corrects drift, add a numbered, severity-graded
+   entry to [AUDIT_FINDINGS.md](AUDIT_FINDINGS.md). A finding is closed only by a
+   named canary, never by "fixed."
+
+The `pdd-canary-gate` status is required and merge-blocking. `cargo test` runs
+the canary suite locally, so a red canary is visible before you push.
+
+---
+
 ## Development Setup
 
 ### Dependencies

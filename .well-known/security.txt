@@ -1,0 +1,19 @@
+# VPN Shroud security.txt (RFC 9116)
+# Served at https://vpnshroud.org/.well-known/security.txt
+#
+# This is one of three independent publication surfaces for the release-signing
+# key fingerprint (the others are README.md and SECURITY.md). Promise Driven
+# Development canary C-PUBLICATION-AGREEMENT (PR7) fails CI if they disagree, so
+# a single-surface edit is itself the alarm.
+
+Contact: https://github.com/lousclues-labs/shroud/security/advisories/new
+Expires: 2027-01-01T00:00:00.000Z
+Preferred-Languages: en
+Canonical: https://vpnshroud.org/.well-known/security.txt
+Policy: https://github.com/lousclues-labs/shroud/blob/main/SECURITY.md
+
+# Release-signing key fingerprint (public pin, not a secret).
+# This is the maintainer's GitHub-verified release-signing key (loujr@github.com),
+# the key GitHub already uses to mark the project's signed commits and tags
+# Verified. No separate release key, keyserver upload, or DNS record is used.
+# Fingerprint: 4EEFBCAFDB57ECFD00A0CA8A4A2D22286FC38416

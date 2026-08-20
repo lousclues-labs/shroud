@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/lousclues-labs/shroud/actions/workflows/ci.yml/badge.svg)](https://github.com/lousclues-labs/shroud/actions/workflows/ci.yml)
 [![Security Audit](https://github.com/lousclues-labs/shroud/actions/workflows/scheduled.yml/badge.svg)](https://github.com/lousclues-labs/shroud/actions/workflows/scheduled.yml)
-[![Version](https://img.shields.io/badge/version-2.4.5-blue)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-2.6.0-blue)](CHANGELOG.md)
 [![Rust](https://img.shields.io/badge/rust-1.88%2B-orange.svg)](https://www.rust-lang.org/)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
@@ -55,6 +55,36 @@ VPN Shroud doesn't do any of that.
 **We respect your privacy.** No telemetry. No analytics. No phoning home. If you want to run VPN Shroud in a bunker with nothing but a VPN tunnel to the outside world, that's your right.
 
 Read the full [Principles](docs/PRINCIPLES.md) if you want to understand what we're about.
+
+---
+
+## Promise Driven Development
+
+VPN Shroud is built on Promise Driven Development (PDD): a claim the tool makes
+about itself must be something it can prove, and the proof fails loudly when the
+claim stops being true. The spine is **Principles -> Promises -> Canaries -> Ledger.**
+
+- [PRINCIPLES.md](PRINCIPLES.md) is the values layer. Each principle forbids something and spawns at least one promise.
+- [PROMISES.md](PROMISES.md) is the commitments layer. Each promise is narrow and falsifiable, named to a principle and to the canary that guards it.
+- Canaries are the proofs: `cargo test` canaries in [tests/pdd_canaries.rs](tests/pdd_canaries.rs), a required CI gate in [.github/workflows/pdd-canaries.yml](.github/workflows/pdd-canaries.yml), an install-time fingerprint check in [setup.sh](setup.sh), and GPG-signed, GitHub-verified release tags (confirm provenance with `git verify-tag`).
+- [AUDIT_FINDINGS.md](AUDIT_FINDINGS.md) is the ledger. Drift is recorded there and closed only by a named canary.
+
+Concretely: zero telemetry is enforced by a test and a CI grep rather than by a
+sentence in a policy; the kill switch cannot report "protected" while traffic
+can leak; the installer refuses privileged writes unless a presented key matches
+the pinned fingerprint; and the core connection manager stays provider-agnostic.
+
+The release-signing key is the key GitHub uses to verify the maintainer's signed
+commits and tags (loujr@github.com). Its fingerprint is a public pin. Its
+canonical home is
+[/.well-known/security.txt](.well-known/security.txt), which the installer reads
+at runtime (it is not hardcoded in [setup.sh](setup.sh)); this page and
+[SECURITY.md](SECURITY.md) publish the same value. Disagreement between these
+surfaces is itself the alarm.
+
+```
+Fingerprint: 4EEFBCAFDB57ECFD00A0CA8A4A2D22286FC38416
+```
 
 ---
 

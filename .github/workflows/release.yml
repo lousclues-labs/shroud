@@ -92,6 +92,10 @@ jobs:
             git log --pretty=format:"- %s (%h)" >> CHANGELOG_RELEASE.md
           fi
 
+      # Release provenance is guarded by the maintainer's GitHub-verified,
+      # GPG-signed tags (verifiable with `git verify-tag`), not by a bespoke
+      # signed receipt. See PROMISES.md PR10 and AUDIT_FINDINGS.md AF-006.
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:

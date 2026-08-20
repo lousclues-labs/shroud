@@ -7,6 +7,29 @@
 For Shroud's full security policy, threat model, and vulnerability reporting
 instructions, see [docs/SECURITY.md](docs/SECURITY.md).
 
+## Release Signing
+
+Releases are signed with the maintainer's GitHub-verified signing key
+(loujr@github.com), the same key GitHub marks Verified on the project's signed
+commits and tags. Its fingerprint is a public pin. The canonical copy lives in
+[/.well-known/security.txt](.well-known/security.txt); this file and
+[README.md](README.md) publish the same value. The installer
+([setup.sh](setup.sh)) reads the pin from the canonical file (it is not
+hardcoded in the script) and refuses privileged writes if a presented key does
+not match it. A disagreement between these surfaces is a signal that one of them
+was tampered with.
+
+```
+Fingerprint: 4EEFBCAFDB57ECFD00A0CA8A4A2D22286FC38416
+```
+
+Verify a release's provenance directly from its signed tag (no separate receipt
+is produced; the tag itself is GPG-signed and shows as Verified on GitHub):
+
+```bash
+git verify-tag v<version>
+```
+
 ## Reporting a Vulnerability
 
 **Do not open a public issue for security vulnerabilities.**

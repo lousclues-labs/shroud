@@ -1,0 +1,219 @@
+# PDD Canaries: required, merge-blocking gate.
+#
+# This workflow is the CI proof layer of Promise Driven Development
+# (Principles -> Promises -> Canaries -> Ledger). It guards the cross-cutting
+# invariants that no single unit test sees: telemetry-free source and artifact
+# (PR1), a provider-agnostic core (PR8), and a signing fingerprint published
+# identically across surfaces (PR7). The behavioral and source-scan canaries in
+# tests/pdd_canaries.rs run here too. The final `pdd-canary-gate` job is the
+# status that branch protection should require.
+
+name: PDD Canaries
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ===========================================================================
+  # PR1 / C-TELEMETRY-EGRESS: no telemetry SDK or first-party analytics endpoint
+  # in the source or the built artifact.
+  # ===========================================================================
+  telemetry:
+    name: Telemetry-free (source + artifact)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Grep source for telemetry endpoints and SDKs
+        run: |
+          set -euo pipefail
+          FORBIDDEN='google-analytics\.com|googletagmanager\.com|sentry\.io|mixpanel\.com|segment\.io|posthog\.com|plausible\.io|amplitude\.com|datadoghq\.com|bugsnag\.com|telemetry\.vpnshroud\.org|analytics\.vpnshroud\.org'
+          # Strip whole-line comments so brand/endpoint mentions in prose do not
+          # trip the net, then search the remaining code.
+          hits=$(find src -name '*.rs' -print0 \
+            | xargs -0 awk '{ l=$0; sub(/^[ \t]+/,"",l) } l ~ /^\/\// || l ~ /^\*/ { next } { print FILENAME ": " $0 }' \
+            | grep -EI -i "$FORBIDDEN" || true)
+          if [ -n "$hits" ]; then
+            echo "C-TELEMETRY-EGRESS breach (PR1): telemetry token in source:"
+            echo "$hits"
+            exit 1
+          fi
+          echo "OK: no telemetry endpoint or SDK in source."
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build release artifact
+        run: cargo build --release --all-features
+
+      - name: Grep built artifact for telemetry endpoints
+        run: |
+          set -euo pipefail
+          FORBIDDEN='google-analytics\.com|googletagmanager\.com|sentry\.io|mixpanel\.com|segment\.io|posthog\.com|plausible\.io|amplitude\.com|datadoghq\.com|bugsnag\.com|telemetry\.vpnshroud\.org|analytics\.vpnshroud\.org'
+          if strings target/release/shroud | grep -EI -i "$FORBIDDEN"; then
+            echo "C-TELEMETRY-EGRESS breach (PR1): telemetry token in built binary."
+            exit 1
+          fi
+          echo "OK: built artifact is telemetry-free."
+
+  # ===========================================================================
+  # PR8 / C-NO-PROVIDER-HARDCODING: no provider brand name in the core
+  # connection manager (comments and help-text examples excluded).
+  # ===========================================================================
+  provider-agnostic:
+    name: Provider-agnostic core
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Grep core for provider brand names
+        run: |
+          set -euo pipefail
+          BRANDS='nordvpn|mullvad|protonvpn|expressvpn|surfshark|windscribe|cyberghost'
+          hits=$(find src/nm src/state src/supervisor src/config src/killswitch -name '*.rs' -print0 \
+            | xargs -0 awk '{ l=$0; sub(/^[ \t]+/,"",l) } l ~ /^\/\// || l ~ /^\*/ { next } { print FILENAME ": " tolower($0) }' \
+            | grep -EI "$BRANDS" || true)
+          if [ -n "$hits" ]; then
+            echo "C-NO-PROVIDER-HARDCODING breach (PR8): provider brand in core:"
+            echo "$hits"
+            exit 1
+          fi
+          echo "OK: core connection manager has no provider brand names."
+
+  # ===========================================================================
+  # PR7 / C-PUBLICATION-AGREEMENT: the signing fingerprint is published
+  # identically on README.md, SECURITY.md, and .well-known/security.txt.
+  # ===========================================================================
+  publication:
+    name: Published fingerprint agrees with canonical source
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Assert fingerprint agreement
+        run: |
+          set -euo pipefail
+          # Value-agnostic: matches the placeholder token or a 40-hex fingerprint,
+          # so this passes with the placeholder and with the real value.
+          extract() {
+            grep -iE 'fingerprint' "$1" \
+              | grep -oE '<REPLACE_WITH_LOUSCLUES_FINGERPRINT>|[0-9A-Fa-f]{40}' \
+              | head -n1 | tr '[:lower:]' '[:upper:]'
+          }
+          c=$(extract .well-known/security.txt || true)   # canonical source
+          a=$(extract README.md || true)
+          b=$(extract SECURITY.md || true)
+          echo "canonical(security.txt)=$c README=$a SECURITY=$b"
+          if [ -z "$c" ] || [ "$c" != "$a" ] || [ "$c" != "$b" ]; then
+            echo "C-PUBLICATION-AGREEMENT breach (PR7): README.md/SECURITY.md disagree with the canonical .well-known/security.txt."
+            exit 1
+          fi
+          echo "OK: README.md and SECURITY.md agree with the canonical .well-known/security.txt."
+
+  # ===========================================================================
+  # The behavioral + source-scan canaries in tests/pdd_canaries.rs.
+  # ===========================================================================
+  canary-tests:
+    name: Canary test suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Run PDD canaries
+        run: cargo test --test pdd_canaries -- --nocapture
+
+  # ===========================================================================
+  # PR6 / C-INSTALL-FINGERPRINT: the installer refuses privileged writes on a
+  # fingerprint mismatch. This exercises the fail-closed branch directly.
+  # ===========================================================================
+  install-fingerprint:
+    name: Installer derives pin and fails closed
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Syntax check
+        run: bash -n setup.sh
+      - name: Installer must derive its pin and refuse a mismatch
+        run: |
+          set -euo pipefail
+          fns='/^script_dir()/,/^}/p;/^normalize_fingerprint()/,/^}/p;/^pinned_fingerprint()/,/^}/p;/^fingerprint_matches_pin()/,/^}/p;/^presented_signing_fingerprint()/,/^}/p;/^require_pinned_signing_key()/,/^}/p'
+
+          # The installer must not hardcode a fingerprint literal (PR6 / AF-007).
+          if grep -iE 'fingerprint' setup.sh | grep -oE '[0-9A-Fa-f]{40}'; then
+            echo "C-INSTALL-FINGERPRINT breach (PR6): setup.sh hardcodes a fingerprint literal."
+            exit 1
+          fi
+
+          # It must load the pin from the canonical .well-known/security.txt.
+          PIN=$(bash -c '
+              set -uo pipefail
+              SHROUD_SIGNING_FINGERPRINT_SOURCE=".well-known/security.txt"
+              . <(sed -n "'"$fns"'" setup.sh)
+              pinned_fingerprint')
+          echo "loaded pin=$PIN"
+          if [ -z "$PIN" ]; then
+            echo "C-INSTALL-FINGERPRINT breach (PR6): pin could not be loaded from the canonical source."
+            exit 1
+          fi
+
+          # Drive the gate with a wrong key and assert it refuses (fail-closed).
+          if SHROUD_RELEASE_FINGERPRINT="DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF" bash -c '
+              set -uo pipefail
+              SHROUD_SIGNING_FINGERPRINT_SOURCE=".well-known/security.txt"
+              info() { :; }; success() { :; }; error() { :; }
+              . <(sed -n "'"$fns"'" setup.sh)
+              require_pinned_signing_key
+            '; then
+            echo "C-INSTALL-FINGERPRINT breach (PR6): gate accepted a mismatching fingerprint."
+            exit 1
+          fi
+          echo "OK: installer derives its pin and refused a mismatching fingerprint (fail-closed)."
+
+  # ===========================================================================
+  # Required gate: fails if any canary above did not pass. This is the status
+  # branch protection should require (PR9 / C-CI-GATE).
+  # ===========================================================================
+  pdd-canary-gate:
+    name: PDD Canary Gate
+    needs: [telemetry, provider-agnostic, publication, canary-tests, install-fingerprint]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce all canaries green
+        run: |
+          set -euo pipefail
+          results='${{ needs.telemetry.result }} ${{ needs.provider-agnostic.result }} ${{ needs.publication.result }} ${{ needs.canary-tests.result }} ${{ needs.install-fingerprint.result }}'
+          echo "canary results: $results"
+          for r in $results; do
+            if [ "$r" != "success" ]; then
+              echo "PDD canary gate: a canary did not pass. Merge is blocked."
+              exit 1
+            fi
+          done
+          echo "All PDD canaries green."
