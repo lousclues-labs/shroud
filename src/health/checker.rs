@@ -13,6 +13,11 @@ use tokio::time::timeout;
 use tracing::{debug, warn};
 use ureq;
 
+/// How long a probe gets to itself before the next endpoint is started
+/// alongside it. Short enough to fail over quickly, long enough that a healthy
+/// tunnel almost always answers on the first endpoint alone.
+const HEDGE_DELAY: Duration = Duration::from_millis(1500);
+
 /// Result of a health check
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum HealthResult {
@@ -24,6 +29,11 @@ pub enum HealthResult {
     Dead { reason: String },
     /// Health checks are suspended (e.g., during system wake)
     /// Callers should leave state unchanged — neither affirm health nor declare failure.
+    ///
+    /// Only produced by the single-shot [`HealthChecker::check`] API; the
+    /// daemon filters suspension out in `begin_health_check` before a probe is
+    /// ever launched.
+    #[allow(dead_code)]
     Suspended,
 }
 
@@ -52,10 +62,17 @@ pub struct HealthConfig {
 impl Default for HealthConfig {
     fn default() -> Self {
         Self {
+            // IMPORTANT: none of these may be a DoH provider IP. When
+            // `block_doh` is enabled the kill switch drops tcp/443 to every
+            // address in `killswitch::rules::DOH_PROVIDERS`, so using one here
+            // makes the health checker block on its own firewall rule until the
+            // connect timeout expires. `https://1.1.1.1/cdn-cgi/trace` used to
+            // lead this list and did exactly that — see `doh_conflicts()`,
+            // which now guards against reintroducing the conflict.
             endpoints: vec![
-                "https://1.1.1.1/cdn-cgi/trace".to_string(),
                 "https://ifconfig.me/ip".to_string(),
                 "https://api.ipify.org".to_string(),
+                "https://icanhazip.com".to_string(),
             ],
             timeout_secs: 10,
             // Increased from 2000ms - builds/updates can cause temporary latency
@@ -67,6 +84,52 @@ impl Default for HealthConfig {
             dns_leak_check: false,
         }
     }
+}
+
+/// Extract the host component of an `https://host/path` endpoint URL.
+///
+/// Strips userinfo, port, and `[...]` IPv6 brackets so the result can be fed
+/// straight to `IpAddr::parse`. Returns `None` when there is no `://`.
+pub fn endpoint_host(endpoint: &str) -> Option<&str> {
+    let after_scheme = endpoint.split_once("://").map(|(_, rest)| rest)?;
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    // Drop any `user:pass@` prefix.
+    let host_port = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
+
+    // Bracketed IPv6 literal, e.g. `[2606:4700::1111]:443`.
+    if let Some(rest) = host_port.strip_prefix('[') {
+        return rest.split_once(']').map(|(host, _)| host);
+    }
+
+    // A single colon is `host:port`; more than one means a bare IPv6 literal,
+    // which must be returned untouched.
+    Some(match host_port.split_once(':') {
+        Some((host, _)) if host_port.matches(':').count() == 1 => host,
+        _ => host_port,
+    })
+}
+
+/// Find endpoints whose host is an IP the kill switch blocks as a DoH provider.
+///
+/// Only literal-IP hosts are inspected. Hostnames are deliberately left alone:
+/// resolving them at startup would be slow and unreliable (the tunnel may not
+/// be up yet), and the failure mode this guards against is using a DoH provider
+/// address directly as a health endpoint.
+pub fn doh_conflicts(endpoints: &[String], custom_blocklist: &[String]) -> Vec<String> {
+    endpoints
+        .iter()
+        .filter(|endpoint| {
+            endpoint_host(endpoint).is_some_and(|host| {
+                host.parse::<IpAddr>().is_ok()
+                    && (crate::killswitch::rules::is_doh_provider(host)
+                        || custom_blocklist.iter().any(|ip| ip == host))
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 /// Health checker for VPN connectivity
@@ -138,6 +201,13 @@ impl HealthChecker {
     /// to avoid false positives during temporary system load (builds, updates).
     /// Returns `Suspended` immediately if checks are suspended — callers should
     /// leave state unchanged (neither affirm health nor declare failure).
+    /// Perform a complete health check: probe, then interpret.
+    ///
+    /// Single-shot convenience API used by the library target (integration
+    /// tests and fuzz harnesses). The daemon itself drives [`run_probe`] and
+    /// [`HealthChecker::evaluate`] separately so the network request can run
+    /// off the event loop.
+    #[allow(dead_code)]
     pub async fn check(&mut self) -> HealthResult {
         // Check if suspended (e.g., during system wake)
         if self.is_suspended() {
@@ -145,75 +215,89 @@ impl HealthChecker {
             return HealthResult::Suspended;
         }
 
-        for endpoint in &self.config.endpoints {
-            match self.check_endpoint(endpoint).await {
-                Ok((latency_ms, body)) => {
-                    self.consecutive_failures = 0;
+        let outcome = run_probe(&self.config).await;
+        self.evaluate(outcome)
+    }
 
-                    // Exit IP validation (if configured)
-                    if let Some(ref expected_ip) = self.config.expected_exit_ip {
-                        let detected_ip = extract_ip_from_response(&body, endpoint);
-                        if let Some(actual_ip) = detected_ip {
-                            if actual_ip != *expected_ip {
-                                warn!(
-                                    "IP leak detected: expected {}, got {}",
-                                    expected_ip, actual_ip
-                                );
-                                return HealthResult::Dead {
-                                    reason: format!(
-                                        "IP leak detected: expected {}, got {}",
-                                        expected_ip, actual_ip
-                                    ),
-                                };
-                            }
-                            debug!("Exit IP verified: {} ({}ms)", actual_ip, latency_ms);
-                        }
-                        // If IP couldn't be extracted, skip validation (endpoint
-                        // may have changed format). The connectivity check still
-                        // succeeded, so we don't fail on extraction issues.
-                    }
+    /// Snapshot of the configuration needed to run a probe.
+    ///
+    /// Lets the supervisor hand the network work to a detached task without
+    /// borrowing (or locking) the checker for the duration of the request.
+    pub fn config_snapshot(&self) -> HealthConfig {
+        self.config.clone()
+    }
 
-                    // DNS leak check (if enabled)
-                    if self.config.dns_leak_check {
-                        match check_dns_leak() {
-                            DnsLeakResult::Secure => {
-                                debug!("DNS leak check passed");
-                            }
-                            DnsLeakResult::Leak { resolvers } => {
-                                warn!("DNS leak detected: non-tunnel resolvers {:?}", resolvers);
-                                return HealthResult::Degraded { latency_ms };
-                            }
-                            DnsLeakResult::Unknown => {
-                                debug!("DNS leak check inconclusive (could not read resolv.conf)");
-                            }
-                        }
-                    }
+    /// Interpret a completed probe, updating failure and degraded counters.
+    ///
+    /// Pure CPU plus at most one `resolv.conf` read, so this is safe to run
+    /// directly on the event loop. All network I/O happens in [`run_probe`].
+    pub fn evaluate(&mut self, outcome: ProbeOutcome) -> HealthResult {
+        if let Some(EndpointHit {
+            endpoint,
+            latency_ms,
+            body,
+        }) = outcome.hit
+        {
+            self.consecutive_failures = 0;
 
-                    if latency_ms > self.config.degraded_threshold_ms {
-                        self.consecutive_degraded += 1;
-                        debug!(
-                            "Health check high latency: {}ms (degraded {}/{})",
-                            latency_ms, self.consecutive_degraded, self.config.degraded_threshold
+            // Exit IP validation (if configured)
+            if let Some(ref expected_ip) = self.config.expected_exit_ip {
+                let detected_ip = extract_ip_from_response(&body, &endpoint);
+                if let Some(actual_ip) = detected_ip {
+                    if actual_ip != *expected_ip {
+                        warn!(
+                            "IP leak detected: expected {}, got {}",
+                            expected_ip, actual_ip
                         );
-
-                        // Only report degraded after consecutive threshold
-                        if self.consecutive_degraded >= self.config.degraded_threshold {
-                            return HealthResult::Degraded { latency_ms };
-                        }
-                        // Below threshold - treat as healthy but track
-                        return HealthResult::Healthy;
+                        return HealthResult::Dead {
+                            reason: format!(
+                                "IP leak detected: expected {}, got {}",
+                                expected_ip, actual_ip
+                            ),
+                        };
                     }
-
-                    // Good latency - reset degraded counter
-                    self.consecutive_degraded = 0;
-                    debug!("Health check passed: {}ms", latency_ms);
-                    return HealthResult::Healthy;
+                    debug!("Exit IP verified: {} ({}ms)", actual_ip, latency_ms);
                 }
-                Err(e) => {
-                    debug!("Health check failed for {}: {}", endpoint, e);
-                    continue;
+                // If IP couldn't be extracted, skip validation (endpoint
+                // may have changed format). The connectivity check still
+                // succeeded, so we don't fail on extraction issues.
+            }
+
+            // DNS leak check (if enabled)
+            if self.config.dns_leak_check {
+                match check_dns_leak() {
+                    DnsLeakResult::Secure => {
+                        debug!("DNS leak check passed");
+                    }
+                    DnsLeakResult::Leak { resolvers } => {
+                        warn!("DNS leak detected: non-tunnel resolvers {:?}", resolvers);
+                        return HealthResult::Degraded { latency_ms };
+                    }
+                    DnsLeakResult::Unknown => {
+                        debug!("DNS leak check inconclusive (could not read resolv.conf)");
+                    }
                 }
             }
+
+            if latency_ms > self.config.degraded_threshold_ms {
+                self.consecutive_degraded += 1;
+                debug!(
+                    "Health check high latency: {}ms (degraded {}/{})",
+                    latency_ms, self.consecutive_degraded, self.config.degraded_threshold
+                );
+
+                // Only report degraded after consecutive threshold
+                if self.consecutive_degraded >= self.config.degraded_threshold {
+                    return HealthResult::Degraded { latency_ms };
+                }
+                // Below threshold - treat as healthy but track
+                return HealthResult::Healthy;
+            }
+
+            // Good latency - reset degraded counter
+            self.consecutive_degraded = 0;
+            debug!("Health check passed: {} in {}ms", endpoint, latency_ms);
+            return HealthResult::Healthy;
         }
 
         // All endpoints failed
@@ -242,53 +326,156 @@ impl HealthChecker {
             }
         }
     }
+}
 
-    /// Check a single health endpoint.
-    ///
-    /// Returns `(latency_ms, response_body)` on success.
-    ///
-    /// Uses `spawn_blocking` + `ureq` (synchronous HTTP). The outer
-    /// `tokio::time::timeout` cancels the future if the blocking thread
-    /// takes too long, but the thread itself continues until `ureq` returns
-    /// (DNS timeout can be 30s+ on some resolvers). At most one leaked thread
-    /// per health check interval — acceptable given 30s default interval.
-    async fn check_endpoint(&self, endpoint: &str) -> Result<(u64, String), String> {
-        let url = endpoint.to_string();
-        let timeout_secs = self.config.timeout_secs;
+/// Probe endpoints in preference order using hedged requests.
+///
+/// The first endpoint is tried alone; if it has not answered within
+/// [`HEDGE_DELAY`], the next endpoint is started *alongside* it rather than
+/// after it. The first success wins and the stragglers are aborted.
+///
+/// This keeps the common case at exactly one outbound request (so we do not
+/// tell three third parties our exit IP every cycle) while bounding the worst
+/// case at roughly one timeout instead of N sequential timeouts.
+///
+/// Free function rather than a method so the supervisor can `tokio::spawn` it
+/// and keep the event loop responsive while it runs.
+pub async fn run_probe(config: &HealthConfig) -> ProbeOutcome {
+    let timeout_secs = config.timeout_secs;
+    let capacity = config.endpoints.len();
+    if capacity == 0 {
+        return ProbeOutcome { hit: None };
+    }
 
-        let result = timeout(
-            Duration::from_secs(timeout_secs + 2), // outer safety timeout
-            spawn_blocking(move || {
-                let start = Instant::now();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(capacity);
+    let mut queued = config.endpoints.iter().cloned();
+    let mut handles = Vec::with_capacity(capacity);
+    let mut in_flight = 0usize;
+    let mut winner = None;
 
-                let config = ureq::Agent::config_builder()
-                    .timeout_global(Some(std::time::Duration::from_secs(timeout_secs)))
-                    .timeout_connect(Some(std::time::Duration::from_secs(5)))
-                    .max_redirects(0) // SECURITY: Do not follow redirects (SHROUD-VULN-013)
-                    .build();
-                let agent = ureq::Agent::new_with_config(config);
+    loop {
+        if let Some(url) = queued.next() {
+            in_flight += 1;
+            let tx = tx.clone();
+            handles.push(tokio::spawn(async move {
+                let outcome = probe_endpoint(&url, timeout_secs).await;
+                let _ = tx.send((url, outcome)).await;
+            }));
 
-                match agent.get(&url).call() {
-                    Ok(resp) => {
-                        let status = resp.status().as_u16();
-                        let body = resp.into_body().read_to_string().unwrap_or_default();
-                        if (200..400).contains(&status) {
-                            Ok((start.elapsed().as_millis() as u64, body))
-                        } else {
-                            Err(format!("HTTP status: {}", status))
-                        }
+            // Give the endpoint a head start before hedging onto the next.
+            match timeout(HEDGE_DELAY, rx.recv()).await {
+                Ok(Some(message)) => {
+                    in_flight -= 1;
+                    if let Some(hit) = accept_probe(message) {
+                        winner = Some(hit);
+                        break;
                     }
-                    Err(e) => Err(format!("HTTP error: {}", e)),
                 }
-            }),
-        )
-        .await;
-
-        match result {
-            Ok(Ok(inner)) => inner,
-            Ok(Err(e)) => Err(format!("spawn_blocking error: {}", e)),
-            Err(_) => Err("timeout".to_string()),
+                // Senders are still alive here (we hold `tx`), so `None` is
+                // unreachable in practice; treat it as "nothing left".
+                Ok(None) => break,
+                // Head start elapsed — fall through and hedge.
+                Err(_) => {}
+            }
+        } else if in_flight > 0 {
+            match rx.recv().await {
+                Some(message) => {
+                    in_flight -= 1;
+                    if let Some(hit) = accept_probe(message) {
+                        winner = Some(hit);
+                        break;
+                    }
+                }
+                None => break,
+            }
+        } else {
+            break;
         }
+    }
+
+    // Cancel any stragglers. Note this cannot interrupt a `spawn_blocking`
+    // thread already inside `ureq`; that thread ends when the request's own
+    // timeout fires.
+    for handle in handles {
+        handle.abort();
+    }
+
+    ProbeOutcome { hit: winner }
+}
+
+/// Result of the network portion of a health check, before any stateful
+/// interpretation (failure counters, thresholds) has been applied.
+pub struct ProbeOutcome {
+    hit: Option<EndpointHit>,
+}
+
+/// A successful endpoint probe.
+struct EndpointHit {
+    endpoint: String,
+    latency_ms: u64,
+    body: String,
+}
+
+/// Convert a probe result into an [`EndpointHit`], logging failures.
+fn accept_probe(
+    (endpoint, outcome): (String, Result<(u64, String), String>),
+) -> Option<EndpointHit> {
+    match outcome {
+        Ok((latency_ms, body)) => Some(EndpointHit {
+            endpoint,
+            latency_ms,
+            body,
+        }),
+        Err(e) => {
+            debug!("Health check failed for {}: {}", endpoint, e);
+            None
+        }
+    }
+}
+
+/// Issue a single HTTP probe against `endpoint`.
+///
+/// Returns `(latency_ms, response_body)` on success.
+///
+/// Uses `spawn_blocking` + `ureq` (synchronous HTTP). The outer
+/// `tokio::time::timeout` cancels the future if the blocking thread
+/// takes too long, but the thread itself continues until `ureq` returns
+/// (DNS timeout can be 30s+ on some resolvers).
+async fn probe_endpoint(endpoint: &str, timeout_secs: u64) -> Result<(u64, String), String> {
+    let url = endpoint.to_string();
+
+    let result = timeout(
+        Duration::from_secs(timeout_secs + 2), // outer safety timeout
+        spawn_blocking(move || {
+            let start = Instant::now();
+
+            let config = ureq::Agent::config_builder()
+                .timeout_global(Some(std::time::Duration::from_secs(timeout_secs)))
+                .timeout_connect(Some(std::time::Duration::from_secs(5)))
+                .max_redirects(0) // SECURITY: Do not follow redirects (SHROUD-VULN-013)
+                .build();
+            let agent = ureq::Agent::new_with_config(config);
+
+            match agent.get(&url).call() {
+                Ok(resp) => {
+                    let status = resp.status().as_u16();
+                    let body = resp.into_body().read_to_string().unwrap_or_default();
+                    if (200..400).contains(&status) {
+                        Ok((start.elapsed().as_millis() as u64, body))
+                    } else {
+                        Err(format!("HTTP status: {}", status))
+                    }
+                }
+                Err(e) => Err(format!("HTTP error: {}", e)),
+            }
+        }),
+    )
+    .await;
+
+    match result {
+        Ok(Ok(inner)) => inner,
+        Ok(Err(e)) => Err(format!("spawn_blocking error: {}", e)),
+        Err(_) => Err("timeout".to_string()),
     }
 }
 
@@ -447,6 +634,136 @@ impl Default for HealthChecker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression guard for the defect where the kill switch's own DoH rules
+    /// blocked the health checker's first endpoint, stalling every check on a
+    /// 5s connect timeout.
+    mod doh_conflict_tests {
+        use super::*;
+
+        #[test]
+        fn test_default_endpoints_are_not_doh_blocked() {
+            let defaults = HealthConfig::default().endpoints;
+            let conflicts = doh_conflicts(&defaults, &[]);
+            assert!(
+                conflicts.is_empty(),
+                "default health endpoints must never be DoH-blocked, found: {:?}",
+                conflicts
+            );
+        }
+
+        #[test]
+        fn test_default_endpoints_contain_no_doh_provider_literal() {
+            for endpoint in HealthConfig::default().endpoints {
+                let host = endpoint_host(&endpoint).expect("endpoint must have a host");
+                assert!(
+                    !crate::killswitch::rules::is_doh_provider(host),
+                    "{} resolves to DoH provider literal {}",
+                    endpoint,
+                    host
+                );
+            }
+        }
+
+        #[test]
+        fn test_detects_known_doh_provider_endpoint() {
+            let endpoints = vec![
+                "https://1.1.1.1/cdn-cgi/trace".to_string(),
+                "https://ifconfig.me/ip".to_string(),
+            ];
+            let conflicts = doh_conflicts(&endpoints, &[]);
+            assert_eq!(conflicts, vec!["https://1.1.1.1/cdn-cgi/trace".to_string()]);
+        }
+
+        #[test]
+        fn test_detects_custom_blocklist_endpoint() {
+            let endpoints = vec!["https://203.0.113.50/ip".to_string()];
+            let custom = vec!["203.0.113.50".to_string()];
+            assert_eq!(doh_conflicts(&endpoints, &custom).len(), 1);
+            // Not in the custom list -> no conflict.
+            assert!(doh_conflicts(&endpoints, &[]).is_empty());
+        }
+
+        #[test]
+        fn test_hostname_endpoints_are_never_flagged() {
+            let endpoints = vec![
+                "https://ifconfig.me/ip".to_string(),
+                "https://api.ipify.org".to_string(),
+            ];
+            assert!(doh_conflicts(&endpoints, &[]).is_empty());
+        }
+    }
+
+    mod endpoint_host_tests {
+        use super::*;
+
+        #[test]
+        fn test_plain_host() {
+            assert_eq!(endpoint_host("https://ifconfig.me/ip"), Some("ifconfig.me"));
+        }
+
+        #[test]
+        fn test_host_without_path() {
+            assert_eq!(
+                endpoint_host("https://api.ipify.org"),
+                Some("api.ipify.org")
+            );
+        }
+
+        #[test]
+        fn test_ipv4_literal_with_path() {
+            assert_eq!(
+                endpoint_host("https://1.1.1.1/cdn-cgi/trace"),
+                Some("1.1.1.1")
+            );
+        }
+
+        #[test]
+        fn test_strips_port() {
+            assert_eq!(endpoint_host("https://1.1.1.1:443/x"), Some("1.1.1.1"));
+        }
+
+        #[test]
+        fn test_strips_userinfo() {
+            assert_eq!(
+                endpoint_host("https://user:pass@example.com/x"),
+                Some("example.com")
+            );
+        }
+
+        #[test]
+        fn test_bracketed_ipv6_with_port() {
+            assert_eq!(
+                endpoint_host("https://[2606:4700:4700::1111]:443/trace"),
+                Some("2606:4700:4700::1111")
+            );
+        }
+
+        #[test]
+        fn test_bare_ipv6_is_not_truncated_at_colon() {
+            assert_eq!(
+                endpoint_host("https://2606:4700:4700::1111"),
+                Some("2606:4700:4700::1111")
+            );
+        }
+
+        #[test]
+        fn test_query_and_fragment_stripped() {
+            assert_eq!(
+                endpoint_host("https://example.com?a=1"),
+                Some("example.com")
+            );
+            assert_eq!(
+                endpoint_host("https://example.com#frag"),
+                Some("example.com")
+            );
+        }
+
+        #[test]
+        fn test_missing_scheme_returns_none() {
+            assert_eq!(endpoint_host("ifconfig.me/ip"), None);
+        }
+    }
 
     #[test]
     fn test_health_config_default() {

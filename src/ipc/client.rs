@@ -133,6 +133,39 @@ pub async fn send_command_with_timeout(
 ///
 /// Returns [`ClientError::Receive`] if the response is empty or the connection closes prematurely.
 ///
+/// Maximum response line the client will accept from the daemon.
+///
+/// Mirrors the server's inbound cap. The client previously used an uncapped
+/// `read_line`, so it trusted the daemon completely: a compromised or
+/// misbehaving server could drive the CLI into unbounded allocation just by
+/// never sending a newline.
+const MAX_RESPONSE_BYTES: u64 = 64 * 1024 + 1; // 64KB + newline
+
+/// Read one newline-terminated line, refusing to allocate past the cap.
+///
+/// `take()` enforces the limit *before* allocation rather than checking the
+/// length afterwards.
+async fn read_line_capped(
+    reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>,
+    out: &mut String,
+) -> Result<(), ClientError> {
+    use tokio::io::AsyncReadExt;
+
+    let mut limited = reader.take(MAX_RESPONSE_BYTES);
+    limited.read_line(out).await.map_err(ClientError::Receive)?;
+
+    // No trailing newline after reading the full budget means the peer sent an
+    // oversized line rather than a complete response.
+    if !out.ends_with('\n') && out.len() as u64 >= MAX_RESPONSE_BYTES - 1 {
+        return Err(ClientError::Receive(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Response exceeded {} byte limit", MAX_RESPONSE_BYTES - 1),
+        )));
+    }
+
+    Ok(())
+}
+
 /// Returns [`ClientError::Parse`] if the response cannot be parsed as JSON.
 pub async fn send_command_on_stream(
     stream: UnixStream,
@@ -155,10 +188,7 @@ pub async fn send_command_on_stream(
     writer.flush().await.map_err(ClientError::Send)?;
 
     let mut response_line = String::new();
-    reader
-        .read_line(&mut response_line)
-        .await
-        .map_err(ClientError::Receive)?;
+    read_line_capped(&mut reader, &mut response_line).await?;
 
     debug!("Received hello response: {}", response_line.trim());
 
@@ -205,10 +235,7 @@ pub async fn send_command_on_stream(
     writer.flush().await.map_err(ClientError::Send)?;
 
     // Read response
-    reader
-        .read_line(&mut response_line)
-        .await
-        .map_err(ClientError::Receive)?;
+    read_line_capped(&mut reader, &mut response_line).await?;
 
     debug!("Received response: {}", response_line.trim());
 

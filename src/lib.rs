@@ -31,3 +31,10 @@ pub mod nm {
 pub mod ipc {
     pub mod protocol;
 }
+
+// Kill switch rule construction is a leaf module (depends only on `std::net`).
+// Exposed so `health` can consult `DOH_PROVIDERS` and refuse to probe an
+// endpoint that the kill switch itself would block.
+pub mod killswitch {
+    pub mod rules;
+}

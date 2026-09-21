@@ -146,6 +146,16 @@ impl NmClient for MockNmClient {
             .collect()
     }
 
+    /// Preserve the mock's distinct semantics: `active_vpn` is set explicitly
+    /// by tests and is not necessarily derivable from the connections map, so
+    /// delegate rather than inheriting the trait's derive-from-all default.
+    async fn get_active_vpn_snapshot(&self) -> (Vec<ActiveVpnInfo>, Option<ActiveVpnInfo>) {
+        (
+            self.get_all_active_vpns().await,
+            self.get_active_vpn_with_state().await,
+        )
+    }
+
     async fn get_vpn_state(&self, name: &str) -> Option<NmVpnState> {
         self.log(NmCall::GetVpnState(name.to_string()));
         self.connections

@@ -32,6 +32,42 @@ pub fn is_valid_private_cidr(s: &str) -> bool {
     false
 }
 
+/// Validate that a string is a safe IPv6 CIDR for a LAN exception.
+///
+/// Only Unique Local Addresses (`fc00::/7`) and link-local (`fe80::/10`) are
+/// accepted. This is the IPv6 counterpart of [`is_valid_private_cidr`] and
+/// exists for the same reason (SHROUD-VULN-021): a global-unicast prefix
+/// slipping into the LAN allowlist would punch a hole straight through the
+/// kill switch.
+pub fn is_valid_private_cidr_v6(s: &str) -> bool {
+    let Some((addr_str, prefix_str)) = s.split_once('/') else {
+        return false;
+    };
+    let (Ok(addr), Ok(prefix)) = (
+        addr_str.parse::<std::net::Ipv6Addr>(),
+        prefix_str.parse::<u32>(),
+    ) else {
+        return false;
+    };
+
+    // Reject prefixes broad enough to cover unrelated address space.
+    if !(7..=128).contains(&prefix) {
+        return false;
+    }
+
+    let octets = addr.octets();
+    let is_ula = (octets[0] & 0xfe) == 0xfc;
+    let is_link_local = octets[0] == 0xfe && (octets[1] & 0xc0) == 0x80;
+
+    is_ula || is_link_local
+}
+
+/// IPv6 LAN ranges allowed when `allow_lan` is set and detection fails.
+pub const LAN_SUBNETS_V6: &[&str] = &[
+    "fc00::/7",  // Unique Local Addresses
+    "fe80::/10", // Link-local
+];
+
 /// LAN subnets that should always be allowed (RFC 1918 + link-local).
 pub const LAN_SUBNETS: &[&str] = &[
     "10.0.0.0/8",
@@ -130,6 +166,105 @@ pub fn detect_local_subnets() -> Vec<String> {
 
     tracing::debug!("Detected local subnets: {:?}", subnets);
     subnets
+}
+
+/// Detect local IPv6 network prefixes from system interfaces.
+///
+/// The IPv6 counterpart of [`detect_local_subnets`]. Without it the kill switch
+/// was asymmetric: `allow_lan` opened the LAN over IPv4 but IPv6 only ever
+/// permitted `fe80::/10`, so a dual-stack host silently lost LAN reachability
+/// over its ULA prefix.
+///
+/// Only Unique Local Addresses are returned from interface detection;
+/// link-local is appended unconditionally because it is required for
+/// neighbour discovery and never appears under `scope global`.
+pub fn detect_local_subnets_v6() -> Vec<String> {
+    let link_local = "fe80::/10".to_string();
+
+    let output = match std::process::Command::new("ip")
+        .args(["-o", "-6", "addr", "show", "scope", "global"])
+        .output()
+    {
+        Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout).to_string(),
+        _ => {
+            tracing::debug!("Failed to detect IPv6 subnets, using ULA fallback");
+            return LAN_SUBNETS_V6.iter().map(|s| s.to_string()).collect();
+        }
+    };
+
+    let mut subnets = Vec::new();
+    for line in output.lines() {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+
+        // Skip tunnel/virtual interfaces for the same reasons as IPv4
+        // (SHROUD-VULN-042): they would widen the LAN exception needlessly.
+        if let Some(iface) = parts.get(1) {
+            if iface.starts_with("tun")
+                || iface.starts_with("tap")
+                || iface.starts_with("wg")
+                || *iface == "lo"
+                || iface.starts_with("docker")
+                || iface.starts_with("veth")
+                || iface.starts_with("virbr")
+                || iface.starts_with("br-")
+                || iface.starts_with("cni")
+                || iface.starts_with("flannel")
+                || iface.starts_with("podman")
+            {
+                continue;
+            }
+        }
+
+        let Some(pos) = parts.iter().position(|&p| p == "inet6") else {
+            continue;
+        };
+        let Some(addr_prefix) = parts.get(pos + 1) else {
+            continue;
+        };
+        let Some((addr_str, prefix_str)) = addr_prefix.split_once('/') else {
+            continue;
+        };
+        let (Ok(addr), Ok(prefix)) = (
+            addr_str.parse::<std::net::Ipv6Addr>(),
+            prefix_str.parse::<u32>(),
+        ) else {
+            continue;
+        };
+
+        // Mask host bits down to the network prefix.
+        let masked = mask_ipv6(addr, prefix);
+        let cidr = format!("{}/{}", masked, prefix);
+
+        if !is_valid_private_cidr_v6(&cidr) {
+            tracing::debug!("Skipping non-ULA IPv6 prefix from detection: {}", cidr);
+            continue;
+        }
+
+        if !subnets.contains(&cidr) {
+            subnets.push(cidr);
+        }
+    }
+
+    if !subnets.contains(&link_local) {
+        subnets.push(link_local);
+    }
+
+    tracing::debug!("Detected local IPv6 subnets: {:?}", subnets);
+    subnets
+}
+
+/// Zero out the host bits of `addr` below `prefix`.
+fn mask_ipv6(addr: std::net::Ipv6Addr, prefix: u32) -> std::net::Ipv6Addr {
+    if prefix >= 128 {
+        return addr;
+    }
+    let bits = u128::from(addr);
+    let mask = if prefix == 0 {
+        0u128
+    } else {
+        !0u128 << (128 - prefix)
+    };
+    std::net::Ipv6Addr::from(bits & mask)
 }
 
 /// Build LAN allow rules for specific subnets.
@@ -785,6 +920,127 @@ mod tests {
             assert!(!VPN_INTERFACE_PREFIXES.is_empty());
             for prefix in VPN_INTERFACE_PREFIXES {
                 assert!(!prefix.is_empty());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod ipv6_lan_tests {
+    use super::*;
+
+    mod validation {
+        use super::*;
+
+        #[test]
+        fn test_accepts_unique_local_addresses() {
+            assert!(is_valid_private_cidr_v6("fc00::/7"));
+            assert!(is_valid_private_cidr_v6("fd00::/8"));
+            assert!(is_valid_private_cidr_v6("fd12:3456:789a::/48"));
+        }
+
+        #[test]
+        fn test_accepts_link_local() {
+            assert!(is_valid_private_cidr_v6("fe80::/10"));
+            assert!(is_valid_private_cidr_v6("fe80::/64"));
+        }
+
+        /// The whole point of the validation: a global-unicast prefix in the
+        /// LAN allowlist would punch a hole straight through the kill switch.
+        #[test]
+        fn test_rejects_global_unicast() {
+            assert!(!is_valid_private_cidr_v6("2606:4700:4700::1111/128"));
+            assert!(!is_valid_private_cidr_v6("2001:db8::/32"));
+        }
+
+        #[test]
+        fn test_rejects_catch_all_and_overbroad_prefixes() {
+            assert!(!is_valid_private_cidr_v6("::/0"));
+            assert!(!is_valid_private_cidr_v6("fc00::/0"));
+            assert!(!is_valid_private_cidr_v6("fc00::/6"));
+        }
+
+        #[test]
+        fn test_rejects_malformed_input() {
+            assert!(!is_valid_private_cidr_v6("fc00::"));
+            assert!(!is_valid_private_cidr_v6("not-an-address/64"));
+            assert!(!is_valid_private_cidr_v6("fc00::/999"));
+            assert!(!is_valid_private_cidr_v6(""));
+        }
+
+        /// Injection guard, mirroring the IPv4 `is_valid_ipv4` tests: these
+        /// strings flow into firewall rules.
+        #[test]
+        fn test_rejects_embedded_rule_fragments() {
+            assert!(!is_valid_private_cidr_v6("fc00::/7 -j ACCEPT"));
+            assert!(!is_valid_private_cidr_v6("fc00::/7\n}\n}\n"));
+        }
+
+        #[test]
+        fn test_ipv4_validator_does_not_accept_ipv6() {
+            assert!(!is_valid_private_cidr("fc00::/7"));
+        }
+    }
+
+    mod masking {
+        use super::*;
+        use std::net::Ipv6Addr;
+
+        #[test]
+        fn test_host_bits_are_cleared() {
+            let addr: Ipv6Addr = "fd12:3456:789a:1::abcd".parse().unwrap();
+            assert_eq!(
+                mask_ipv6(addr, 64),
+                "fd12:3456:789a:1::".parse::<Ipv6Addr>().unwrap()
+            );
+        }
+
+        #[test]
+        fn test_full_prefix_is_identity() {
+            let addr: Ipv6Addr = "fd00::1".parse().unwrap();
+            assert_eq!(mask_ipv6(addr, 128), addr);
+        }
+
+        #[test]
+        fn test_zero_prefix_yields_unspecified() {
+            let addr: Ipv6Addr = "fd00::1".parse().unwrap();
+            assert_eq!(mask_ipv6(addr, 0), Ipv6Addr::UNSPECIFIED);
+        }
+    }
+
+    mod detection {
+        use super::*;
+
+        /// Detection must never hand a non-private prefix to the firewall,
+        /// whatever the host's interfaces look like.
+        #[test]
+        fn test_detected_subnets_are_all_private() {
+            for subnet in detect_local_subnets_v6() {
+                assert!(
+                    is_valid_private_cidr_v6(&subnet),
+                    "detection produced non-private IPv6 subnet: {subnet}"
+                );
+            }
+        }
+
+        /// Neighbour discovery breaks without link-local.
+        #[test]
+        fn test_link_local_always_included() {
+            assert!(detect_local_subnets_v6().contains(&"fe80::/10".to_string()));
+        }
+
+        #[test]
+        fn test_never_returns_empty() {
+            assert!(!detect_local_subnets_v6().is_empty());
+        }
+
+        #[test]
+        fn test_fallback_constants_are_valid() {
+            for subnet in LAN_SUBNETS_V6 {
+                assert!(
+                    is_valid_private_cidr_v6(subnet),
+                    "fallback constant {subnet} fails its own validator"
+                );
             }
         }
     }

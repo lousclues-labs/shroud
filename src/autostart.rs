@@ -8,10 +8,43 @@
 //! - Runs after full desktop session is initialized
 //! - PATH and environment are properly set
 //! - Works consistently across desktop environments
+//!
+//! ## Restart policy
+//!
+//! `systemd-xdg-autostart-generator` turns the desktop file into a transient
+//! `app-shroud@autostart.service` unit, and that generated unit always carries
+//! `Restart=no`. For a process whose job is enforcing a kill switch, dying
+//! unsupervised is the worst failure mode: the firewall rules persist but
+//! nothing is left to manage state, reconnect, or clean up.
+//!
+//! Rather than abandoning XDG autostart (and the desktop-environment
+//! compatibility above), we keep it as the activation mechanism and layer a
+//! systemd drop-in on top of the generated unit to supply the missing restart
+//! policy. Drop-ins under `~/.config/systemd/user/` take precedence over
+//! generator output, so this works without owning the unit file itself.
 
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+
+/// Drop-in contents supplying the restart policy the XDG generator omits.
+///
+/// `on-failure` deliberately does not restart after a clean exit, so quitting
+/// from the tray still quits. The start-limit pair prevents a crash-looping
+/// binary from being respawned forever.
+const RESTART_DROPIN: &str = r#"# Managed by shroud — do not edit.
+#
+# systemd-xdg-autostart-generator emits Restart=no for every desktop file.
+# Shroud enforces a kill switch, so an unsupervised crash must not leave the
+# firewall in place with no daemon to manage it.
+[Unit]
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Restart=on-failure
+RestartSec=5s
+"#;
 
 /// Autostart manager using XDG desktop files
 pub struct Autostart;
@@ -22,6 +55,78 @@ impl Autostart {
         dirs::config_dir()
             .map(|c| c.join("autostart/shroud.desktop"))
             .ok_or_else(|| "Could not determine XDG config directory".to_string())
+    }
+
+    /// Name of the unit `systemd-xdg-autostart-generator` synthesises for our
+    /// desktop file.
+    ///
+    /// The generator derives it from the desktop file's basename, so this must
+    /// stay in lockstep with [`Self::desktop_file_path`].
+    fn generated_unit_name() -> &'static str {
+        "app-shroud@autostart.service"
+    }
+
+    /// Directory holding our drop-in for the generated autostart unit.
+    fn restart_dropin_dir() -> Result<PathBuf, String> {
+        dirs::config_dir()
+            .map(|c| {
+                c.join("systemd/user")
+                    .join(format!("{}.d", Self::generated_unit_name()))
+            })
+            .ok_or_else(|| "Could not determine XDG config directory".to_string())
+    }
+
+    /// Path to the drop-in file itself.
+    fn restart_dropin_path() -> Result<PathBuf, String> {
+        Ok(Self::restart_dropin_dir()?.join("50-shroud-restart.conf"))
+    }
+
+    /// Install the restart-policy drop-in over the generated autostart unit.
+    ///
+    /// Best effort: autostart still works without it, so a failure here is
+    /// surfaced to the caller but must not fail `enable()`.
+    fn install_restart_policy() -> Result<(), String> {
+        let dir = Self::restart_dropin_dir()?;
+        fs::create_dir_all(&dir)
+            .map_err(|e| format!("Failed to create systemd drop-in directory: {}", e))?;
+
+        let path = Self::restart_dropin_path()?;
+        fs::write(&path, RESTART_DROPIN)
+            .map_err(|e| format!("Failed to write restart drop-in: {}", e))?;
+
+        // The drop-in only takes effect once systemd re-reads unit state.
+        let _ = Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .output();
+
+        Ok(())
+    }
+
+    /// Remove the restart-policy drop-in (and its directory when empty).
+    fn remove_restart_policy() -> Result<(), String> {
+        let path = Self::restart_dropin_path()?;
+        if path.exists() {
+            fs::remove_file(&path)
+                .map_err(|e| format!("Failed to remove restart drop-in: {}", e))?;
+        }
+
+        // Only removes the directory if we left it empty; ignore failure.
+        if let Ok(dir) = Self::restart_dropin_dir() {
+            let _ = fs::remove_dir(dir);
+        }
+
+        let _ = Command::new("systemctl")
+            .args(["--user", "daemon-reload"])
+            .output();
+
+        Ok(())
+    }
+
+    /// Whether the restart-policy drop-in is currently installed.
+    pub fn has_restart_policy() -> bool {
+        Self::restart_dropin_path()
+            .map(|p| p.exists())
+            .unwrap_or(false)
     }
 
     /// Find the installed shroud binary with absolute path.
@@ -117,6 +222,8 @@ X-KDE-autostart-after=panel
             binary_exists,
             has_old_systemd,
             systemd_service_path,
+            has_restart_policy: Self::has_restart_policy(),
+            restart_dropin_path: Self::restart_dropin_path().ok(),
         }
     }
 
@@ -124,7 +231,15 @@ X-KDE-autostart-after=panel
     pub fn enable() -> Result<(), String> {
         let path = Self::desktop_file_path()?;
         let _ = Self::cleanup_old_systemd();
-        Self::enable_at(&path)
+        Self::enable_at(&path)?;
+
+        // Best effort: autostart is still functional without the drop-in, it
+        // just loses crash supervision. Warn rather than fail the whole call.
+        if let Err(e) = Self::install_restart_policy() {
+            tracing::warn!("Could not install autostart restart policy: {}", e);
+        }
+
+        Ok(())
     }
 
     /// Write the autostart entry to `path`.
@@ -155,7 +270,13 @@ X-KDE-autostart-after=panel
     /// Disable autostart
     pub fn disable() -> Result<(), String> {
         let path = Self::desktop_file_path()?;
-        Self::disable_at(&path)
+        Self::disable_at(&path)?;
+
+        if let Err(e) = Self::remove_restart_policy() {
+            tracing::warn!("Could not remove autostart restart policy: {}", e);
+        }
+
+        Ok(())
     }
 
     /// Remove the autostart entry at `path`, succeeding if it is already gone.
@@ -230,6 +351,10 @@ pub struct AutostartStatus {
     pub binary_exists: bool,
     pub has_old_systemd: bool,
     pub systemd_service_path: Option<PathBuf>,
+    /// Whether the crash-supervision drop-in is installed over the unit that
+    /// `systemd-xdg-autostart-generator` synthesises.
+    pub has_restart_policy: bool,
+    pub restart_dropin_path: Option<PathBuf>,
 }
 
 #[cfg(test)]
@@ -379,5 +504,73 @@ mod tests {
 
         assert!(Autostart::disable_at(&path).is_ok());
         assert!(!path.exists());
+    }
+}
+
+#[cfg(test)]
+mod restart_policy_tests {
+    use super::*;
+
+    /// The drop-in only applies if its directory name matches the unit that
+    /// `systemd-xdg-autostart-generator` synthesises from our desktop file.
+    /// The generator derives the unit name from the desktop file's basename,
+    /// so these two must never drift apart.
+    #[test]
+    fn test_generated_unit_name_matches_desktop_file_stem() {
+        let desktop = Autostart::desktop_file_path().expect("config dir");
+        let stem = desktop
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .expect("desktop file stem");
+        assert_eq!(
+            Autostart::generated_unit_name(),
+            format!("app-{stem}@autostart.service"),
+            "drop-in would be installed for the wrong unit and silently do nothing"
+        );
+    }
+
+    #[test]
+    fn test_dropin_path_is_under_systemd_user_dropin_dir() {
+        let path = Autostart::restart_dropin_path().expect("config dir");
+        let as_str = path.to_string_lossy();
+        assert!(as_str.contains("systemd/user"), "unexpected path: {as_str}");
+        assert!(
+            as_str.contains("app-shroud@autostart.service.d"),
+            "drop-in must live in the unit's .d directory: {as_str}"
+        );
+        assert_eq!(path.extension().and_then(|e| e.to_str()), Some("conf"));
+    }
+
+    /// Guards the reliability fix itself: a kill-switch daemon must be
+    /// restarted if it crashes, but must NOT be restarted after a clean quit.
+    #[test]
+    fn test_dropin_declares_on_failure_restart() {
+        assert!(RESTART_DROPIN.contains("Restart=on-failure"));
+        assert!(RESTART_DROPIN.contains("RestartSec="));
+        assert!(
+            !RESTART_DROPIN.contains("Restart=always"),
+            "Restart=always would fight the tray's Quit action"
+        );
+    }
+
+    /// Without a start limit, a binary that crashes on startup would be
+    /// respawned forever.
+    #[test]
+    fn test_dropin_bounds_restart_storms() {
+        assert!(RESTART_DROPIN.contains("StartLimitBurst="));
+        assert!(RESTART_DROPIN.contains("StartLimitIntervalSec="));
+    }
+
+    /// systemd rejects the whole drop-in if the start-limit directives land in
+    /// `[Service]` instead of `[Unit]`.
+    #[test]
+    fn test_start_limit_directives_are_in_unit_section() {
+        let unit_section = RESTART_DROPIN
+            .split("[Service]")
+            .next()
+            .expect("drop-in must have a [Service] section");
+        assert!(unit_section.contains("[Unit]"));
+        assert!(unit_section.contains("StartLimitBurst="));
+        assert!(unit_section.contains("StartLimitIntervalSec="));
     }
 }

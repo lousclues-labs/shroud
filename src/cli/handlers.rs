@@ -741,8 +741,11 @@ fn handle_autostart_command(action: ToggleAction, args: &Args) -> i32 {
 
             if args.json_output {
                 println!(
-                    r#"{{"enabled": {}, "binary_exists": {}, "has_old_systemd": {}}}"#,
-                    status.enabled, status.binary_exists, status.has_old_systemd
+                    r#"{{"enabled": {}, "binary_exists": {}, "has_old_systemd": {}, "has_restart_policy": {}}}"#,
+                    status.enabled,
+                    status.binary_exists,
+                    status.has_old_systemd,
+                    status.has_restart_policy
                 );
                 return 0;
             }
@@ -771,6 +774,19 @@ fn handle_autostart_command(action: ToggleAction, args: &Args) -> i32 {
             if status.enabled {
                 if let Some(ref path) = status.desktop_file {
                     println!("Desktop file: {}", path.display());
+                }
+
+                // The XDG generator always emits Restart=no; our drop-in is
+                // what gives the kill-switch daemon crash supervision.
+                if status.has_restart_policy {
+                    println!("Restart policy: on-failure ✓");
+                    if let Some(ref path) = status.restart_dropin_path {
+                        println!("  {}", path.display());
+                    }
+                } else {
+                    println!("Restart policy: none ✗");
+                    println!("  Shroud will not be restarted if it crashes.");
+                    println!("  Run 'shroud autostart on' to reinstall it.");
                 }
             }
 

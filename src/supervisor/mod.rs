@@ -35,11 +35,11 @@ mod tests;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use tokio::sync::{mpsc, RwLock};
 
 use crate::dbus::NmEvent;
-use crate::health::checker::HealthConfig;
+use crate::health::checker::{HealthConfig, ProbeOutcome};
 use crate::health::HealthChecker;
 use crate::ipc::{IpcCommand, IpcResponse};
 use crate::killswitch::KillSwitch;
@@ -140,6 +140,13 @@ impl ExitState {
 pub(crate) struct TimingState {
     pub(crate) last_disconnect_time: Option<Instant>,
     pub(crate) last_poll_time: Instant,
+    /// Wall-clock companion to `last_poll_time`.
+    ///
+    /// `Instant` is `CLOCK_MONOTONIC`, which does not advance while the machine
+    /// is suspended; `SystemTime` does. Comparing the two deltas is what lets
+    /// the poll loop tell a genuine suspend/resume apart from the loop simply
+    /// having been busy — see `event_loop::detect_time_jump`.
+    pub(crate) last_poll_wall: SystemTime,
     pub(crate) last_wake_event: Option<Instant>,
     /// When the last wake resync established ground truth from NetworkManager.
     pub(crate) last_wake_resync: Option<Instant>,
@@ -162,6 +169,7 @@ impl Default for TimingState {
         Self {
             last_disconnect_time: None,
             last_poll_time: Instant::now(),
+            last_poll_wall: SystemTime::now(),
             last_wake_event: None,
             last_wake_resync: None,
             last_reconnect_time: None,
@@ -190,6 +198,13 @@ pub struct VpnSupervisor {
     pub(crate) dbus_rx: mpsc::Receiver<NmEvent>,
     /// Health checker for VPN connectivity verification
     pub(crate) health_checker: HealthChecker,
+    /// Sender handed to detached health probes so they can report back.
+    pub(crate) health_tx: mpsc::Sender<ProbeOutcome>,
+    /// Receiver for completed health probes, polled by the event loop.
+    pub(crate) health_rx: mpsc::Receiver<ProbeOutcome>,
+    /// Guard preventing overlapping probes when one runs longer than the
+    /// health check interval.
+    pub(crate) health_probe_in_flight: bool,
     /// System tray and notifications
     pub(crate) tray: TrayBridge,
     /// Persistent configuration storage
@@ -269,22 +284,52 @@ impl VpnSupervisor {
             crate::config::DnsMode::Tunnel | crate::config::DnsMode::Strict
         ));
 
-        let health_config = if config_store.config.health_check_endpoints.is_empty() {
-            HealthConfig {
+        let health_config = {
+            let mut health_config = HealthConfig {
                 degraded_threshold_ms: config_store.config.health_degraded_threshold_ms,
                 expected_exit_ip: config_store.config.expected_exit_ip.clone(),
                 dns_leak_check,
                 ..Default::default()
+            };
+
+            if !config_store.config.health_check_endpoints.is_empty() {
+                health_config.endpoints = config_store.config.health_check_endpoints.clone();
             }
-        } else {
-            HealthConfig {
-                endpoints: config_store.config.health_check_endpoints.clone(),
-                degraded_threshold_ms: config_store.config.health_degraded_threshold_ms,
-                expected_exit_ip: config_store.config.expected_exit_ip.clone(),
-                dns_leak_check,
-                ..Default::default()
+
+            // When `block_doh` is on, the kill switch drops tcp/443 to every
+            // DoH provider. Probing one of those addresses would stall until
+            // the connect timeout expires and then report a false failure, so
+            // drop them rather than let the health checker fight our own
+            // firewall rules.
+            if config_store.config.block_doh {
+                let conflicts = crate::health::checker::doh_conflicts(
+                    &health_config.endpoints,
+                    &config_store.config.custom_doh_blocklist,
+                );
+
+                if !conflicts.is_empty() {
+                    tracing::warn!(
+                        "Ignoring health endpoint(s) blocked by our own DoH rules: {}",
+                        conflicts.join(", ")
+                    );
+                    health_config.endpoints.retain(|e| !conflicts.contains(e));
+
+                    if health_config.endpoints.is_empty() {
+                        health_config.endpoints = HealthConfig::default().endpoints;
+                        tracing::warn!(
+                            "All configured health endpoints were DoH-blocked; \
+                             falling back to defaults"
+                        );
+                    }
+                }
             }
+
+            health_config
         };
+
+        // Depth 1: `health_probe_in_flight` already guarantees at most one
+        // outstanding probe, so a deeper queue could only hold stale results.
+        let (health_tx, health_rx) = mpsc::channel(1);
 
         Self {
             machine: StateMachine::with_config(sm_config),
@@ -296,6 +341,9 @@ impl VpnSupervisor {
             config_store,
             nm,
             health_checker: HealthChecker::with_config(health_config),
+            health_tx,
+            health_rx,
+            health_probe_in_flight: false,
             kill_switch,
             timing: TimingState::default(),
             switch_ctx: SwitchContext::default(),

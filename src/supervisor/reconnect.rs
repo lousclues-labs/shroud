@@ -205,40 +205,52 @@ impl super::VpnSupervisor {
                 linear_backoff_secs(RECONNECT_BASE_DELAY_SECS, RECONNECT_MAX_DELAY_SECS, attempt)
                     .as_secs();
 
-            // Wait with periodic checks for user commands
-            let check_interval = Duration::from_millis(500);
+            // Wait out the backoff, but stay responsive to user commands.
+            //
+            // This used to poll `try_recv()` every 500ms for the whole backoff
+            // window, waking up repeatedly with nothing to do and reacting to a
+            // Disconnect up to half a second late. Selecting the timer against
+            // the channel is both idle-free and immediate.
             let total_delay = Duration::from_secs(delay);
-            let start = Instant::now();
+            let backoff = sleep(total_delay);
+            tokio::pin!(backoff);
 
-            while start.elapsed() < total_delay {
-                // Check for pending commands (especially Disconnect)
-                match self.rx.try_recv() {
-                    Ok(VpnCommand::Disconnect) => {
-                        info!("Disconnect command received during reconnect - cancelling");
-                        // Disconnect any partial connection
-                        let _ = self.nm.disconnect(connection_name).await;
-                        self.timing.last_disconnect_time = Some(Instant::now());
-                        self.machine
-                            .set_state(VpnState::Disconnected, TransitionReason::UserRequested);
-                        self.sync_shared_state().await;
-                        self.tray.update(&self.shared_state);
-                        self.tray
-                            .notify("VPN Disconnected", "Reconnection cancelled");
-                        return;
-                    }
-                    Ok(other_cmd) => {
-                        // Queue commands to be processed after the reconnect loop
-                        debug!("Deferring command during reconnect: {:?}", other_cmd);
-                        self.deferred_commands.push_back(other_cmd);
-                    }
-                    Err(_) => {
-                        // No pending command, continue waiting
-                    }
+            let mut cancel_requested = false;
+            loop {
+                tokio::select! {
+                    _ = &mut backoff => break,
+                    maybe_cmd = self.rx.recv() => match maybe_cmd {
+                        Some(VpnCommand::Disconnect) => {
+                            cancel_requested = true;
+                            break;
+                        }
+                        Some(other_cmd) => {
+                            // Queue commands to be processed after the reconnect loop
+                            debug!("Deferring command during reconnect: {:?}", other_cmd);
+                            self.deferred_commands.push_back(other_cmd);
+                        }
+                        // Sender gone: nothing more can arrive, so just finish
+                        // the backoff rather than spinning on a closed channel.
+                        None => {
+                            (&mut backoff).await;
+                            break;
+                        }
+                    },
                 }
+            }
 
-                // Sleep for check interval or remaining time, whichever is shorter
-                let remaining = total_delay.saturating_sub(start.elapsed());
-                sleep(std::cmp::min(check_interval, remaining)).await;
+            if cancel_requested {
+                info!("Disconnect command received during reconnect - cancelling");
+                // Disconnect any partial connection
+                let _ = self.nm.disconnect(connection_name).await;
+                self.timing.last_disconnect_time = Some(Instant::now());
+                self.machine
+                    .set_state(VpnState::Disconnected, TransitionReason::UserRequested);
+                self.sync_shared_state().await;
+                self.tray.update(&self.shared_state);
+                self.tray
+                    .notify("VPN Disconnected", "Reconnection cancelled");
+                return;
             }
 
             // Attempt connection

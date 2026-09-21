@@ -3,26 +3,72 @@
 
 //! Supervisor event loop
 
-use std::time::Instant;
-use tokio::time::Duration;
+use std::time::{Instant, SystemTime};
+use tokio::time::{Duration, MissedTickBehavior};
 use tracing::{debug, info, instrument, warn};
 
 use crate::state::{Event, VpnState};
 use crate::tray::VpnCommand;
 
-/// Poll NetworkManager state every 2 seconds
-pub const NM_POLL_INTERVAL_SECS: u64 = 2;
+/// Poll NetworkManager state every 30 seconds.
+///
+/// This is a *backstop*, not the primary signal: `dbus::monitor` delivers NM
+/// state changes in real time, and the poll only exists to recover from a
+/// missed or dropped signal. It previously ran every 2 seconds, which issued
+/// ~43,000 `nmcli` subprocesses a day — the daemon spent roughly 29x more CPU
+/// spawning processes than doing its own work — to re-learn something D-Bus had
+/// already told it.
+pub const NM_POLL_INTERVAL_SECS: u64 = 30;
 
 /// Health check interval when connected (seconds)
 pub const HEALTH_CHECK_INTERVAL_SECS: u64 = 30;
 
-/// Threshold for detecting a time jump (e.g., resume from sleep)
-/// If more than 3x the poll interval has passed, we consider it a time jump
-pub const TIME_JUMP_THRESHOLD_SECS: u64 = NM_POLL_INTERVAL_SECS * 3;
+/// Wall-clock/monotonic skew above which we treat the gap as a real time jump
+/// (suspend/resume, or an NTP step) rather than a busy event loop.
+///
+/// Deliberately *not* derived from the poll interval. The old
+/// `NM_POLL_INTERVAL_SECS * 3` rule measured only monotonic elapsed time, so
+/// any slow operation inside the loop looked identical to a suspend: a health
+/// check stalling 5s on a blocked endpoint produced a permanent stream of
+/// "Time jump detected (7.1s)" warnings and a full NM resync every 60s.
+pub const TIME_JUMP_THRESHOLD_SECS: u64 = 10;
 
 /// Cooldown period after a time jump event (prevents thrashing)
 /// Only one wake event per cooldown window
 pub const TIME_JUMP_COOLDOWN_SECS: u64 = 5;
+
+// D-Bus is the primary signal for NM state; the poll is only a backstop.
+// Dropping it back to a few seconds reintroduces the subprocess storm that
+// cost ~29x the daemon's own CPU. Enforced at compile time so it cannot be
+// tuned back down by accident.
+const _: () = assert!(
+    NM_POLL_INTERVAL_SECS >= 30,
+    "NM_POLL_INTERVAL_SECS is a backstop; frequent polling reintroduces the nmcli subprocess storm"
+);
+
+// Detection must stay decoupled from the poll interval. The original
+// `NM_POLL_INTERVAL_SECS * 3` rule is what made a slow event loop
+// indistinguishable from a suspend.
+const _: () = assert!(
+    TIME_JUMP_THRESHOLD_SECS != NM_POLL_INTERVAL_SECS * 3,
+    "TIME_JUMP_THRESHOLD_SECS must not be derived from the poll interval"
+);
+
+/// Decide whether the gap between two polls represents a genuine time jump.
+///
+/// `mono_delta` comes from `Instant` (`CLOCK_MONOTONIC`, which pauses while the
+/// machine is suspended) and `wall_delta` from `SystemTime` (which does not).
+/// A suspend therefore shows up as wall time racing ahead of monotonic time,
+/// whereas a merely slow event loop advances both equally and yields ~zero
+/// skew. Returns the detected skew when it exceeds `threshold`.
+pub fn detect_time_jump(
+    wall_delta: Duration,
+    mono_delta: Duration,
+    threshold: Duration,
+) -> Option<Duration> {
+    let skew = wall_delta.saturating_sub(mono_delta);
+    (skew > threshold).then_some(skew)
+}
 
 impl super::VpnSupervisor {
     /// Run the supervisor's main loop
@@ -147,12 +193,16 @@ impl super::VpnSupervisor {
             HEALTH_CHECK_INTERVAL_SECS // interval is created but never fires (guarded below)
         };
 
-        // Create an interval for NM polling
+        // Create an interval for NM polling.
+        // `Delay` (not the default `Burst`) so a slow cycle does not cause the
+        // missed ticks to fire back-to-back immediately afterwards.
         let mut nm_poll_interval =
             tokio::time::interval(Duration::from_secs(NM_POLL_INTERVAL_SECS));
+        nm_poll_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         // Create an interval for health checks (only runs when connected)
         let mut health_check_interval = tokio::time::interval(Duration::from_secs(health_interval));
+        health_check_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
 
         loop {
             tokio::select! {
@@ -220,8 +270,18 @@ impl super::VpnSupervisor {
 
                 // Poll NetworkManager state periodically (fallback/backup)
                 _ = nm_poll_interval.tick() => {
-                    let elapsed = self.timing.last_poll_time.elapsed();
-                    if elapsed > Duration::from_secs(TIME_JUMP_THRESHOLD_SECS) {
+                    let mono_delta = self.timing.last_poll_time.elapsed();
+                    let wall_delta = SystemTime::now()
+                        .duration_since(self.timing.last_poll_wall)
+                        .unwrap_or_default();
+
+                    let jump = detect_time_jump(
+                        wall_delta,
+                        mono_delta,
+                        Duration::from_secs(TIME_JUMP_THRESHOLD_SECS),
+                    );
+
+                    if let Some(skew) = jump {
                         // Time jump detected - check if we're in cooldown period
                         let should_dispatch = match self.timing.last_wake_event {
                             Some(last) => last.elapsed().as_secs() >= TIME_JUMP_COOLDOWN_SECS,
@@ -230,8 +290,8 @@ impl super::VpnSupervisor {
 
                         if should_dispatch {
                             warn!(
-                                "Time jump detected ({:.1}s since last poll), dispatching Wake event after delay",
-                                elapsed.as_secs_f32()
+                                "Time jump detected ({:.1}s of wall-clock skew), dispatching Wake event",
+                                skew.as_secs_f32()
                             );
 
                             // Suspend health checks during wake to avoid false positives
@@ -254,13 +314,87 @@ impl super::VpnSupervisor {
                         self.poll_nm_state().await;
                     }
                     self.timing.last_poll_time = Instant::now();
+                    self.timing.last_poll_wall = SystemTime::now();
                 }
 
-                // Run health checks when connected (disabled when health_check_interval_secs = 0)
+                // Launch a health check when connected (disabled when
+                // health_check_interval_secs = 0). The network probe runs on a
+                // detached task; only its result is handled on this loop.
                 _ = health_check_interval.tick(), if health_checks_enabled => {
-                    self.run_health_check().await;
+                    if self.health_probe_in_flight {
+                        debug!("Skipping health check - previous probe still in flight");
+                    } else if let Some(config) = self.begin_health_check().await {
+                        self.health_probe_in_flight = true;
+                        let tx = self.health_tx.clone();
+                        tokio::spawn(async move {
+                            let outcome = crate::health::checker::run_probe(&config).await;
+                            let _ = tx.send(outcome).await;
+                        });
+                    }
+                }
+
+                // Apply a completed health probe
+                Some(outcome) = self.health_rx.recv() => {
+                    self.health_probe_in_flight = false;
+                    self.finish_health_check(outcome).await;
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod time_jump_tests {
+    use super::*;
+
+    const THRESHOLD: Duration = Duration::from_secs(TIME_JUMP_THRESHOLD_SECS);
+
+    /// The exact defect this replaced: a health check stalling ~5s on an
+    /// unreachable endpoint advanced monotonic and wall clocks equally, but the
+    /// old monotonic-only rule read it as a suspend and forced a full NM resync
+    /// roughly once a minute, forever.
+    #[test]
+    fn test_blocked_event_loop_is_not_a_time_jump() {
+        // 7.1s of real elapsed time, no clock skew.
+        let elapsed = Duration::from_millis(7100);
+        assert_eq!(detect_time_jump(elapsed, elapsed, THRESHOLD), None);
+    }
+
+    #[test]
+    fn test_slow_loop_far_beyond_threshold_is_still_not_a_jump() {
+        let elapsed = Duration::from_secs(120);
+        assert_eq!(detect_time_jump(elapsed, elapsed, THRESHOLD), None);
+    }
+
+    #[test]
+    fn test_suspend_is_detected() {
+        // Machine suspended an hour: wall clock advanced, CLOCK_MONOTONIC did not.
+        let wall = Duration::from_secs(3600);
+        let mono = Duration::from_secs(2);
+        let skew = detect_time_jump(wall, mono, THRESHOLD).expect("suspend must be detected");
+        assert_eq!(skew, Duration::from_secs(3598));
+    }
+
+    #[test]
+    fn test_skew_at_threshold_is_not_a_jump() {
+        let mono = Duration::from_secs(1);
+        let wall = mono + THRESHOLD;
+        assert_eq!(detect_time_jump(wall, mono, THRESHOLD), None);
+    }
+
+    #[test]
+    fn test_skew_just_past_threshold_is_a_jump() {
+        let mono = Duration::from_secs(1);
+        let wall = mono + THRESHOLD + Duration::from_millis(1);
+        assert!(detect_time_jump(wall, mono, THRESHOLD).is_some());
+    }
+
+    /// A backwards NTP step makes wall_delta smaller than mono_delta;
+    /// `saturating_sub` must not underflow.
+    #[test]
+    fn test_backwards_clock_step_does_not_panic() {
+        let wall = Duration::from_secs(1);
+        let mono = Duration::from_secs(60);
+        assert_eq!(detect_time_jump(wall, mono, THRESHOLD), None);
     }
 }

@@ -81,8 +81,11 @@ impl super::super::VpnSupervisor {
             }
         }
 
-        // CRITICAL: Detect multiple simultaneous VPNs and clean up extras
-        let all_vpns = self.nm.get_all_active_vpns().await;
+        // CRITICAL: Detect multiple simultaneous VPNs and clean up extras.
+        // One NM query serves both the multi-VPN check and the state
+        // comparison below; the >1 branch returns early, so nothing can change
+        // between the two uses.
+        let (all_vpns, active_vpn_info) = self.nm.get_active_vpn_snapshot().await;
         if all_vpns.len() > 1 {
             warn!(
                 "Poll detected {} VPNs active: {:?}",
@@ -121,7 +124,6 @@ impl super::super::VpnSupervisor {
             return; // Don't run the rest of the poll logic
         }
 
-        let active_vpn_info = self.nm.get_active_vpn_with_state().await;
         let current_state = self.machine.state.clone();
         let auto_reconnect = self.shared_state.read().await.auto_reconnect;
 

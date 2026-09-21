@@ -401,6 +401,11 @@ impl super::super::VpnSupervisor {
             });
         }
 
+        // NOTE: `spawn()` stays synchronous deliberately. It is a fork+exec that
+        // does not block on I/O, it runs exactly once immediately before exit,
+        // and the lock/socket release ordering below is security-sensitive
+        // (SHROUD-VULN-031). Moving it onto a blocking pool would complicate
+        // that ordering for no measurable scheduling benefit.
         match cmd.spawn() {
             Ok(child) => {
                 info!("Spawned new daemon (PID: {})", child.id());
@@ -408,7 +413,26 @@ impl super::super::VpnSupervisor {
                 // Now release resources so child can acquire them
                 release_instance_lock();
                 let socket_path = crate::ipc::protocol::socket_path();
-                let _ = std::fs::remove_file(&socket_path);
+
+                // A failure here is not cosmetic: the child cannot bind, so the
+                // restart silently half-completes — old daemon gone, new one
+                // unable to serve IPC. Surface it.
+                match std::fs::remove_file(&socket_path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => {
+                        error!(
+                            "Could not remove IPC socket {} before restart: {} — \
+                             the new daemon may fail to bind",
+                            socket_path.display(),
+                            e
+                        );
+                        self.tray.notify(
+                            "Restart Warning",
+                            "Could not clear the IPC socket; the new daemon may not respond",
+                        );
+                    }
+                }
 
                 // Give child time to acquire lock and bind socket
                 sleep(Duration::from_millis(500)).await;

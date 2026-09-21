@@ -18,6 +18,13 @@ use zbus::Connection;
 /// Events with the same (vpn_name, event_type) within this window are dropped
 const EVENT_DEDUP_WINDOW_MS: u64 = 500;
 
+/// Safety valve for the dedup cache between scheduled sweeps.
+///
+/// Keys are (vpn_name, event_type) pairs, so a healthy system holds only a
+/// handful. Exceeding this means events are arriving faster than the sweep
+/// interval and the map should be pruned immediately regardless of schedule.
+const MAX_DEDUP_ENTRIES: usize = 256;
+
 /// Events emitted by the NetworkManager monitor
 #[derive(Debug, Clone)]
 pub enum NmEvent {
@@ -40,6 +47,9 @@ pub struct NmMonitor {
     tx: mpsc::Sender<NmEvent>,
     /// Recent events cache for deduplication: (vpn_name, event_type) -> timestamp
     recent_events: HashMap<(String, String), Instant>,
+    /// When the dedup cache was last swept, so pruning is amortised rather than
+    /// run on every incoming event.
+    last_prune: Option<Instant>,
 }
 
 impl NmMonitor {
@@ -48,6 +58,7 @@ impl NmMonitor {
         Self {
             tx,
             recent_events: HashMap::new(),
+            last_prune: None,
         }
     }
 
@@ -79,10 +90,20 @@ impl NmMonitor {
             }
         }
 
-        // Clean up old entries (older than 2x dedup window)
+        // Prune expired dedup entries. Doing this on *every* event is wasted
+        // work during a signal storm — exactly when the hot path matters most —
+        // so only sweep once per dedup window, or when the map has grown past
+        // anything a healthy system produces.
         let cleanup_threshold = EVENT_DEDUP_WINDOW_MS * 2;
-        self.recent_events
-            .retain(|_, v| now.duration_since(*v).as_millis() < cleanup_threshold as u128);
+        let due_for_sweep = self
+            .last_prune
+            .is_none_or(|last| now.duration_since(last).as_millis() >= cleanup_threshold as u128);
+
+        if due_for_sweep || self.recent_events.len() > MAX_DEDUP_ENTRIES {
+            self.recent_events
+                .retain(|_, v| now.duration_since(*v).as_millis() < cleanup_threshold as u128);
+            self.last_prune = Some(now);
+        }
 
         // Record this event
         self.recent_events.insert(key, now);

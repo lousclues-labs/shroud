@@ -141,8 +141,11 @@ impl KillSwitch {
             iptables()
         ));
 
-        // IPv6
-        s.push_str(&build_ipv6_script(self.ipv6_mode));
+        // IPv6. The IPv4 chain above allows detected LAN subnets
+        // unconditionally, so mirror that here — leaving IPv6 with link-local
+        // only is what made the two address families behave differently.
+        const IPV6_ALLOW_LAN: bool = true;
+        s.push_str(&build_ipv6_script(self.ipv6_mode, IPV6_ALLOW_LAN));
 
         s
     }

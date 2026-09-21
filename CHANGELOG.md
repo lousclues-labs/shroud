@@ -14,6 +14,298 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.7.0] - 2026-09-20
+
+A performance and reliability release driven by profiling a daemon that had been
+running continuously for six days on Ubuntu 26.04. The headline defect is
+self-inflicted: **the kill switch was blocking the health checker's own first
+endpoint**, and that single conflict cascaded into a permanent stream of false
+"time jump" warnings, a forced NetworkManager resync roughly once a minute, and
+a daemon that spent **29x more CPU spawning subprocesses than doing its own
+work**. No change to the kill switch's protection guarantees.
+
+Measured on the live daemon before and after (same host, same VPN, same config):
+
+| Metric | Before | After | Change |
+| --- | --- | --- | --- |
+| Subprocess CPU | ~536 s/day | ~49 s/day | **-91%** |
+| False "time jump" warnings | ~29/hour | 0 | **eliminated** |
+| Forced NM resyncs | ~29/hour | 0 | **eliminated** |
+| `sudo` firewall calls | 241/hour | 120/hour | **-50%** |
+| Threads | 27 | 5 | **-81%** |
+| Virtual memory | 2.11 GB | 552 MB | **-74%** |
+| Autostart restart policy | `Restart=no` | `on-failure`, 5s | **supervised** |
+| Daemon WARN/ERROR (14 min) | ~14 | 0 | **clean** |
+
+Test suite grew from 1,208 to 1,331 passing (+123), with `cargo clippy
+--all-targets --all-features`, `cargo fmt --check`, and `cargo audit` all clean.
+
+### Fixed
+
+- **The kill switch was blocking the health checker's own first endpoint.** The
+  default health endpoint list led with `https://1.1.1.1/cdn-cgi/trace`, while
+  `1.1.1.1` heads `killswitch::rules::DOH_PROVIDERS` — the list of DNS-over-HTTPS
+  addresses the kill switch drops on tcp/443 whenever `block_doh` is enabled
+  (the default). Every health check therefore raced our own firewall rule and
+  lost, burning the full 5s `timeout_connect` before falling through to the
+  second endpoint. Confirmed on the affected host: ICMP to `1.1.1.1` succeeded
+  in 17 ms while tcp/443 to `1.1.1.1`, `1.0.0.1`, and `8.8.8.8` all timed out,
+  isolating the cause to shroud's own rules rather than an upstream outage.
+  The defaults are now `ifconfig.me`, `api.ipify.org`, and `icanhazip.com` —
+  none of which is a DoH provider address — and `doh_conflicts()` filters any
+  user-configured endpoint whose host is a literal IP in the effective blocklist,
+  falling back to the (safe) defaults if that would leave the list empty.
+
+- **False "time jump detected" every ~60s, each forcing a full NM resync.**
+  `run_health_check()` was awaited inline inside `tokio::select!`, so the 5s
+  stall above held the entire event loop — tray, IPC, D-Bus, and NM polling —
+  and `last_poll_time` could not be refreshed while it ran. The next poll tick
+  then measured 5s (blocked connect) + 2s (poll interval) = **7.1s** against a
+  6s threshold derived from `NM_POLL_INTERVAL_SECS * 3`, and declared a
+  suspend/resume that had not happened. The identical 7.1s on every occurrence
+  was the tell: real clock drift is not deterministic. Two changes:
+  1. The network probe now runs on a detached task and reports back over a
+     channel (`begin_health_check` / `finish_health_check`), so no health check
+     can hold the event loop. A `health_probe_in_flight` guard prevents
+     overlapping probes.
+  2. Detection compares **wall-clock against monotonic** elapsed time rather
+     than monotonic alone. `Instant` (`CLOCK_MONOTONIC`) pauses while the machine
+     is suspended and `SystemTime` does not, so a genuine suspend shows up as
+     wall time racing ahead while a merely slow event loop advances both equally
+     and yields ~zero skew. The threshold is now an independent constant, and a
+     compile-time assertion prevents it being re-derived from the poll interval.
+
+- **Reconnect attempts could inherit a stale retry budget.** `UserEnable` from
+  `Disconnected` was the only `UserEnable` transition that did not reset
+  `retries`, and `set_state()` — the forced-transition escape hatch used by 15+
+  supervisor call sites that reconcile against NetworkManager — did not reset it
+  either. A reconnect sequence that climbed to attempt 8 of 10 before the
+  supervisor force-set `Disconnected` (health check dead, VPN lost, external
+  change) left the counter at 8, so a subsequent manual connect got **2 attempts
+  instead of 10**. Presented as "shroud gives up too quickly", intermittently and
+  with no log evidence. Both paths now clear the counter; forcing any state other
+  than `Disconnected` still preserves an in-progress sequence.
+
+- **`cleanup_with_timeout()` did not enforce its timeout.** It measured elapsed
+  time only *after* the blocking `Command::status()` calls returned, which the
+  source comments openly acknowledged ("not enforced as a deadline — it is a
+  post-hoc duration check"). A wedged `sudo`, `nft`, or `iptables` — a netlink
+  stall, a hung PAM stack — could therefore block cleanup indefinitely, and
+  during shutdown that leaves the firewall locked down with no daemon to manage
+  it. Commands are now spawned rather than blocked on, polled via `try_wait()`,
+  and killed (and reaped) when the budget expires. `cleanup_all()`, which takes
+  no caller-supplied timeout, is bounded by a new 30s `CLEANUP_ALL_BUDGET`.
+
+- **Autostart installed no restart policy, leaving the kill-switch daemon
+  unsupervised.** `systemd-xdg-autostart-generator` synthesises
+  `app-shroud@autostart.service` from the desktop file and always emits
+  `Restart=no`. For a process whose job is enforcing a kill switch that is the
+  worst failure mode: the firewall rules persist (by design) but nothing is left
+  to manage state, reconnect, or clean up, and the user is not told. `shroud
+  autostart on` now also installs a systemd drop-in supplying `Restart=on-failure`,
+  `RestartSec=5s`, and a start limit; `off` removes it. See **Added** for why
+  this is a drop-in rather than a replacement unit.
+
+- **IPv6 LAN access did not match IPv4.** `detect_local_subnets()` is IPv4-only,
+  and the IPv6 tunnel-mode ruleset permitted just `fe80::/10`. A dual-stack host
+  with a Unique Local Address prefix therefore lost LAN reachability over IPv6
+  even though the IPv4 chain allowed it. Added `detect_local_subnets_v6()` with
+  the same virtual/tunnel interface exclusions as its IPv4 counterpart
+  (SHROUD-VULN-042), and `build_ipv6_script()` now emits matching allow rules
+  while keeping the terminal `DROP` last.
+
+- **A failed iptables enable left an orphaned partial chain.** The iptables
+  backend applies one rule per subprocess, so a mid-sequence failure left a
+  half-built `SHROUD_KILLSWITCH` chain behind. Traffic could never reach it —
+  the OUTPUT jump is inserted last, by design — but the next enable inherited
+  the debris, and the periodic backend probe would report a kill switch that was
+  not actually filtering. Every failure path now rolls back via
+  `robust_iptables_cleanup()`, including before falling back to nftables, so the
+  two backends cannot both appear to own a kill switch.
+
+- **The IPC client trusted the daemon without bound.** The server caps inbound
+  lines at 64 KB, but the client used an uncapped `read_line`, so a compromised
+  or misbehaving daemon could drive the CLI into unbounded allocation simply by
+  never sending a newline. The client now applies the same cap via `take()`,
+  enforcing the limit before allocation rather than checking length afterwards.
+
+- **Failures that mattered were being silently swallowed.** Three cases where a
+  discarded error changed behaviour without saying so:
+  - `get_lock_file_path()` ignored both `create_dir_all` and the 0700
+    `set_permissions` on the runtime directory, so a permissions problem surfaced
+    later as a confusing lock-acquisition error instead of pointing at its cause.
+    Falling back to `/tmp` when `XDG_RUNTIME_DIR` is unset is also now stated
+    rather than silent, since that path is strictly weaker.
+  - The restart handler discarded the result of removing the IPC socket. If that
+    unlink fails the child cannot bind, so the restart half-completes: old daemon
+    gone, new one unable to serve IPC. Now logged and surfaced as a notification
+    (`NotFound` is still treated as success).
+  - `killswitch::boot` applied every `ip6tables` rule with `let _ = ...`. IPv6
+    may legitimately be absent, so these stay non-fatal, but the new
+    `try_ip6tables(args, critical)` helper distinguishes the permissive rules
+    (logged at debug) from the terminal `DROP` and the OUTPUT jump, whose failure
+    means IPv6 is leaking past the boot kill switch and is now a loud warning.
+
+### Changed
+
+- **NetworkManager poll interval raised from 2s to 30s.** D-Bus already delivers
+  NM state changes in real time via `dbus::monitor`; the poll exists only to
+  recover from a missed signal, and running that backstop at event-loop frequency
+  issued ~43,200 `nmcli` subprocesses a day to re-learn what D-Bus had already
+  reported. Kernel-level accounting on the affected host (`/proc/<pid>/stat`
+  fields 16–17, which accumulate reaped children) showed **3,247 s of child CPU
+  against 111 s for the daemon itself** over 6d 01:22 — a 29:1 ratio — with a
+  120-second live sample reproducing it at 0.75 s vs 0.02 s. A compile-time
+  assertion now prevents the interval being tuned back into the subprocess-storm
+  range. This is the same class of defect as the v2.4.1 `sudo` flood, in the
+  `nmcli` path rather than the firewall path.
+
+- **`poll_nm_state()` no longer issues the same `nmcli` query twice per tick.**
+  `get_all_active_vpns()` and `get_active_vpn_with_state()` run the *identical*
+  command (`nmcli -t -f NAME,TYPE,STATE con show --active`) and differ only in
+  how they reduce the result, so calling both doubled the cost of every poll for
+  no new information. New `NmClient::get_active_vpn_snapshot()` returns both
+  views from one query. The `>1 VPN` branch returns early, so the two uses are
+  provably consistent. `MockNmClient` overrides it to delegate to the two
+  underlying methods, preserving its distinct `active_vpn` semantics and existing
+  call-count assertions. `initial_nm_sync()` deliberately keeps its two separate
+  calls, because a disconnect and a 1s sleep may run between them.
+
+- **Firewall backend detection probes the last known backend first.**
+  `detect_active_backend[_async]()` always tried iptables before nftables, so on
+  an nftables host every periodic reality-check ran a guaranteed-to-fail
+  `iptables -C` before its successful `nft list` — visible as paired `sudo` lines
+  in the journal every 30s. Both backends are still reachable (a kill switch
+  installed by a previous instance under the other backend must not go
+  undetected), but ordering by `self.backend` means the first probe hits on any
+  single-stack host. Observed rate halved from 241 to 120 `sudo` calls per hour.
+
+- **Tokio runtime reduced from one worker per core to two.** Shroud's workload is
+  a handful of timers, a D-Bus stream, and occasional subprocesses; it is
+  overwhelmingly idle and never CPU-bound. The default `#[tokio::main]` spawned
+  24 workers on a 24-core host (27 threads, ~2.1 GB of reserved stack address
+  space) while measured CPU was concentrated in just two of them. Blocking work
+  still goes to the separate `spawn_blocking` pool, which this does not affect.
+
+- **Health endpoints are probed with hedged requests instead of strict
+  sequential fallback.** The first endpoint is tried alone; if it has not
+  answered within 1.5s the next is started *alongside* it, and the first success
+  wins. This keeps the common case at exactly one outbound request — so a healthy
+  tunnel does not report its exit IP to three third parties every cycle — while
+  bounding the worst case at roughly one timeout instead of N.
+
+- **Reconnect backoff is event-driven rather than polled.** The backoff wait
+  called `try_recv()` every 500 ms for the whole window, waking repeatedly with
+  nothing to do and reacting to a `Disconnect` up to half a second late. It now
+  selects the timer against the channel: zero idle wakeups and immediate
+  cancellation.
+
+- **D-Bus dedup cache pruning is amortised.** The cache was swept on *every*
+  incoming event — wasted work during a signal storm, exactly when the hot path
+  matters most. Sweeps now run once per dedup window, or immediately if the map
+  exceeds `MAX_DEDUP_ENTRIES` (256).
+
+- **Both interval timers use `MissedTickBehavior::Delay`.** The default `Burst`
+  replays every missed tick back-to-back after any stall, amplifying a single
+  slow cycle into a burst of catch-up work.
+
+- **deps: `thiserror` 1 → 2, `dirs` 5 → 6.** The `dirs` bump (via `dirs-sys`
+  0.5) drops the `windows-sys`/`windows-targets` transitive chain, removing 11
+  package entries from the lockfile (221 → 210) — all Windows-only crates that a
+  Linux-only project was carrying through `cargo audit` for nothing. Note that
+  MSRV-aware resolution held `dirs` at 6.0.0 rather than the available 7.0.0,
+  confirming the 1.88 floor is a live constraint rather than a theoretical one.
+  MSRV itself is unchanged (see **Notes**).
+
+### Added
+
+- **`health::checker::doh_conflicts()` and `endpoint_host()`.** Endpoint-URL host
+  extraction (handling userinfo, ports, and bracketed/bare IPv6 literals) and
+  detection of endpoints the kill switch would block. Only literal-IP hosts are
+  flagged; hostnames are deliberately left alone, since resolving them at startup
+  would be slow and unreliable with the tunnel possibly still down, and the
+  failure mode being guarded is a provider address used directly as an endpoint.
+
+- **`C-HEALTH-NOT-SELF-BLOCKED` canary** in [tests/pdd_canaries.rs](tests/pdd_canaries.rs):
+  asserts no default health endpoint is dropped by our own DoH rules. The
+  existing `C-TELEMETRY-DEFAULT-ENDPOINTS` allowlist was updated for the new
+  defaults and **`1.1.1.1` was removed from it**, so the original defect cannot
+  be reintroduced without failing the merge-blocking gate. (That canary caught
+  this release's endpoint change on the first run, which is exactly its job.)
+  Recorded as **AF-009** in [AUDIT_FINDINGS.md](AUDIT_FINDINGS.md); PR2 in
+  [PROMISES.md](PROMISES.md) was updated, since it had named the blocked
+  endpoint explicitly and had gone stale.
+
+- **Restart-policy reporting.** `shroud autostart status` now shows whether the
+  crash-supervision drop-in is installed, with its path, and explains the
+  consequence when it is not. `--json` gains a `has_restart_policy` field.
+
+- **`killswitch::rules` exposed from the library target.** It depends only on
+  `std::net`, making it a cleaner leaf than the existing `nm::parsing` precedent,
+  and `health` needs `DOH_PROVIDERS` to refuse endpoints the kill switch blocks.
+
+- **`is_valid_private_cidr_v6()` and `LAN_SUBNETS_V6`.** The IPv6 counterpart of
+  the existing IPv4 CIDR validation, accepting only ULA (`fc00::/7`) and
+  link-local (`fe80::/10`) and rejecting global unicast, `::/0`, over-broad
+  prefixes, and embedded rule fragments.
+
+- **Compile-time invariants** (`const _: () = assert!(...)`, matching the
+  existing `WORST_CASE_SWITCH_SECS` convention) pinning the NM poll interval
+  above the subprocess-storm range and keeping time-jump detection decoupled from
+  it. These are enforced by the compiler rather than a test.
+
+- **123 new tests.** Coverage added for time-jump detection (including the exact
+  7.1s blocked-loop case and backwards NTP steps), retry-budget equivalence
+  between a fresh machine and one recovering from a forced disconnect, real
+  deadline enforcement against a genuinely hanging process, backend probe
+  ordering, IPv6 CIDR validation/masking/detection, endpoint-host parsing, DoH
+  conflict detection, and the autostart drop-in's contents and unit-name
+  derivation.
+
+### Security
+
+- **deps: fix RUSTSEC-2026-0285 (rustls TLS 1.3 handshake confusion).** Upgraded
+  `rustls` 0.23.43 → 0.23.45 (and `rustls-webpki` 0.103.13 → 0.103.15) to clear
+  the medium-severity (5.3) advisory covering TLS 1.3 handshake messages
+  incorrectly accepted across encryption level boundaries. Reached via `ureq` on
+  the health-check path — the only component making outbound TLS connections.
+  `cargo audit` is green again.
+
+- **IPv6 LAN prefixes are validated before reaching firewall rules.** The new
+  ULA/link-local-only validation is the IPv6 half of SHROUD-VULN-021: a
+  global-unicast prefix reaching the LAN allowlist would punch a hole straight
+  through the kill switch. Detection validates, and the rule builder validates
+  again before emitting (defence in depth, matching the IPv4 path).
+
+- **The IPC client no longer trusts the daemon's response length.** See
+  **Fixed**; the trust boundary is now symmetric in both directions.
+
+### Notes
+
+- **MSRV stays at 1.88, deliberately.** Raising `rust-version` would unlock
+  let-chains and newer lints, but it is enforced in CI specifically to protect
+  packaging for users on older distributions — a compatibility policy, not
+  drift. All new code was written against the 1.88 floor and audited for
+  post-1.88 APIs (`is_some_and` 1.70, `is_none_or` 1.82, `then_some` 1.62).
+
+- **The autostart fix is a drop-in, not a replacement unit.** Replacing XDG
+  autostart with a native systemd user service was considered and rejected:
+  [src/autostart.rs](src/autostart.rs) documents the choice of XDG (starts after
+  the desktop session is fully initialised, correct `PATH`/environment,
+  consistent across desktop environments) and `cleanup_old_systemd()` actively
+  removes stray systemd units. Reverting that would trade a real compatibility
+  property for a restart policy. Drop-ins under `~/.config/systemd/user/` outrank
+  generator output, so `app-shroud@autostart.service.d/50-shroud-restart.conf`
+  supplies the missing policy without owning the unit. `Restart=on-failure` (not
+  `always`) is required so quitting from the tray still quits.
+
+- **The iptables backend was not converted to `iptables-restore`.** A single
+  restore transaction would make it atomic, but it cannot express the *per-rule*
+  `iptables-nft` → `iptables-legacy` fallback that `run_single_script` performs.
+  Rolling back on failure delivers the same all-or-nothing guarantee without
+  losing that fallback. The nftables backend was already atomic via `nft -f -`
+  and is unchanged.
+
 ## [2.6.0] - 2026-08-18
 
 This release lands the Promise Driven Development (PDD) retrofit: a four-layer

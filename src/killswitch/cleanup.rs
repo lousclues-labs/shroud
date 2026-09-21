@@ -79,7 +79,62 @@ pub fn rules_exist_ipv6() -> Result<bool, CleanupError> {
     }
 }
 
-fn run_cleanup_command() -> Result<(), CleanupError> {
+/// Wall-clock budget for [`cleanup_all`].
+///
+/// `cleanup_all` has no caller-supplied timeout, but it must still not be able
+/// to hang forever on a wedged `sudo`/`nft`/`iptables`. Generous enough for a
+/// slow nft flush or a kernel module load, short enough to keep shutdown and
+/// signal handling bounded.
+const CLEANUP_ALL_BUDGET: Duration = Duration::from_secs(30);
+
+/// Run a command with a hard wall-clock deadline, killing it if it overruns.
+///
+/// `Command::status()` blocks indefinitely. A wedged `sudo`, `nft`, or
+/// `iptables` — a netlink stall, a hung PAM stack, an unresponsive kernel
+/// module load — would therefore hang cleanup forever. During shutdown that is
+/// the dangerous case: the firewall stays locked down with no daemon left to
+/// manage it. Poll `try_wait()` instead and kill the child once the deadline
+/// passes.
+///
+/// Killing `sudo` does not necessarily reap the privileged grandchild, so this
+/// is a best-effort guard rather than a hard guarantee — but it is strictly
+/// better than blocking forever.
+fn status_with_deadline(
+    cmd: &mut Command,
+    deadline: Instant,
+) -> Result<std::process::ExitStatus, CleanupError> {
+    /// Fine enough that cleanup stays responsive, coarse enough not to spin.
+    const POLL_INTERVAL: Duration = Duration::from_millis(20);
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| CleanupError::CommandFailed(format!("spawn failed: {}", e)))?;
+
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return Ok(status),
+            Ok(None) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    let _ = child.kill();
+                    // Reap so we do not leave a zombie behind.
+                    let _ = child.wait();
+                    return Err(CleanupError::Timeout(
+                        deadline.saturating_duration_since(now),
+                    ));
+                }
+                std::thread::sleep(POLL_INTERVAL.min(deadline - now));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(CleanupError::CommandFailed(format!("wait failed: {}", e)));
+            }
+        }
+    }
+}
+
+fn run_cleanup_command(deadline: Instant) -> Result<(), CleanupError> {
     // Use sudo -n to avoid password prompts that would cause hangs
     let mut failures: Vec<String> = Vec::new();
     let bins: &[&str] = &[iptables(), ip6tables()];
@@ -93,12 +148,15 @@ fn run_cleanup_command() -> Result<(), CleanupError> {
                 // Safety limit
                 let mut full_args = vec!["-n".to_string(), bin.to_string()];
                 full_args.extend(jump_args.clone());
-                let status = Command::new("sudo")
-                    .args(&full_args)
+                let mut cmd = Command::new("sudo");
+                cmd.args(&full_args)
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
+                    .stderr(Stdio::null());
+                let status = status_with_deadline(&mut cmd, deadline);
+                if matches!(status, Err(CleanupError::Timeout(_))) {
+                    return status.map(|_| ());
+                }
                 if !matches!(status, Ok(s) if s.success()) {
                     break;
                 }
@@ -115,16 +173,18 @@ fn run_cleanup_command() -> Result<(), CleanupError> {
             for bin in bins {
                 let mut full_args = vec!["-n".to_string(), bin.to_string()];
                 full_args.extend(args.clone());
-                match Command::new("sudo")
-                    .args(&full_args)
+                let mut cmd = Command::new("sudo");
+                cmd.args(&full_args)
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status()
-                {
+                    .stderr(Stdio::null());
+                match status_with_deadline(&mut cmd, deadline) {
                     Ok(s) if !s.success() => {
                         // -X/-F fails when chain doesn't exist — idempotent cleanup.
                         debug!("cleanup command failed: sudo {}", full_args.join(" "));
+                    }
+                    Err(CleanupError::Timeout(remaining)) => {
+                        return Err(CleanupError::Timeout(remaining));
                     }
                     Err(e) => {
                         failures.push(format!("sudo {} {}: {}", bin, args.join(" "), e));
@@ -136,14 +196,16 @@ fn run_cleanup_command() -> Result<(), CleanupError> {
     }
 
     // Also try nftables cleanup
-    if let Err(e) = Command::new("sudo")
+    let mut nft_cmd = Command::new("sudo");
+    nft_cmd
         .args(["-n", nft(), "delete", "table", "inet", "shroud_killswitch"])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-    {
-        failures.push(format!("nft delete table: {}", e));
+        .stderr(Stdio::null());
+    match status_with_deadline(&mut nft_cmd, deadline) {
+        Err(CleanupError::Timeout(remaining)) => return Err(CleanupError::Timeout(remaining)),
+        Err(e) => failures.push(format!("nft delete table: {}", e)),
+        Ok(_) => {}
     }
 
     if !failures.is_empty() {
@@ -155,18 +217,18 @@ fn run_cleanup_command() -> Result<(), CleanupError> {
 
 /// Execute cleanup and verify completion within a time budget.
 ///
-/// Runs `run_cleanup_command()` synchronously (blocking on `sudo -n`), then
-/// checks whether the elapsed time exceeded `timeout`. The timeout is **not**
-/// enforced as a deadline — it is a post-hoc duration check. `sudo -n` prevents
-/// interactive password prompts; this function detects cases where the commands
-/// took unexpectedly long (e.g., kernel module load, slow nft flush).
+/// `timeout` is enforced as a real deadline: every `sudo` invocation is spawned
+/// rather than blocked on, and any child still running when the budget expires
+/// is killed. Previously this measured elapsed time only *after* the commands
+/// returned, so a wedged `sudo`/`nft`/`iptables` could hang cleanup forever
+/// while still reporting a "timeout" it never actually enforced.
 ///
 /// **NOTE:** Uses synchronous commands — safe for CLI and startup use but must
 /// not be called from the daemon event loop. Use `KillSwitch::disable()` instead.
 ///
 /// # Errors
 ///
-/// Returns [`CleanupError::Timeout`] if elapsed time exceeds `timeout` after commands complete.
+/// Returns [`CleanupError::Timeout`] if the time budget is exhausted.
 ///
 /// Returns [`CleanupError::CommandFailed`] if rules remain after cleanup commands complete.
 pub fn cleanup_with_timeout(timeout: Duration) -> Result<CleanupResult, CleanupError> {
@@ -181,8 +243,9 @@ pub fn cleanup_with_timeout(timeout: Duration) -> Result<CleanupResult, CleanupE
     info!("Cleaning up kill switch rules...");
 
     let start = Instant::now();
+    let deadline = start + timeout;
 
-    match run_cleanup_command() {
+    match run_cleanup_command(deadline) {
         Ok(()) => {
             if start.elapsed() > timeout {
                 warn!("Cleanup timed out after {:?}", timeout);
@@ -304,7 +367,7 @@ pub fn cleanup_all() -> Result<(), CleanupError> {
 
     // run_cleanup_command() handles all chains in SHROUD_CHAINS
     // (SHROUD_KILLSWITCH + SHROUD_BOOT_KS) for both iptables and ip6tables
-    if let Err(e) = run_cleanup_command() {
+    if let Err(e) = run_cleanup_command(Instant::now() + CLEANUP_ALL_BUDGET) {
         errors.push(format!("cleanup commands: {}", e));
     }
 
@@ -364,5 +427,86 @@ mod tests {
         } else {
             panic!("Expected Failed variant");
         }
+    }
+}
+
+#[cfg(test)]
+mod deadline_tests {
+    use super::*;
+
+    /// The core of the fix: a command that never returns must be killed at the
+    /// deadline rather than blocking the caller forever. The old code measured
+    /// elapsed time only after the command returned, so a wedged `sudo` hung
+    /// cleanup indefinitely while still claiming to have a timeout.
+    #[test]
+    fn test_hanging_command_is_killed_at_deadline() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("60")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        let start = Instant::now();
+        let result = status_with_deadline(&mut cmd, start + Duration::from_millis(300));
+        let elapsed = start.elapsed();
+
+        assert!(
+            matches!(result, Err(CleanupError::Timeout(_))),
+            "expected Timeout, got {result:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "deadline was not enforced; blocked for {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn test_fast_command_completes_normally() {
+        let mut cmd = Command::new("true");
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        let status = status_with_deadline(&mut cmd, Instant::now() + Duration::from_secs(5))
+            .expect("fast command should not time out");
+        assert!(status.success());
+    }
+
+    #[test]
+    fn test_failing_command_reports_status_not_error() {
+        let mut cmd = Command::new("false");
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        let status = status_with_deadline(&mut cmd, Instant::now() + Duration::from_secs(5))
+            .expect("a non-zero exit is a status, not a spawn error");
+        assert!(!status.success());
+    }
+
+    #[test]
+    fn test_missing_binary_is_a_command_failure() {
+        let mut cmd = Command::new("shroud-nonexistent-binary-for-tests");
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        let result = status_with_deadline(&mut cmd, Instant::now() + Duration::from_secs(5));
+        assert!(matches!(result, Err(CleanupError::CommandFailed(_))));
+    }
+
+    /// An already-expired deadline must not wait for the child at all.
+    #[test]
+    fn test_already_expired_deadline_returns_promptly() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("60")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+        let start = Instant::now();
+        let result = status_with_deadline(&mut cmd, start);
+        assert!(matches!(result, Err(CleanupError::Timeout(_))));
+        assert!(start.elapsed() < Duration::from_secs(2));
     }
 }

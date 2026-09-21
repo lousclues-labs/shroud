@@ -242,7 +242,13 @@ async fn run_daemon_mode(args: cli::Args) {
     info!("Supervisor exited, shutting down");
 }
 
-#[tokio::main]
+/// Shroud's workload is a handful of timers, a D-Bus stream, and occasional
+/// subprocesses — it is overwhelmingly idle and never CPU-bound. The default
+/// `#[tokio::main]` spawns one worker per core (24 on a 24-core machine, for 27
+/// threads and ~2 GB of reserved stack address space) when two is ample.
+/// Blocking work still goes to the separate `spawn_blocking` pool, which is
+/// unaffected by this setting.
+#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> ExitCode {
     // Parse command-line arguments using CLI module
     let args = match cli::args::parse_args() {

@@ -32,6 +32,19 @@ pub trait NmClient: Send + Sync {
     /// Get ALL active VPNs (for detecting multiple simultaneous connections).
     async fn get_all_active_vpns(&self) -> Vec<ActiveVpnInfo>;
 
+    /// Get all active VPNs *and* the best one from a single NetworkManager query.
+    ///
+    /// `get_all_active_vpns()` and `get_active_vpn_with_state()` issue the exact
+    /// same `nmcli` invocation and differ only in how they reduce the result, so
+    /// calling both — as the poll loop used to — doubled the subprocess cost of
+    /// every tick for no new information. Callers that need both views should
+    /// use this instead.
+    async fn get_active_vpn_snapshot(&self) -> (Vec<ActiveVpnInfo>, Option<ActiveVpnInfo>) {
+        let all = self.get_all_active_vpns().await;
+        let best = crate::nm::parsing::select_best_vpn(&all).cloned();
+        (all, best)
+    }
+
     /// Get the precise NM state of a specific connection.
     async fn get_vpn_state(&self, name: &str) -> Option<NmVpnState>;
 

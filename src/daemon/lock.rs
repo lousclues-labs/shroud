@@ -18,18 +18,47 @@ pub fn get_lock_file_path() -> PathBuf {
     let runtime_dir = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| {
         // Fall back to /tmp with uid-based path for isolation
         let uid = unsafe { libc::getuid() };
-        format!("/tmp/shroud-{}", uid)
+        let fallback = format!("/tmp/shroud-{}", uid);
+        // /tmp is world-writable and not cleaned per-session, so this is
+        // strictly weaker than the runtime dir. Say so rather than degrading
+        // silently.
+        warn!(
+            "XDG_RUNTIME_DIR is not set; falling back to {} for the instance lock",
+            fallback
+        );
+        fallback
     });
 
     let path = PathBuf::from(&runtime_dir);
 
-    // Ensure directory exists
+    // Ensure directory exists.
+    //
+    // Failures here were previously swallowed entirely, so a permissions
+    // problem surfaced later as a confusing lock-acquisition error instead of
+    // pointing at its real cause.
     if !path.exists() {
-        let _ = std::fs::create_dir_all(&path);
+        if let Err(e) = std::fs::create_dir_all(&path) {
+            warn!(
+                "Could not create runtime directory {}: {} — instance locking may fail",
+                path.display(),
+                e
+            );
+        }
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700));
+            // 0700 keeps the lock (and the socket beside it) private to this
+            // user; on the /tmp fallback path that is the only thing isolating
+            // it from other local users.
+            if let Err(e) = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700))
+            {
+                warn!(
+                    "Could not restrict permissions on {} to 0700: {} — \
+                     other local users may be able to read it",
+                    path.display(),
+                    e
+                );
+            }
         }
     }
 

@@ -24,7 +24,12 @@ use crate::killswitch::paths::ip6tables;
 /// [`super::KillSwitch::run_single_script`]. Trailing `2>/dev/null || true` is
 /// stripped by the runner; failures here are tolerated because the IPv6 stack
 /// may legitimately be absent on some kernels.
-pub(super) fn build_ipv6_script(ipv6_mode: Ipv6Mode) -> String {
+///
+/// When `allow_lan` is set, detected ULA prefixes are permitted alongside
+/// link-local so the LAN exception behaves the same on both address families.
+/// Previously only `fe80::/10` was allowed, so a dual-stack host with a ULA
+/// prefix lost LAN reachability over IPv6 despite `allow_lan = true`.
+pub(super) fn build_ipv6_script(ipv6_mode: Ipv6Mode, allow_lan: bool) -> String {
     let mut s = String::new();
     match ipv6_mode {
         Ipv6Mode::Block => {
@@ -50,13 +55,39 @@ pub(super) fn build_ipv6_script(ipv6_mode: Ipv6Mode) -> String {
                 "{} -I OUTPUT 3 -o tun+ -j ACCEPT 2>/dev/null || true\n",
                 ip6tables()
             ));
+
+            // Insert at a fixed index so the terminal DROP stays last.
+            let mut index = 4;
+            if allow_lan {
+                for subnet in crate::killswitch::rules::detect_local_subnets_v6() {
+                    // Defence in depth: detection already validates, but these
+                    // strings flow into firewall rules (SHROUD-VULN-021/022).
+                    if !crate::killswitch::rules::is_valid_private_cidr_v6(&subnet) {
+                        tracing::warn!("Rejected non-private IPv6 LAN subnet: {}", subnet);
+                        continue;
+                    }
+                    s.push_str(&format!(
+                        "{} -I OUTPUT {} -d {} -j ACCEPT 2>/dev/null || true\n",
+                        ip6tables(),
+                        index,
+                        subnet
+                    ));
+                    index += 1;
+                }
+            } else {
+                // Link-local is required for neighbour discovery regardless.
+                s.push_str(&format!(
+                    "{} -I OUTPUT {} -d fe80::/10 -j ACCEPT 2>/dev/null || true\n",
+                    ip6tables(),
+                    index
+                ));
+                index += 1;
+            }
+
             s.push_str(&format!(
-                "{} -I OUTPUT 4 -d fe80::/10 -j ACCEPT 2>/dev/null || true\n",
-                ip6tables()
-            ));
-            s.push_str(&format!(
-                "{} -I OUTPUT 5 -j DROP 2>/dev/null || true\n",
-                ip6tables()
+                "{} -I OUTPUT {} -j DROP 2>/dev/null || true\n",
+                ip6tables(),
+                index
             ));
         }
         Ipv6Mode::Off => {}

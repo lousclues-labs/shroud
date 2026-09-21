@@ -72,12 +72,20 @@ impl StateMachine {
 
     fn from_disconnected(&mut self, event: &Event) -> (Option<VpnState>, TransitionReason) {
         match event {
-            Event::UserEnable { server } => (
-                Some(VpnState::Connecting {
-                    server: server.clone(),
-                }),
-                TransitionReason::UserRequested,
-            ),
+            Event::UserEnable { server } => {
+                // A fresh user-initiated connect starts a new retry budget.
+                // Without this, a counter left over from an earlier reconnect
+                // loop carries into the new attempt and exhausts it early —
+                // e.g. failing at attempt 8 then reconnecting manually gave
+                // 2 attempts instead of 10.
+                self.retries = 0;
+                (
+                    Some(VpnState::Connecting {
+                        server: server.clone(),
+                    }),
+                    TransitionReason::UserRequested,
+                )
+            }
             Event::NmVpnUp { server } => {
                 // External connection detected
                 self.retries = 0;

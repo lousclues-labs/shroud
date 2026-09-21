@@ -26,6 +26,7 @@ Severity: **High** (a safety or trust claim could be false without notice),
 | AF-006 | Low | Closed | PR10 | C-SIGNED-TAG (git verify-tag) |
 | AF-007 | Low | Closed | PR6, PR7 | C-INSTALL-FINGERPRINT (no literal + derive), C-PUBLICATION-AGREEMENT |
 | AF-008 | Info | Closed | PR6 | C-INSTALL-FINGERPRINT, install_trust_pin_derivation_reads_local_only |
+| AF-009 | Medium | Closed | PR2 | C-HEALTH-NOT-SELF-BLOCKED, C-TELEMETRY-DEFAULT-ENDPOINTS |
 
 ---
 
@@ -281,3 +282,61 @@ asserts `SHROUD_SIGNING_FINGERPRINT_SOURCE` is a local path (no `://`) and that
 `script_dir()` and `pinned_fingerprint()` perform no network fetch. If a future
 edit made the derivation fetch remotely, that canary fails under `cargo test`
 and the CI canary suite.
+
+---
+
+## AF-009: The health checker's default endpoint was blocked by our own kill switch
+
+- **Severity:** Medium
+- **Status:** Closed
+- **Principle / Promise:** P2 / PR2
+
+**What drifted.** `HealthConfig::default()` led its endpoint list with
+`https://1.1.1.1/cdn-cgi/trace`, while `1.1.1.1` headed
+`killswitch::rules::DOH_PROVIDERS` — the addresses the kill switch drops on
+tcp/443 whenever `block_doh` is enabled, which is the default. Two independently
+correct components, each guarded, contradicted each other at the seam.
+
+PR2 remained *technically* true the whole time: the endpoint was third-party and
+`https://`, so `C-TELEMETRY-DEFAULT-ENDPOINTS` passed. What the canary could not
+see was that the endpoint was unreachable *by our own design*, so the promise's
+intent — a working leak check — had quietly stopped holding.
+
+**Why it mattered.** Measured on an affected host, the damage was not confined
+to the health checker:
+
+- Every health check burned the full 5s `timeout_connect` before falling through
+  to the second endpoint, so leak detection ran on two endpoints, not three.
+- Because the probe was awaited inline inside `tokio::select!`, that stall held
+  the whole event loop and made the next poll measure 7.1s (5s blocked connect +
+  2s poll interval) against a 6s threshold. The daemon declared a
+  suspend/resume that had not happened — **~29 false "time jump" warnings per
+  hour**, each forcing a full NetworkManager resync and, worse, calling
+  `health_checker.suspend(10s)`, which suppressed *genuine* health checks.
+- It trained the operator to ignore a permanent `WARN` stream, which is its own
+  slow safety failure.
+
+The giveaway was that the interval was identical — 7.1s — on every occurrence.
+Real clock drift is not deterministic; a fixed timeout is.
+
+**Closing change.** Release 2.7.0. The defaults became `ifconfig.me`,
+`api.ipify.org`, and `icanhazip.com`, none of which is a DoH provider address.
+`health::checker::doh_conflicts()` now filters any configured endpoint whose host
+is a literal IP in the effective blocklist, falling back to the safe defaults if
+that would empty the list. Separately, the probe moved off the event loop and
+time-jump detection switched to comparing wall-clock against monotonic elapsed
+time, so a slow health check can no longer masquerade as a suspend.
+
+**Canary that prevents recurrence.**
+`health_default_endpoints_are_not_blocked_by_our_own_killswitch`
+(C-HEALTH-NOT-SELF-BLOCKED) in [tests/pdd_canaries.rs](tests/pdd_canaries.rs)
+asserts no default endpoint resolves to an address in `DOH_PROVIDERS`, closing
+the gap between "third-party and https" and "actually reachable". `1.1.1.1` was
+also removed from the `C-TELEMETRY-DEFAULT-ENDPOINTS` allowlist, so reinstating
+it fails the merge-blocking gate twice over.
+
+**Note on the guard that worked.** `C-TELEMETRY-DEFAULT-ENDPOINTS` failed on the
+first run of the endpoint change, forcing the allowlist to be updated
+deliberately rather than silently. The canary layer did its job; the lesson
+recorded here is that a promise can rot at the seam between two guarded
+components, where neither canary is looking.

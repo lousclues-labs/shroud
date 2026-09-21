@@ -105,7 +105,16 @@ impl StateMachine {
     }
 
     /// Force set the state (for external sync scenarios like wake-from-sleep)
+    ///
+    /// This is the escape hatch used by the ~15 supervisor call sites that
+    /// reconcile against NetworkManager rather than driving a formal event.
+    /// Forcing `Disconnected` also clears the retry budget: reaching that state
+    /// ends any reconnect sequence, so a counter surviving into the next
+    /// attempt would silently shorten it.
     pub fn set_state(&mut self, new_state: VpnState, reason: TransitionReason) {
+        if matches!(new_state, VpnState::Disconnected) {
+            self.retries = 0;
+        }
         let old_state = std::mem::replace(&mut self.state, new_state);
         if old_state != self.state {
             self.log_transition(&old_state, &self.state, &reason);
@@ -607,5 +616,114 @@ mod tests {
         // Connected -> Disconnected
         let _ = sm.handle_event(Event::UserDisable);
         assert!(matches!(sm.state, VpnState::Disconnected));
+    }
+}
+
+#[cfg(test)]
+mod retry_budget_tests {
+    use super::*;
+    use crate::state::{Event, TransitionReason, VpnState};
+
+    /// The reported failure mode: a reconnect sequence climbs partway, the
+    /// supervisor force-sets `Disconnected` (health check dead, VPN lost,
+    /// external change...), then the user clicks Connect. The new attempt must
+    /// start from a full retry budget, not inherit the old counter.
+    #[test]
+    fn test_manual_reconnect_after_forced_disconnect_starts_fresh() {
+        let mut sm = StateMachine::with_config(StateMachineConfig { max_retries: 10 });
+        sm.retries = 8;
+
+        // Mirrors handlers/health.rs HealthCheckDead and handlers/nm.rs VpnLost.
+        sm.set_state(VpnState::Disconnected, TransitionReason::HealthCheckDead);
+        assert_eq!(
+            sm.retries, 0,
+            "forcing Disconnected must end the retry sequence"
+        );
+
+        let _ = sm.handle_event(Event::UserEnable {
+            server: "vpn-a".into(),
+        });
+        assert_eq!(
+            sm.retries, 0,
+            "a user-initiated connect starts a new budget"
+        );
+    }
+
+    /// Belt and braces: even if some future path reaches `Disconnected` with a
+    /// stale counter, `UserEnable` itself must clear it.
+    #[test]
+    fn test_user_enable_from_disconnected_resets_retries() {
+        let mut sm = StateMachine::with_config(StateMachineConfig { max_retries: 10 });
+        sm.state = VpnState::Disconnected;
+        sm.retries = 7;
+
+        let _ = sm.handle_event(Event::UserEnable {
+            server: "vpn-a".into(),
+        });
+
+        assert_eq!(sm.retries, 0);
+        assert!(matches!(sm.state, VpnState::Connecting { .. }));
+    }
+
+    /// The full budget must actually be available after the reset.
+    ///
+    /// Asserted by equivalence rather than a hardcoded count: a machine that
+    /// carried a stale counter must behave *identically* to a freshly created
+    /// one driven through the same sequence.
+    #[test]
+    fn test_full_retry_budget_available_after_reset() {
+        fn attempts_until_failed(sm: &mut StateMachine, max: u32) -> u32 {
+            let _ = sm.handle_event(Event::UserEnable {
+                server: "vpn-a".into(),
+            });
+            // The drop itself counts as the first reconnect attempt.
+            let _ = sm.handle_event(Event::NmVpnDown);
+
+            let mut timeouts = 0;
+            while !matches!(sm.state, VpnState::Failed { .. }) && timeouts < max * 3 {
+                let _ = sm.handle_event(Event::Timeout);
+                timeouts += 1;
+            }
+            assert!(
+                matches!(sm.state, VpnState::Failed { .. }),
+                "expected the machine to exhaust its budget, ended in {:?}",
+                sm.state
+            );
+            timeouts
+        }
+
+        let max = 5;
+
+        let mut fresh = StateMachine::with_config(StateMachineConfig { max_retries: max });
+        let baseline = attempts_until_failed(&mut fresh, max);
+
+        // Same machine, but arriving via a forced disconnect with a stale counter.
+        let mut recycled = StateMachine::with_config(StateMachineConfig { max_retries: max });
+        recycled.retries = max - 1;
+        recycled.set_state(VpnState::Disconnected, TransitionReason::VpnLost);
+        let after_reset = attempts_until_failed(&mut recycled, max);
+
+        assert_eq!(
+            after_reset, baseline,
+            "a manual reconnect after a forced disconnect must get the same \
+             budget as a fresh connect (got {after_reset}, expected {baseline})"
+        );
+    }
+
+    /// Forcing a non-Disconnected state must leave an in-progress reconnect
+    /// sequence intact.
+    #[test]
+    fn test_set_state_to_other_states_preserves_retries() {
+        let mut sm = StateMachine::with_config(StateMachineConfig { max_retries: 10 });
+        sm.retries = 3;
+
+        sm.set_state(
+            VpnState::Connecting {
+                server: "vpn-a".into(),
+            },
+            TransitionReason::UserRequested,
+        );
+
+        assert_eq!(sm.retries, 3);
     }
 }

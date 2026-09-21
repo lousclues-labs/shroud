@@ -175,7 +175,11 @@ fn zero_telemetry_default_health_endpoints_are_third_party_only() {
         "PR2: default health endpoints must exist"
     );
 
-    const ALLOWED_HOSTS: &[&str] = &["1.1.1.1", "ifconfig.me", "api.ipify.org"];
+    // Third-party IP-echo services only. `1.1.1.1` was deliberately removed:
+    // it is a DoH provider address, so the kill switch's own `block_doh` rules
+    // drop tcp/443 to it, and using it as a default endpoint made every health
+    // check stall on a blocked connect. It must not be reinstated here.
+    const ALLOWED_HOSTS: &[&str] = &["ifconfig.me", "api.ipify.org", "icanhazip.com"];
     const FIRST_PARTY_MARKERS: &[&str] = &["vpnshroud", "lousclues"];
 
     for ep in &cfg.endpoints {
@@ -195,6 +199,23 @@ fn zero_telemetry_default_health_endpoints_are_third_party_only() {
             "C-TELEMETRY-DEFAULT-ENDPOINTS breach (PR2): {ep} is not on the third-party leak-check allowlist"
         );
     }
+}
+
+/// PR2 companion canary, C-HEALTH-NOT-SELF-BLOCKED.
+///
+/// A default health endpoint must never be an address the kill switch itself
+/// blocks. Regression guard for the defect where `https://1.1.1.1/cdn-cgi/trace`
+/// led the default list while `1.1.1.1` headed `DOH_PROVIDERS`, so every health
+/// check raced its own firewall rule and lost.
+#[test]
+fn health_default_endpoints_are_not_blocked_by_our_own_killswitch() {
+    let cfg = shroud::health::checker::HealthConfig::default();
+    let conflicts = shroud::health::checker::doh_conflicts(&cfg.endpoints, &[]);
+    assert!(
+        conflicts.is_empty(),
+        "C-HEALTH-NOT-SELF-BLOCKED breach: default health endpoint(s) {conflicts:?} \
+         are dropped by the kill switch's own DoH rules"
+    );
 }
 
 /// PR3, canary C-NO-IP-PERSIST.

@@ -239,6 +239,13 @@ impl KillSwitch {
     /// `self.backend` therefore misses rules a previous instance installed via
     /// nftables: the daemon reports "disabled" while traffic is still being
     /// filtered, and then persists that incorrect state to the config.
+    ///
+    /// Both backends are still probed when necessary, but the last known
+    /// backend is tried *first*. On a single-stack host — which is every normal
+    /// install — the first probe hits and the second never runs. This is the
+    /// periodic firewall reality-check, so the ordering alone halves its `sudo`
+    /// invocations (an nftables host was issuing a guaranteed-to-fail
+    /// `iptables -C` before every successful `nft list`).
     fn detect_active_backend(&self) -> Option<FirewallBackend> {
         use std::process::{Command, Stdio};
 
@@ -252,13 +259,32 @@ impl KillSwitch {
                 .unwrap_or(false)
         };
 
-        if probe(["-n", iptables(), "-C", "OUTPUT", "-j", CHAIN_NAME]) {
-            return Some(FirewallBackend::Iptables);
-        }
-        if probe(["-n", nft(), "list", "table", "inet", NFT_TABLE]) {
-            return Some(FirewallBackend::Nftables);
+        for backend in self.probe_order() {
+            let found = match backend {
+                FirewallBackend::Iptables => {
+                    probe(["-n", iptables(), "-C", "OUTPUT", "-j", CHAIN_NAME])
+                }
+                FirewallBackend::Nftables => {
+                    probe(["-n", nft(), "list", "table", "inet", NFT_TABLE])
+                }
+            };
+            if found {
+                return Some(backend);
+            }
         }
         None
+    }
+
+    /// Order in which to probe backends: last known backend first.
+    ///
+    /// When rules exist under both backends (not reachable through normal
+    /// operation, since `enable()` commits to one) this reports the one we
+    /// actually installed rather than an arbitrary fixed preference.
+    fn probe_order(&self) -> [FirewallBackend; 2] {
+        match self.backend {
+            FirewallBackend::Nftables => [FirewallBackend::Nftables, FirewallBackend::Iptables],
+            FirewallBackend::Iptables => [FirewallBackend::Iptables, FirewallBackend::Nftables],
+        }
     }
 
     /// Async variant of [`detect_active_backend`].
@@ -274,11 +300,18 @@ impl KillSwitch {
                 .unwrap_or(false)
         }
 
-        if probe(["-n", iptables(), "-C", "OUTPUT", "-j", CHAIN_NAME]).await {
-            return Some(FirewallBackend::Iptables);
-        }
-        if probe(["-n", nft(), "list", "table", "inet", NFT_TABLE]).await {
-            return Some(FirewallBackend::Nftables);
+        for backend in self.probe_order() {
+            let found = match backend {
+                FirewallBackend::Iptables => {
+                    probe(["-n", iptables(), "-C", "OUTPUT", "-j", CHAIN_NAME]).await
+                }
+                FirewallBackend::Nftables => {
+                    probe(["-n", nft(), "list", "table", "inet", NFT_TABLE]).await
+                }
+            };
+            if found {
+                return Some(backend);
+            }
         }
         None
     }
@@ -410,6 +443,19 @@ impl KillSwitch {
 
         match backend {
             FirewallBackend::Iptables => {
+                // The iptables backend applies one rule per subprocess, so a
+                // mid-sequence failure leaves a partially built chain. The
+                // script inserts the OUTPUT jump *last*, so traffic never
+                // reaches a half-populated chain — but the orphaned chain must
+                // still be torn down, or the next enable inherits it and the
+                // periodic backend probe reports a kill switch that is not
+                // actually filtering anything.
+                //
+                // (A single `iptables-restore` transaction would make this
+                // atomic outright, but it cannot express the per-rule
+                // iptables-nft -> iptables-legacy fallback that
+                // `run_single_script` performs. Rolling back on failure gives
+                // the same all-or-nothing guarantee without losing it.)
                 debug!("iptables backend uses non-atomic rule application; brief traffic gap possible during rule updates. nftables backend is atomic.");
                 let script = self.build_complete_script(&vpn_server_ips);
                 match self.run_single_script(&script).await {
@@ -417,13 +463,21 @@ impl KillSwitch {
                     Err(err) if Self::should_fallback_to_nft(&err) => {
                         if Self::nft_is_available().await {
                             warn!("iptables failed, falling back to nftables");
+                            // Drop the partial iptables chain before building
+                            // the nft ruleset, so the two backends cannot both
+                            // appear to own a kill switch.
+                            self.robust_iptables_cleanup().await;
                             self.backend = FirewallBackend::Nftables;
                             self.enable_nft(&vpn_server_ips).await?;
                         } else {
+                            self.robust_iptables_cleanup().await;
                             return Err(err);
                         }
                     }
-                    Err(err) => return Err(err),
+                    Err(err) => {
+                        self.robust_iptables_cleanup().await;
+                        return Err(err);
+                    }
                 }
             }
             FirewallBackend::Nftables => {
@@ -1257,5 +1311,49 @@ mod ks_expanded_tests {
         let cooldown = TOGGLE_COOLDOWN_MS;
         assert!(cooldown >= 100, "Cooldown too short: {}", cooldown);
         assert!(cooldown <= 5000, "Cooldown too long: {}", cooldown);
+    }
+}
+
+#[cfg(test)]
+mod probe_order_tests {
+    use super::*;
+
+    /// The periodic firewall reality-check used to run a guaranteed-to-fail
+    /// `iptables -C` before every successful `nft list` on nftables hosts,
+    /// doubling its `sudo` invocations (241/hour observed in the field).
+    /// Probing the known backend first makes the second probe unnecessary.
+    #[test]
+    fn test_nftables_host_probes_nftables_first() {
+        let mut ks = KillSwitch::new();
+        ks.backend = FirewallBackend::Nftables;
+        assert_eq!(
+            ks.probe_order(),
+            [FirewallBackend::Nftables, FirewallBackend::Iptables]
+        );
+    }
+
+    #[test]
+    fn test_iptables_host_probes_iptables_first() {
+        let mut ks = KillSwitch::new();
+        ks.backend = FirewallBackend::Iptables;
+        assert_eq!(
+            ks.probe_order(),
+            [FirewallBackend::Iptables, FirewallBackend::Nftables]
+        );
+    }
+
+    /// Both backends must still be reachable, or a kill switch installed by a
+    /// previous instance under the other backend would go undetected — the
+    /// daemon would report "disabled" while traffic was still being filtered.
+    #[test]
+    fn test_both_backends_always_probed() {
+        for backend in [FirewallBackend::Iptables, FirewallBackend::Nftables] {
+            let mut ks = KillSwitch::new();
+            ks.backend = backend;
+            let order = ks.probe_order();
+            assert!(order.contains(&FirewallBackend::Iptables));
+            assert!(order.contains(&FirewallBackend::Nftables));
+            assert_eq!(order[0], backend, "known backend must be probed first");
+        }
     }
 }

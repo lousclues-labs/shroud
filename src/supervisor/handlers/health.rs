@@ -5,17 +5,26 @@
 
 use tracing::{debug, error, info, warn};
 
+use crate::health::checker::{HealthConfig, ProbeOutcome};
 use crate::health::HealthResult;
 use crate::state::{Event, TransitionReason, VpnState};
 
 impl super::super::VpnSupervisor {
-    /// Run health check when connected
-    pub(crate) async fn run_health_check(&mut self) {
+    /// Pre-flight for a health check: reconcile local state, then decide
+    /// whether a network probe is warranted.
+    ///
+    /// Returns the config the probe should use, or `None` to skip this cycle.
+    /// Everything here is local and fast — the slow network probe is run by the
+    /// caller on a detached task so it never holds the event loop. Previously
+    /// the probe was awaited inline inside `tokio::select!`, so a single
+    /// unreachable endpoint stalled tray, IPC, D-Bus and NM polling for the
+    /// full connect timeout.
+    pub(crate) async fn begin_health_check(&mut self) -> Option<HealthConfig> {
         // CRITICAL: First sync with NetworkManager state
         // This catches external VPN changes before we do health checks
         if self.sync_state_from_nm().await {
             debug!("State corrected during health check, skipping health check");
-            return;
+            return None;
         }
 
         // Also sync kill switch state periodically.
@@ -29,12 +38,35 @@ impl super::super::VpnSupervisor {
         let server = match &self.machine.state {
             VpnState::Connected { server } => server.clone(),
             VpnState::Degraded { server } => server.clone(),
-            _ => return,
+            _ => return None,
         };
 
-        debug!("Running health check for {}", server);
+        if self.health_checker.is_suspended() {
+            debug!("Health check skipped - suspended");
+            return None;
+        }
 
-        let result = self.health_checker.check().await;
+        debug!("Running health check for {}", server);
+        Some(self.health_checker.config_snapshot())
+    }
+
+    /// Apply a completed probe to the state machine.
+    ///
+    /// Pure local work: counter updates plus at most a `resolv.conf` read.
+    pub(crate) async fn finish_health_check(&mut self, outcome: ProbeOutcome) {
+        // The probe ran detached, so state may have moved on while it was in
+        // flight (user disconnected, VPN dropped, a reconnect started). Re-read
+        // it rather than trusting the value captured at launch.
+        let server = match &self.machine.state {
+            VpnState::Connected { server } => server.clone(),
+            VpnState::Degraded { server } => server.clone(),
+            _ => {
+                debug!("State changed while health probe was in flight, discarding result");
+                return;
+            }
+        };
+
+        let result = self.health_checker.evaluate(outcome);
 
         match result {
             HealthResult::Healthy => {

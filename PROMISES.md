@@ -31,15 +31,26 @@ first-party analytics host (for example `telemetry.vpnshroud.org` or
 The single HTTP client in the tree is the health checker
 ([src/health/checker.rs](src/health/checker.rs)). Its default endpoints are
 exactly three third-party IP-echo services, all `https://`, none first-party:
-`https://1.1.1.1/cdn-cgi/trace`, `https://ifconfig.me/ip`,
-`https://api.ipify.org`. These probes traverse the VPN tunnel and exist to
-detect leaks, not to report on the user. They are fully overridable in config.
+`https://ifconfig.me/ip`, `https://api.ipify.org`, `https://icanhazip.com`.
+These probes traverse the VPN tunnel and exist to detect leaks, not to report on
+the user. They are fully overridable in config. Probing is hedged rather than
+fan-out, so a healthy tunnel makes exactly one outbound request per cycle and
+does not report its exit IP to all three services every time.
 
-- Falsifiable by: adding a first-party or non-`https` default endpoint.
+No default may be an address the kill switch itself blocks. This is not a
+stylistic constraint: `https://1.1.1.1/cdn-cgi/trace` led this list until 2.7.0
+while `1.1.1.1` headed `DOH_PROVIDERS`, so with `block_doh` enabled every health
+check raced our own firewall rule and lost (see AF-009).
+
+- Falsifiable by: adding a first-party or non-`https` default endpoint, or a
+  default the kill switch drops.
 - Canary `C-TELEMETRY-DEFAULT-ENDPOINTS` (test):
-  `zero_telemetry__default_health_endpoints_are_third_party_only` asserts every
+  `zero_telemetry_default_health_endpoints_are_third_party_only` asserts every
   default in `HealthConfig::default()` is `https://`, is on the third-party
   leak-check allowlist, and contains no first-party marker.
+- Canary `C-HEALTH-NOT-SELF-BLOCKED` (test):
+  `health_default_endpoints_are_not_blocked_by_our_own_killswitch` asserts no
+  default endpoint resolves to an address in `DOH_PROVIDERS`.
 
 ### PR3. The detected exit IP is never persisted
 The public exit IP that a health check reads back is used only for in-memory

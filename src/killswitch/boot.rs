@@ -67,8 +67,8 @@ pub fn disable_boot_killswitch() -> Result<(), KillSwitchError> {
     // Now flush and delete the chains
     let _ = run_iptables(&["-F", BOOT_CHAIN]);
     let _ = run_iptables(&["-X", BOOT_CHAIN]);
-    let _ = run_ip6tables(&["-F", BOOT_CHAIN]);
-    let _ = run_ip6tables(&["-X", BOOT_CHAIN]);
+    try_ip6tables(&["-F", BOOT_CHAIN], false);
+    try_ip6tables(&["-X", BOOT_CHAIN], false);
 
     info!("Boot kill switch disabled");
     Ok(())
@@ -99,7 +99,7 @@ fn create_boot_chain() -> Result<(), KillSwitchError> {
 fn add_boot_rules(allow_lan: bool) -> Result<(), KillSwitchError> {
     // Allow loopback
     run_iptables(&["-A", BOOT_CHAIN, "-o", "lo", "-j", "ACCEPT"])?;
-    let _ = run_ip6tables(&["-A", BOOT_CHAIN, "-o", "lo", "-j", "ACCEPT"]);
+    try_ip6tables(&["-A", BOOT_CHAIN, "-o", "lo", "-j", "ACCEPT"], false);
 
     // Allow established
     run_iptables(&[
@@ -112,16 +112,19 @@ fn add_boot_rules(allow_lan: bool) -> Result<(), KillSwitchError> {
         "-j",
         "ACCEPT",
     ])?;
-    let _ = run_ip6tables(&[
-        "-A",
-        BOOT_CHAIN,
-        "-m",
-        "state",
-        "--state",
-        "ESTABLISHED,RELATED",
-        "-j",
-        "ACCEPT",
-    ]);
+    try_ip6tables(
+        &[
+            "-A",
+            BOOT_CHAIN,
+            "-m",
+            "state",
+            "--state",
+            "ESTABLISHED,RELATED",
+            "-j",
+            "ACCEPT",
+        ],
+        false,
+    );
 
     // Allow DHCP
     run_iptables(&[
@@ -139,12 +142,15 @@ fn add_boot_rules(allow_lan: bool) -> Result<(), KillSwitchError> {
                 run_iptables(&["-A", BOOT_CHAIN, "-d", subnet, "-j", "ACCEPT"])?;
             }
         }
-        let _ = run_ip6tables(&["-A", BOOT_CHAIN, "-d", "fe80::/10", "-j", "ACCEPT"]);
+        try_ip6tables(
+            &["-A", BOOT_CHAIN, "-d", "fe80::/10", "-j", "ACCEPT"],
+            false,
+        );
     }
 
     // Drop everything else
     run_iptables(&["-A", BOOT_CHAIN, "-j", "DROP"])?;
-    let _ = run_ip6tables(&["-A", BOOT_CHAIN, "-j", "DROP"]);
+    try_ip6tables(&["-A", BOOT_CHAIN, "-j", "DROP"], true);
 
     Ok(())
 }
@@ -165,8 +171,28 @@ fn insert_boot_chain_jump() -> Result<(), KillSwitchError> {
 
     // Now insert fresh jump rules
     run_iptables(&["-I", "OUTPUT", "1", "-j", BOOT_CHAIN])?;
-    let _ = run_ip6tables(&["-I", "OUTPUT", "1", "-j", BOOT_CHAIN]);
+    try_ip6tables(&["-I", "OUTPUT", "1", "-j", BOOT_CHAIN], true);
     Ok(())
+}
+
+/// Apply a best-effort IPv6 boot rule.
+///
+/// IPv6 may legitimately be unavailable (kernel built without it, ip6tables not
+/// installed), so a failure here is not fatal. It must not be *invisible*
+/// though: when `critical` is set, the rule is one that keeps IPv6 traffic from
+/// escaping the boot kill switch, and losing it means silently leaking.
+fn try_ip6tables(args: &[&str], critical: bool) {
+    if let Err(e) = run_ip6tables(args) {
+        if critical {
+            warn!(
+                "IPv6 boot rule failed ({}): {} — IPv6 traffic may NOT be blocked at boot",
+                args.join(" "),
+                e
+            );
+        } else {
+            tracing::debug!("Optional IPv6 boot rule failed ({}): {}", args.join(" "), e);
+        }
+    }
 }
 
 fn run_iptables(args: &[&str]) -> Result<(), KillSwitchError> {
