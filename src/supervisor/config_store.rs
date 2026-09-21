@@ -17,6 +17,10 @@ pub(crate) struct ConfigStore {
     pub(crate) config: Config,
     /// Whether this is the first run (no pre-existing config file)
     pub(crate) is_first_run: bool,
+    /// Owns the throwaway directory backing [`ConfigStore::for_tests`], so it
+    /// is removed when the store drops.
+    #[cfg(test)]
+    _tempdir: Option<tempfile::TempDir>,
 }
 
 impl ConfigStore {
@@ -32,6 +36,8 @@ impl ConfigStore {
             manager,
             config,
             is_first_run,
+            #[cfg(test)]
+            _tempdir: None,
         }
     }
 
@@ -46,21 +52,21 @@ impl ConfigStore {
     ///
     /// Supervisor tests drive the real handlers, which persist config; without
     /// this they rewrite the config of whoever runs the suite.
+    ///
+    /// The backing directory is owned by the returned store and removed when it
+    /// drops. This previously wrote into `std::env::temp_dir()` with a
+    /// pid+counter name and never cleaned up, leaking roughly a dozen
+    /// `shroud-test-*.toml` files into `/tmp` on every suite run.
     #[cfg(test)]
     pub(crate) fn for_tests() -> Self {
-        use std::sync::atomic::{AtomicU32, Ordering};
-
-        static COUNTER: AtomicU32 = AtomicU32::new(0);
-        let unique = format!(
-            "shroud-test-{}-{}.toml",
-            std::process::id(),
-            COUNTER.fetch_add(1, Ordering::Relaxed)
-        );
+        let dir = tempfile::tempdir().expect("create temp dir for test config");
+        let path = dir.path().join("shroud-test.toml");
 
         Self {
-            manager: ConfigManager::with_path(std::env::temp_dir().join(unique)),
+            manager: ConfigManager::with_path(path),
             config: Config::default(),
             is_first_run: true,
+            _tempdir: Some(dir),
         }
     }
 

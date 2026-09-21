@@ -212,6 +212,30 @@ Fixes #123
 - `test` -- adding tests
 - `chore` -- build/CI/tooling
 
+### Sign-off (DCO)
+
+Commits carry a `Signed-off-by:` trailer. This is not decoration: the
+`lousclues-pkg` release gate reads the tagged commit's message and refuses to
+publish without it.
+
+```bash
+git log -1 --format=%B "v<version>" | grep -qiE '^Signed-off-by:[[:space:]]'
+```
+
+Every release from 2.5.0 through 2.6.0 missed the trailer and was never
+published as a result, so the repository ships a hook rather than relying on
+memory. Enable it once per clone:
+
+```bash
+git config core.hooksPath scripts/hooks
+```
+
+[scripts/hooks/prepare-commit-msg](scripts/hooks/prepare-commit-msg) appends the
+trailer when it is absent, and leaves the message alone when you already passed
+`git commit -s`, when amending, and on merge/squash messages. `git config
+format.signOff true` does **not** do this -- it only affects `git format-patch`,
+not `git commit`.
+
 ---
 
 ## Code Style

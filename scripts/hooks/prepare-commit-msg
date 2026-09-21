@@ -1,0 +1,45 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+# Copyright (C) 2026 Louis Nelson Jr. <https://lousclues.com>
+#
+# Append a DCO Signed-off-by trailer when one is absent.
+#
+# The lousclues-pkg release gate reads the tagged commit's message and
+# refuses to publish without this trailer:
+#
+#     git log -1 --format=%B "v<version>" | grep -qiE '^Signed-off-by:[[:space:]]'
+#
+# Every release from 2.5.0 through 2.6.0 missed it and was never published
+# as a result, so this is automated rather than left to memory.
+#
+# Enable in a fresh clone with:
+#     git config core.hooksPath scripts/hooks
+
+set -eu
+
+msg_file=$1
+source=${2:-}
+
+# Leave squash/fixup and merge messages alone: the trailer belongs on the
+# commit that lands, which git re-runs this hook for.
+case "$source" in
+    squash|merge) exit 0 ;;
+esac
+
+name=$(git config user.name || true)
+email=$(git config user.email || true)
+[ -n "$name" ] && [ -n "$email" ] || exit 0
+
+trailer="Signed-off-by: $name <$email>"
+
+# Already signed off (explicit -s, amend, or a previous run)? Do nothing.
+if grep -qiF "$trailer" "$msg_file"; then
+    exit 0
+fi
+
+# Separate from the body only when the last line is not already blank,
+# so re-running cannot accumulate blank lines.
+if [ -s "$msg_file" ] && [ -n "$(tail -n 1 "$msg_file")" ]; then
+    printf '\n' >> "$msg_file"
+fi
+printf '%s\n' "$trailer" >> "$msg_file"

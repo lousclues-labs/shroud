@@ -14,6 +14,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **DCO sign-off hook** ([scripts/hooks/prepare-commit-msg](scripts/hooks/prepare-commit-msg)).
+  The `lousclues-pkg` release gate reads the tagged commit's message and refuses
+  to publish without a `Signed-off-by:` trailer. Every release from 2.5.0
+  through 2.6.0 missed it, which is a large part of why that whole series was
+  never published to the package repository — and 2.7.0 shipped only because
+  the gate is advisory rather than enforced by `pkg release`. The hook appends
+  the trailer when absent and leaves the message alone for `git commit -s`,
+  amends, and merge/squash messages. Enable per clone with
+  `git config core.hooksPath scripts/hooks`; documented in
+  [CONTRIBUTING.md](CONTRIBUTING.md). Note that `git config format.signOff true`
+  does *not* do this — it only affects `git format-patch`, not `git commit`.
+
+### Fixed
+
+- **Test suite no longer leaks temp files.** `ConfigStore::for_tests()` created
+  a uniquely-named config under `std::env::temp_dir()` and nothing ever removed
+  it, so every run left roughly a dozen `shroud-test-*.toml` files behind (143
+  had accumulated on one developer machine). The throwaway file now lives in a
+  `tempfile::TempDir` owned by the store, so it is removed on drop. Verified by
+  running the full suite from a clean `/tmp`: 1,331 tests, zero files left.
+
 ## [2.7.0] - 2026-09-20
 
 A performance and reliability release driven by profiling a daemon that had been
