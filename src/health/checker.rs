@@ -330,9 +330,10 @@ impl HealthChecker {
 
 /// Probe endpoints in preference order using hedged requests.
 ///
-/// The first endpoint is tried alone; if it has not answered within
-/// [`HEDGE_DELAY`], the next endpoint is started *alongside* it rather than
-/// after it. The first success wins and the stragglers are aborted.
+/// The first endpoint is tried alone; if it has not answered within a short
+/// head start (`HEDGE_DELAY`, 1.5s), the next endpoint is started *alongside*
+/// it rather than after it. The first success wins and the stragglers are
+/// aborted.
 ///
 /// This keeps the common case at exactly one outbound request (so we do not
 /// tell three third parties our exit IP every cycle) while bounding the worst
