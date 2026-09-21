@@ -1,0 +1,109 @@
+# SPDX-License-Identifier: GPL-3.0-or-later OR LicenseRef-Commercial
+#
+# publish-crate.yml -- publish the crate to crates.io.
+#
+# crates.io was the one publication channel with no automation, and it
+# silently fell four minor versions behind (2.4.5 while GitHub, the AUR and
+# pkg.lousclues.com were all on 2.7.0) because it was a manual step nobody
+# had written down. See docs/RELEASING.md.
+#
+# Runs on tag push so future releases publish themselves, and accepts a
+# workflow_dispatch tag input for backfilling a version that was tagged
+# before this workflow existed.
+
+name: publish-crate
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+.[0-9]+-*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to publish (e.g. v2.7.0)'
+        required: true
+        type: string
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: cargo publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Resolve tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "TAG=${{ inputs.tag }}" >> "$GITHUB_ENV"
+          else
+            echo "TAG=${GITHUB_REF#refs/tags/}" >> "$GITHUB_ENV"
+          fi
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0
+
+      # The tag is the source of truth for what gets published. A mismatch
+      # means the tag would ship a different version than it claims.
+      - name: Validate Cargo.toml version matches the tag
+        run: |
+          CARGO_VERSION=$(grep '^version' Cargo.toml | head -1 | sed -E 's/.*"(.*)".*/\1/')
+          TAG_VERSION=${TAG#v}
+          if [ "$CARGO_VERSION" != "$TAG_VERSION" ]; then
+            echo "Error: tag $TAG_VERSION does not match Cargo.toml $CARGO_VERSION"
+            exit 1
+          fi
+          echo "VERSION=$CARGO_VERSION" >> "$GITHUB_ENV"
+
+      # cargo publish errors on an existing version. Treat "already there"
+      # as success so re-running the workflow is safe.
+      - name: Skip if this version is already on crates.io
+        run: |
+          PUBLISHED=$(curl -sS \
+            -H 'User-Agent: lousclues-labs/shroud release workflow' \
+            "https://crates.io/api/v1/crates/vpn-shroud/versions" \
+            | jq -r --arg v "$VERSION" '.versions[]? | select(.num == $v) | .num')
+          if [ -n "$PUBLISHED" ]; then
+            echo "vpn-shroud $VERSION is already published; nothing to do."
+            echo "ALREADY_PUBLISHED=1" >> "$GITHUB_ENV"
+          else
+            echo "ALREADY_PUBLISHED=0" >> "$GITHUB_ENV"
+          fi
+
+      - name: Install Rust
+        if: env.ALREADY_PUBLISHED == '0'
+        uses: dtolnay/rust-toolchain@stable
+
+      # zbus/notify-rust link against libdbus; cargo publish runs a
+      # verification build, so the headers must be present.
+      - name: Install system dependencies
+        if: env.ALREADY_PUBLISHED == '0'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Cache cargo
+        if: env.ALREADY_PUBLISHED == '0'
+        uses: Swatinem/rust-cache@v2
+
+      - name: Package check
+        if: env.ALREADY_PUBLISHED == '0'
+        run: cargo publish --dry-run --locked
+
+      - name: Publish
+        if: env.ALREADY_PUBLISHED == '0'
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: cargo publish --locked
+
+      - name: Summary
+        run: |
+          if [ "$ALREADY_PUBLISHED" = "1" ]; then
+            echo "::notice::vpn-shroud $VERSION was already on crates.io; no action taken."
+          else
+            echo "::notice::Published vpn-shroud $VERSION to crates.io."
+          fi

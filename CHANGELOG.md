@@ -16,6 +16,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **crates.io publishing is automated**
+  ([.github/workflows/publish-crate.yml](.github/workflows/publish-crate.yml)).
+  It was the one channel with no automation, and it silently fell four minor
+  versions behind — 2.4.5 while GitHub, the AUR, and pkg.lousclues.com were all
+  on 2.7.0. The workflow runs on tag push, re-validates the tag against
+  `Cargo.toml`, skips cleanly when the version is already on crates.io (so
+  re-runs are safe), and runs `cargo publish --dry-run --locked` before the real
+  upload. A `workflow_dispatch` tag input allows backfilling a version tagged
+  before the workflow existed.
+
 - **Release runbook now covers every publication channel**
   ([docs/RELEASING.md](docs/RELEASING.md)). It documented the version bump,
   changelog, tag, and GitHub Release — but not crates.io, the AUR, or

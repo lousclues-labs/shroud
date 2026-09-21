@@ -115,7 +115,8 @@ gh release view v1.8.7 --json tagName,isDraft,assets
 ## Publish to every channel
 
 A release is not finished when the tag is pushed. Shroud ships through **four**
-channels and each is a separate step. Versions 2.5.0 through 2.6.0 were tagged
+channels. crates.io and the GitHub Release are automated on tag push; the AUR
+and the package repository are manual. Versions 2.5.0 through 2.6.0 were tagged
 but never reached crates.io, the AUR, or the package repository, because only
 the GitHub half of this list was written down.
 
@@ -124,11 +125,23 @@ Verify all four afterwards; the commands are in
 
 ### 1. crates.io
 
-Manual. There is no CI automation for this.
+Automated by [publish-crate.yml](../.github/workflows/publish-crate.yml) on tag
+push, using the `CRATES_IO_TOKEN` repository secret. It re-checks the tag
+against `Cargo.toml`, skips cleanly when the version is already published (so
+re-runs are safe), and runs `cargo publish --dry-run --locked` before the real
+upload.
+
+To backfill a version tagged before that workflow existed, or to retry:
 
 ```bash
-cargo publish --dry-run          # packages + compiles from the packaged tree
-cargo publish                    # needs a crates.io token (cargo login)
+gh workflow run publish-crate.yml -f tag=v1.8.7
+```
+
+Publishing by hand needs a crates.io token (`cargo login`):
+
+```bash
+cargo publish --dry-run --locked
+cargo publish --locked
 ```
 
 ### 2. AUR (`vpn-shroud`)
