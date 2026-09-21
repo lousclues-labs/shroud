@@ -16,6 +16,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Release runbook now covers every publication channel**
+  ([docs/RELEASING.md](docs/RELEASING.md)). It documented the version bump,
+  changelog, tag, and GitHub Release — but not crates.io, the AUR, or
+  `pkg release`. Three of the four channels a release ships through were
+  absent, which is why 2.5.0 through 2.6.0 were tagged and then reached none of
+  them, and why 2.7.0 shipped to three channels before crates.io was noticed as
+  still sitting on 2.4.5. Adds exact commands for each channel, the DCO
+  requirement and why it cannot be fixed after tagging, and a per-channel
+  post-release verification block that checks the live endpoints rather than
+  trusting each publish command's own output.
+
 - **DCO sign-off hook** ([scripts/hooks/prepare-commit-msg](scripts/hooks/prepare-commit-msg)).
   The `lousclues-pkg` release gate reads the tagged commit's message and refuses
   to publish without a `Signed-off-by:` trailer. Every release from 2.5.0

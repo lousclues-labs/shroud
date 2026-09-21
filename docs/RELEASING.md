@@ -75,6 +75,24 @@ git tag -s v1.8.7 -m "v1.8.7"
 
 Sign the tag. This proves it came from a maintainer.
 
+Commits must carry a `Signed-off-by:` trailer. The `lousclues-pkg` release
+gate reads the *tagged commit's* message and refuses to publish without one:
+
+```bash
+git log -1 --format=%B "v1.8.7" | grep -qiE '^Signed-off-by:[[:space:]]'
+```
+
+Enable the hook once per clone so this is automatic
+(see [CONTRIBUTING.md](../CONTRIBUTING.md)):
+
+```bash
+git config core.hooksPath scripts/hooks
+```
+
+It cannot be fixed after tagging: moving the tag changes the GitHub source
+tarball (the commit SHA is embedded in the archive's pax header), which breaks
+the AUR `sha256sums` published against it.
+
 ### 2. Push
 
 ```bash
@@ -84,19 +102,102 @@ git push --tags
 
 ### 3. Create GitHub Release
 
-1. Go to Releases on GitHub
-2. Click "Draft a new release"
-3. Select the tag
-4. Title: `v1.8.7`
-5. Body: Copy from CHANGELOG.md
-6. Attach binaries if desired
-7. Publish
+Pushing the tag triggers [release.yml](../.github/workflows/release.yml), which
+builds the binary, attaches the tarball plus its `.sha256`, and publishes the
+release. Verify rather than assume:
+
+```bash
+gh release view v1.8.7 --json tagName,isDraft,assets
+```
+
+---
+
+## Publish to every channel
+
+A release is not finished when the tag is pushed. Shroud ships through **four**
+channels and each is a separate step. Versions 2.5.0 through 2.6.0 were tagged
+but never reached crates.io, the AUR, or the package repository, because only
+the GitHub half of this list was written down.
+
+Verify all four afterwards; the commands are in
+[Post-Release](#1-verify-every-channel).
+
+### 1. crates.io
+
+Manual. There is no CI automation for this.
+
+```bash
+cargo publish --dry-run          # packages + compiles from the packaged tree
+cargo publish                    # needs a crates.io token (cargo login)
+```
+
+### 2. AUR (`vpn-shroud`)
+
+Update the in-repo mirror and the AUR repository together. The checksum is of
+the **GitHub source tarball for the tag**, so the tag must already be pushed:
+
+```bash
+curl -sL -o /tmp/v.tar.gz \
+    "https://github.com/lousclues-labs/shroud/archive/v1.8.7.tar.gz"
+sha256sum /tmp/v.tar.gz
+```
+
+Set `pkgver` and `sha256sums` in [aur/PKGBUILD](../aur/PKGBUILD) together --
+bumping one without the other produces a PKGBUILD that cannot build. Regenerate
+[aur/.SRCINFO](../aur/.SRCINFO) (`makepkg --printsrcinfo > .SRCINFO` on Arch),
+then push both files to `ssh://aur@aur.archlinux.org/vpn-shroud.git` with the
+commit message `Update to 1.8.7`.
+
+### 3. lousclues packages (.deb / .rpm)
+
+See [Multi-distro packaging](#multi-distro-packaging-deb--rpm) below for the
+build matrix. The publish itself is a two-step, operator-present flow:
+
+```bash
+pkg lint shroud 1.8.7 --pre-release        # seven gates; all must pass
+
+cd ~/src/lousclues-pkg                      # NOT the source project
+make prepare-artifacts PROJECT=shroud VERSION=1.8.7   # YubiKey touch
+pkg release shroud 1.8.7                              # YubiKey touch
+```
+
+Add `FORCE=1` to `prepare-artifacts` when re-running against a populated
+`dist/` directory. Both steps require a physical YubiKey touch; a missed touch
+surfaces as `gpg: signing failed: Timeout`.
+
+### 4. GitHub Release
+
+Covered above -- automated by `release.yml` on tag push.
 
 ---
 
 ## Post-Release
 
-### 1. Verify Installation
+### 1. Verify every channel
+
+Check each one rather than trusting the publish command's own output:
+
+```bash
+# GitHub
+gh release view v1.8.7 --json tagName,assets
+
+# crates.io
+curl -s https://crates.io/api/v1/crates/vpn-shroud | jq -r .crate.max_version
+
+# AUR
+curl -s 'https://aur.archlinux.org/rpc/v5/info?arg[]=vpn-shroud' \
+    | jq -r '.results[0].Version'
+
+# lousclues packages -- deb metadata, then the served version
+for d in noble jammy bookworm; do
+    curl -fsI "https://pkg.lousclues.com/deb/dists/$d/InRelease" >/dev/null \
+        && echo "$d InRelease ok"
+done
+curl -s https://pkg.lousclues.com/deb/dists/noble/main/binary-amd64/Packages \
+    | awk '/^Package: vpn-shroud$/{f=1} f&&/^Version:/{print $2; exit}'
+```
+
+### 2. Verify Installation
 
 Test from a clean environment:
 
@@ -107,14 +208,14 @@ cd shroud
 shroud --version
 ```
 
-### 2. Monitor
+### 3. Monitor
 
 Watch the issue tracker for:
 - Regressions
 - Installation problems
 - Unexpected behavior
 
-### 3. Hotfix If Needed
+### 4. Hotfix If Needed
 
 If something's broken, fix it fast:
 
