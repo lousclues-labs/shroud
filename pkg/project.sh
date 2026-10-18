@@ -310,12 +310,25 @@ EOF
 # Extra rpm fpm flags. Mirror of the deb rename migration: vpn-shroud
 # obsoletes/provides the old 'shroud' rpm so dnf upgrades existing
 # installs in place (PKG_RPM_CONFLICTS handles the conflict side).
+#
+# rpmbuild writes the build host (in CI, the container's ID) and the
+# wall-clock build time into the rpm header unless told otherwise, so
+# two builds of one commit differed in those alone and pkg-build's
+# reproducibility (fedora-44) job failed. The host is fixed and the
+# build time and file times come from SOURCE_DATE_EPOCH, as vigil's and
+# onyx-mail's manifests do.
 project_fpm_rpm_extra_args() {
     cat <<'EOF'
 --provides
 shroud
 --rpm-tag
 Obsoletes: shroud
+--rpm-rpmbuild-define
+_buildhost reproducible
+--rpm-rpmbuild-define
+use_source_date_epoch_as_buildtime 1
+--rpm-rpmbuild-define
+clamp_mtime_to_source_date_epoch 1
 EOF
 }
 
