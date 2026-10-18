@@ -138,10 +138,20 @@ jobs:
 
       - name: derive version
         id: ver
+        # The dispatched version is data, never code: it reaches the shell
+        # through env alone, and only a semantic version is taken. Its value
+        # is not echoed, so it cannot speak to the runner either.
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
           set -e
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-              echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          semver='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$'
+          if [ -n "$INPUT_VERSION" ]; then
+              if [[ ! "$INPUT_VERSION" =~ $semver ]]; then
+                  echo "ERROR: inputs.version must be a semantic version, such as 1.2.3"
+                  exit 1
+              fi
+              echo "version=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
               exit 0
           fi
           # Parse Cargo.toml [package].version (same logic as framework).
@@ -153,6 +163,10 @@ jobs:
               }' Cargo.toml)
           if [ -z "$v" ]; then
               echo "ERROR: could not parse version from Cargo.toml"
+              exit 1
+          fi
+          if [[ ! "$v" =~ $semver ]]; then
+              echo "ERROR: Cargo.toml's version must be a semantic version, such as 1.2.3"
               exit 1
           fi
           echo "version=$v" >> "$GITHUB_OUTPUT"
@@ -177,8 +191,8 @@ jobs:
           - distro: debian-12
             image: debian:12-slim
             ext: deb
-          - distro: fedora-40
-            image: fedora:40
+          - distro: fedora-44
+            image: fedora:44
             ext: rpm
     steps:
       - name: install git + sudo in container
@@ -268,8 +282,8 @@ jobs:
           - distro: debian-12
             image: debian:12-slim
             ext: deb
-          - distro: fedora-40
-            image: fedora:40
+          - distro: fedora-44
+            image: fedora:44
             ext: rpm
     steps:
       - name: install git in container
@@ -384,8 +398,8 @@ jobs:
           - distro: debian-12
             image: debian:12-slim
             ext: deb
-          - distro: fedora-40
-            image: fedora:40
+          - distro: fedora-44
+            image: fedora:44
             ext: rpm
     steps:
       - name: install git + sudo

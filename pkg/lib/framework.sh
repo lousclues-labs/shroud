@@ -929,20 +929,24 @@ _pkg_validate_artifact() {
     case "$artifact" in
         *.deb)
             run dpkg-deb -I "$artifact"
-            # v1.2.2: capture the full listing into a variable, then
-            # head from it. Piping `dpkg-deb -c | head -20` SIGPIPEs
-            # the producer when the package has more than 20 entries;
-            # under set -o pipefail that fails the build for a
-            # perfectly valid artifact.
+            # v1.2.2: capture the full listing into a variable first.
+            # Piping `dpkg-deb -c | head -20` SIGPIPEs the producer when
+            # the package has more than 20 entries; under set -o
+            # pipefail that fails the build for a perfectly valid
+            # artifact.
+            # v1.3.1: and print its head without a pipe. `printf | head`
+            # kept the race: printf writes a long listing in more than
+            # one write, head exits after the first, and printf dies of
+            # SIGPIPE (exit 141). A here-string has no producer to kill.
             local listing
             listing=$(dpkg-deb -c "$artifact")
-            printf '%s\n' "$listing" | head -20 >&2
+            sed -n '1,20p' <<<"$listing" >&2
             ;;
         *.rpm)
             run rpm -qpi "$artifact"
             local listing
             listing=$(rpm -qpl "$artifact")
-            printf '%s\n' "$listing" | head -20 >&2
+            sed -n '1,20p' <<<"$listing" >&2
             ;;
     esac
 }

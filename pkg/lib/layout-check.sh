@@ -172,7 +172,17 @@ if [[ -n "${ACTUAL:-}" && -z "$ROOT" ]]; then
     elif [[ "$installed" == "$ACTUAL" ]]; then
         ok "installed version $installed matches expected $ACTUAL"
     else
-        fail "installed version $installed != expected $ACTUAL"
+        # dpkg-query ${Version} is [epoch:]upstream[-debian_revision];
+        # rpm %{VERSION} is upstream-only. ACTUAL is the upstream
+        # version parsed from the source project, so strip epoch and
+        # debian revision before declaring a mismatch.
+        normalized="${installed#*:}"
+        normalized="${normalized%-*}"
+        if [[ -n "$normalized" && "$normalized" == "$ACTUAL" ]]; then
+            ok "installed version $installed (upstream $normalized) matches expected $ACTUAL"
+        else
+            fail "installed version $installed != expected $ACTUAL"
+        fi
     fi
 fi
 

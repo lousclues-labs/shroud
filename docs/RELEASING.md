@@ -265,7 +265,7 @@ Shroud ships `.deb` and `.rpm` artifacts via the
 consumer; this repository is the **producer**. As of v2.4.0 the
 producer side is the shared
 [`lousclues-labs/pkg-integration`](https://github.com/lousclues-labs/pkg-integration)
-build framework (`pkg-framework`), vendored at v1.2.4. The framework
+build framework (`pkg-framework`), vendored at v1.4.1. The framework
 ships the deb/rpm pipeline once; shroud declares its package surface in
 [`pkg/project.sh`](../pkg/project.sh).
 
@@ -277,20 +277,24 @@ The producer-consumer contract is:
 - Side output: an `ARTIFACT=... SHA256=... SIZE=...` line on stdout.
 - Exit codes: `0` success, `1` build failure, `2` invalid input.
 
-The matrix of underlying base images (debian:12 / ubuntu:24.04 /
-rockylinux:9 / fedora:latest) lives inside the vendored workflow at
+The matrix of underlying base images (ubuntu:24.04 / debian:12-slim /
+fedora:44) lives inside the vendored workflow at
 [`.github/workflows/pkg-build.yml`](../.github/workflows/pkg-build.yml);
 shroud no longer needs to enumerate distros directly.
 
-The framework files are sha256-pinned by `pkg-framework verify`:
+The framework files are sha256-pinned by `pkg-framework verify`, run
+locally with the framework's checkout; CI's preflight checks that
+`FRAMEWORK_VERSION` matches `pkg/lib/VERSION`:
 
-- [`pkg/build.sh`](../pkg/build.sh) -- thin entry point. Do not edit;
-  drift fails CI.
 - [`pkg/lib/framework.sh`](../pkg/lib/framework.sh),
   [`layout-check.sh`](../pkg/lib/layout-check.sh),
   [`input-tests.sh`](../pkg/lib/input-tests.sh),
   [`VERSION`](../pkg/lib/VERSION) -- vendored helpers and version pin.
 - `.github/workflows/pkg-build.yml` -- vendored CI workflow template.
+
+[`pkg/build.sh`](../pkg/build.sh), the entry point, is shroud's own and
+not pinned: it maps the codenames `lousclues-pkg` passes to `deb` or
+`rpm` before sourcing the framework.
 
 Project-specific behavior (description, dependencies, layout checks,
 postinst body, fpm flag overrides) lives in

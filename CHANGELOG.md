@@ -49,6 +49,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [CONTRIBUTING.md](CONTRIBUTING.md). Note that `git config format.signOff true`
   does *not* do this — it only affects `git format-patch`, not `git commit`.
 
+### Changed
+
+- **The vendored packaging framework is pkg-framework 1.4.1**
+  ([pkg/lib/](pkg/lib/), [.github/workflows/pkg-build.yml](.github/workflows/pkg-build.yml)).
+  The Node 24 action pins the vendored workflow had carried alone since
+  August are now the framework's own, so the re-vendor keeps them and
+  `pkg-framework verify` reports no drift. From the framework since 1.3.0:
+  an artifact's listing is printed without a pipe that could fail a valid
+  build at random (1.3.1); a dispatched version reaches the shell through
+  `env` and must be a semantic version, and Fedora 44 replaces Fedora 40,
+  which reached its end of life in May 2025 (1.4.0); and the install test
+  compares a deb's upstream version, not its `upstream-revision` (1.4.1).
+  The Fedora jobs and their artifacts are named `fedora-44` where they were
+  `fedora-40`. [docs/RELEASING.md](docs/RELEASING.md) names the vendored
+  version and the workflow's real image matrix, and says what CI checks.
+  Packaging only: no source or runtime change.
+
 ### Fixed
 
 - **Test suite no longer leaks temp files.** `ConfigStore::for_tests()` created

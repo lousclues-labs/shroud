@@ -142,7 +142,7 @@ PKG_DEB_CONFIG_FILES=(
 # Optional scalars
 # =========================================================================
 
-FRAMEWORK_VERSION=1.3.0
+FRAMEWORK_VERSION=1.4.1
 
 # Hermetic build (v1.2.2+). Matches the pre-framework behavior, which
 # ran `cargo fetch --locked` then `cargo build --release --frozen
