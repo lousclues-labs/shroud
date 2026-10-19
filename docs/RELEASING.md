@@ -265,7 +265,7 @@ Shroud ships `.deb` and `.rpm` artifacts via the
 consumer; this repository is the **producer**. As of v2.4.0 the
 producer side is the shared
 [`lousclues-labs/pkg-integration`](https://github.com/lousclues-labs/pkg-integration)
-build framework (`pkg-framework`), vendored at v1.4.1. The framework
+build framework (`pkg-framework`), vendored at v1.4.2. The framework
 ships the deb/rpm pipeline once; shroud declares its package surface in
 [`pkg/project.sh`](../pkg/project.sh).
 

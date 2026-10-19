@@ -782,6 +782,26 @@ _pkg_fpm_rpm() {
         --after-install "$postinst"
     )
 
+    # Reproducible by default (v1.4.2). fpm 1.16.0's rpm backend dates its
+    # default changelog entry by the day it runs, and, unlike its deb
+    # backend, never reads SOURCE_DATE_EPOCH, so two builds of one commit on
+    # either side of midnight UTC differed. The same entry is written here,
+    # dated by SOURCE_DATE_EPOCH, with fpm's version and release. rpmbuild
+    # writes the build host and the build time into the header: the one is
+    # fixed, and the other, with file times, comes from SOURCE_DATE_EPOCH.
+    # A project's own defines (project_fpm_rpm_extra_args) come later, and win.
+    local epoch="${SOURCE_DATE_EPOCH:-$SOURCE_DATE_EPOCH_DEFAULT}"
+    local changelog="$STAGE/rpm-changelog"
+    printf '* %s  %s - %s-%s\n- Package created with FPM\n' \
+        "$(LC_ALL=C date -u -d "@$epoch" '+%a %b %e %Y')" \
+        "$PKG_MAINTAINER" "${VERSION//-/_}" "$rpm_release" > "$changelog"
+    args+=(
+        --rpm-changelog "$changelog"
+        --rpm-rpmbuild-define "_buildhost reproducible"
+        --rpm-rpmbuild-define "use_source_date_epoch_as_buildtime 1"
+        --rpm-rpmbuild-define "clamp_mtime_to_source_date_epoch 1"
+    )
+
     if [[ -f "$prerm" ]]; then
         args+=(--before-remove "$prerm")
     fi
@@ -911,8 +931,10 @@ _pkg_make_reproducible() {
             fi
             ;;
         *.rpm)
-            # fpm + SOURCE_DATE_EPOCH already produce stable rpm headers.
-            log "rpm reproducibility relies on SOURCE_DATE_EPOCH only"
+            # The rpm's header is fixed by _pkg_fpm_rpm: its changelog entry
+            # is dated by SOURCE_DATE_EPOCH, its build host is fixed, and its
+            # build time and file times come from SOURCE_DATE_EPOCH (v1.4.2).
+            log "rpm reproducibility is set when the rpm is built"
             ;;
     esac
 }

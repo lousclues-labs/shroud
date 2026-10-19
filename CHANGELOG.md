@@ -51,7 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **The vendored packaging framework is pkg-framework 1.4.1**
+- **The vendored packaging framework is pkg-framework 1.4.2**
   ([pkg/lib/](pkg/lib/), [.github/workflows/pkg-build.yml](.github/workflows/pkg-build.yml)).
   The Node 24 action pins the vendored workflow had carried alone since
   August are now the framework's own, so the re-vendor keeps them and
@@ -59,8 +59,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an artifact's listing is printed without a pipe that could fail a valid
   build at random (1.3.1); a dispatched version reaches the shell through
   `env` and must be a semantic version, and Fedora 44 replaces Fedora 40,
-  which reached its end of life in May 2025 (1.4.0); and the install test
-  compares a deb's upstream version, not its `upstream-revision` (1.4.1).
+  which reached its end of life in May 2025 (1.4.0); the install test
+  compares a deb's upstream version, not its `upstream-revision` (1.4.1);
+  and the rpm's changelog entry is dated by `SOURCE_DATE_EPOCH`, where fpm
+  dated it by the day of the build, and its build host and build time are
+  fixed (1.4.2).
   The Fedora jobs and their artifacts are named `fedora-44` where they were
   `fedora-40`. [docs/RELEASING.md](docs/RELEASING.md) names the vendored
   version and the workflow's real image matrix, and says what CI checks.
