@@ -71,16 +71,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **The rpm is reproducible** ([pkg/project.sh](pkg/project.sh)). rpmbuild
-  writes the build host, in CI the container's ID, and the wall-clock build
-  time into an rpm's header unless told otherwise, so two builds of one
-  commit differed in those alone. `pkg-build`'s reproducibility job runs
-  only on pull requests, and the framework sync's was the first in this
-  repository's history: it failed on `fedora-44`, while the deb's passed.
-  `project_fpm_rpm_extra_args` now fixes the host and takes the build time
-  and file times from `SOURCE_DATE_EPOCH`, as vigil's and onyx-mail's
-  manifests do; two builds of a test package in separate Fedora 44
-  containers with the same defines are byte for byte the same.
+- **The rpm is reproducible** ([pkg/lib/framework.sh](pkg/lib/framework.sh)).
+  rpmbuild writes the build host, in CI the container's ID, and the
+  wall-clock build time into an rpm's header unless told otherwise, and fpm
+  dates the rpm's changelog entry by the day it runs, so two builds of one
+  commit differed. `pkg-build`'s reproducibility job runs only on pull
+  requests, and the framework sync's was the first in this repository's
+  history: it failed on `fedora-44`, while the deb's passed. pkg-framework
+  1.4.2 fixes the host, takes the build time and file times from
+  `SOURCE_DATE_EPOCH`, and dates the changelog entry by it, for every
+  project that vendors it. `project_fpm_rpm_extra_args` set the first
+  three itself until then and no longer repeats them; the reproducibility
+  job checks the rpm on every pull request.
 
 - **Test suite no longer leaks temp files.** `ConfigStore::for_tests()` created
   a uniquely-named config under `std::env::temp_dir()` and nothing ever removed
